@@ -1,0 +1,41 @@
+{
+  "contract": {
+    "task": {
+      "id": "example-local-task",
+      "prompt": "Inspect this repository, implement the requested change, run the configured validation command, and repair any failures before reporting completion.",
+      "repository": {
+        "commitSha": "replace-with-immutable-target-sha",
+        "containerFingerprint": "replace-with-container-image-or-local-environment-fingerprint"
+      },
+      "validationCommand": "npm test"
+    },
+    "candidate": {
+      "provider": "github-copilot",
+      "model": "replace-with-copilot-model-id",
+      "deployment": "optional-provider-or-deployment-identity"
+    },
+    "execution": {
+      "instructions": "You are in a benchmark. Work autonomously in this workspace: inspect, plan, edit, run tests, repair failures, and leave the working tree in the best validated state. Do not use network resources unless the task explicitly requires them.",
+      "tools": ["read", "edit", "shell"],
+      "permissionMode": "approve-all",
+      "concurrency": 1,
+      "retries": 0,
+      "sessionTimeoutMs": 600000,
+      "streaming": true,
+      "cachePolicy": "default"
+    },
+    "runtime": {
+      "cliVersion": "runtime-reported-in-session.start-event"
+    }
+  },
+  "rounds": [
+    {
+      "prompt": "Start the implementation task now."
+    },
+    {
+      "prompt": "Review your changes, run the configured validation, and repair any remaining failures."
+    }
+  ],
+  "workspacePath": "C:\\replace\\with\\isolated-task-workspace",
+  "artifactsDirectory": "C:\\replace\\with\\benchmark-artifacts"
+}

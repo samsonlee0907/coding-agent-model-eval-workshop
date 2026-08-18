@@ -1,0 +1,35 @@
+{
+  "name": "copilot-coding-agent-benchmark-workshop",
+  "version": "1.0.0",
+  "description": "Reusable GitHub Copilot SDK coding-agent cost-efficiency benchmark workshop",
+  "main": "dist/index.js",
+  "scripts": {
+    "test": "node --import tsx --test test/**/*.test.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "bench": "tsx src/cli.ts"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "module",
+  "dependencies": {
+    "@github/copilot-sdk": "^1.0.10-preview.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.2.0",
+    "tsx": "^4.23.12",
+    "typescript": "^7.0.2"
+  },
+  "engines": {
+    "node": ">=20.19.0"
+  },
+  "types": "dist/index.d.ts",
+  "bin": {
+    "benchmark-workshop": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ]
+}
