@@ -45,6 +45,7 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 | 10 | No-GitHub quickstart | ✅ **Implemented 2026-08-19** — local baseline, automatic metadata, optional artifact, and auto-validation flow added. | Run a provider-authenticated smoke task. |
 | 11 | Foundry ModelOps routing blueprint | ✅ **Defined 2026-08-19** — scope, prerequisites, task/tool/evaluation separation, and router lifecycle documented. | Select an Azure project/region and inventory live candidates. |
 | 12 | Multi-provider candidate quickstart | ✅ **Implemented 2026-08-19** — candidate labels, model/deployment identity, and OpenAI/Azure/Anthropic endpoint protocol selection added. | Confirm each Foundry deployment's endpoint protocol and run smoke tasks. |
+| 13 | Private workshop publication | ✅ **Published 2026-08-19** — private GitHub repository created and `main` pushed. | Keep releases and routing decisions versioned. |
 
 ## 1. Permission-probe tests (P0)
 

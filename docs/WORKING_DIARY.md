@@ -158,3 +158,12 @@ Stack: GitHub Copilot SDK `1.0.10-preview.0`, TypeScript, npm, Node.js
   error made the local source issue explicit.
 - **Permission assessment:** this was a local code issue, **not a permission
   issue**. No model, Foundry, GitHub, or cloud API was invoked.
+
+### 18:15 — Generalized workshop published
+- **What we did:** created and pushed the private GitHub repository
+  `samsonlee0907/coding-agent-model-eval-workshop`.
+- **Result:** ✅ `main` was pushed and remote privacy was verified.
+- **How the result was verified:** GitHub CLI repository metadata reported
+  `isPrivate: true`, and `git ls-remote` returned the committed `main` SHA.
+- **Permission assessment:** GitHub CLI access with `repo` scope succeeded; no
+  Foundry or model-provider permission probe was performed.

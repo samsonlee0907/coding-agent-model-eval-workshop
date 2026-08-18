@@ -130,6 +130,17 @@ attempts, unclear errors, or required external research/support).
   or bounded smoke task must confirm it before benchmark execution.
 - **Time-to-green:** under one hour; 15 offline tests passed.
 
+## Chapter 11 — Publishing the workshop evidence trail 🟢 Easy
+- **Tries to green:** 1.
+- **What broke:** nothing.
+- **How I found the fix:** GitHub CLI created the private repository and
+  returned its URL; repository metadata and the remote branch SHA confirmed the
+  requested state.
+- **What did NOT work / discover:** publication validates GitHub repository
+  access only. It does not validate a Foundry deployment, catalog permission,
+  or a model-provider endpoint.
+- **Time-to-green:** immediate.
+
 ## Open items for this document
 - [ ] Rate the first authenticated, isolated SDK session from a human operator's
   perspective, including any entitlement or token error verbatim.

@@ -31,6 +31,7 @@ Legend: ✅ succeeded · ❌ failed (permission or other error) · ⚠️ partia
 | 2026-08-19 17:45 | Foundry workshop scope research | Public documentation only | ℹ️ | No Azure resource, deployment, model invocation, or catalog operation performed. |
 | 2026-08-19 18:00 | Multi-provider quickstart generalization | No provider API call | ℹ️ | Added OpenAI/Azure/Anthropic protocol selection and non-secret environment-variable references only. |
 | 2026-08-19 18:10 | `npm run typecheck; npm test; npm run build` | None | ✅ | 15 offline tests passed for generic provider selection and local quickstart. |
+| 2026-08-19 18:15 | `gh repo create coding-agent-model-eval-workshop --private --source . --push` | GitHub repository creation/push (`repo` scope) | ✅ | Created private repository and pushed `main`; remote metadata verified private. |
 
 ## Currently confirmed-working permissions
 - None tested. This milestone deliberately made no live Copilot, cloud, or
