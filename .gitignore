@@ -1,4 +1,5 @@
 node_modules/
 dist/
 .benchmark-artifacts/
-benchmark.local.json
+.benchmark-runs/
+*.local.json

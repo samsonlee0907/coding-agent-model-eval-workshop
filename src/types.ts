@@ -38,12 +38,42 @@ export interface RuntimeIdentity {
   nodeVersion: string;
 }
 
+export type CustomProviderType = "openai" | "azure" | "anthropic";
+export type CustomProviderWireApi = "completions" | "responses";
+export type CustomProviderAuth = "api-key" | "bearer-token" | "none";
+
+/**
+ * Non-secret custom-provider configuration. Credential values are loaded only
+ * from the named process environment variable at runtime.
+ */
+export interface CustomProviderConfig {
+  type: CustomProviderType;
+  baseUrlEnv: string;
+  apiKeyEnv?: string;
+  bearerTokenEnv?: string;
+  wireApi?: CustomProviderWireApi;
+  azureApiVersion?: string;
+}
+
+/**
+ * Safe provider identity persisted in a run contract. The endpoint is
+ * fingerprinted so traces never disclose an internal base URL or credential.
+ */
+export interface CustomProviderIdentity {
+  type: CustomProviderType;
+  wireApi: CustomProviderWireApi | null;
+  endpointFingerprint: string;
+  authentication: CustomProviderAuth;
+  azureApiVersion: string | null;
+}
+
 export interface RunContract {
   contractVersion: 1;
   task: TaskContract;
   candidate: CandidateContract;
   execution: ExecutionPolicy;
   runtime: RuntimeIdentity;
+  customProvider?: CustomProviderIdentity;
 }
 
 export interface ComparisonContract {
@@ -55,8 +85,9 @@ export interface ComparisonContract {
 }
 
 export interface BenchmarkConfig {
-  contract: Omit<RunContract, "contractVersion" | "runtime"> & {
+  contract: Omit<RunContract, "contractVersion" | "runtime" | "customProvider"> & {
     runtime?: Partial<RuntimeIdentity>;
+    customProvider?: CustomProviderConfig;
   };
   rounds: Array<{ prompt: string; mode?: "enqueue" | "immediate" }>;
   workspacePath: string;

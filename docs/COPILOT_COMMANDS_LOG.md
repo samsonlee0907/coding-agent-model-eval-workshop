@@ -23,6 +23,14 @@ Legend: ✅ succeeded · ❌ failed (permission or other error) · ⚠️ partia
 | 2026-08-18 16:05 | `npm run build` | None | ✅ | Local production build passed. |
 | 2026-08-18 16:10 | `npm run typecheck; npm test; npm run build` | None | ✅ | 9 tests and production build passed after policy enforcement changes. |
 | 2026-08-18 16:15 | `npm run typecheck; npm test; npm run build; node dist\cli.js` | None | ✅ | 9 tests/build passed; CLI printed its config usage path and made no platform call. |
+| 2026-08-18 16:20 | Local CSV analysis of supplied benchmark logs | None | ℹ️ | Read attached local files only; no model/provider API call. Derived a sanitized scenario without retaining account-specific content. |
+| 2026-08-18 16:25 | FW-Kimi-K3 BYOK adapter implementation | No provider API call | ℹ️ | Configuration accepts only environment-variable names; no credential value entered, committed, or sent. |
+| 2026-08-18 16:30 | `npm run typecheck; npm test; npm run build` | None | ✅ | 12 fixture tests passed for the BYOK adapter and existing runner; no provider API call. |
+| 2026-08-19 17:30 | Quickstart implementation | Local Git only | ℹ️ | Added local baseline/workspace flow; no GitHub or model-provider call. |
+| 2026-08-19 17:40 | `npm run typecheck; npm test; npm run build` | None | ✅ | 15 offline tests passed, including local baseline creation and auto-validation. |
+| 2026-08-19 17:45 | Foundry workshop scope research | Public documentation only | ℹ️ | No Azure resource, deployment, model invocation, or catalog operation performed. |
+| 2026-08-19 18:00 | Multi-provider quickstart generalization | No provider API call | ℹ️ | Added OpenAI/Azure/Anthropic protocol selection and non-secret environment-variable references only. |
+| 2026-08-19 18:10 | `npm run typecheck; npm test; npm run build` | None | ✅ | 15 offline tests passed for generic provider selection and local quickstart. |
 
 ## Currently confirmed-working permissions
 - None tested. This milestone deliberately made no live Copilot, cloud, or

@@ -73,3 +73,88 @@ Stack: GitHub Copilot SDK `1.0.10-preview.0`, TypeScript, npm, Node.js
   usage message without starting a live Copilot session.
 - **How the fix was found:** the compiled CLI behavior was directly observable.
 - **Permission assessment:** local-only; **not a permission issue**.
+
+### 16:20 — Log-derived benchmark scenario added
+- **What we did:** inspected the two supplied selected-run CSV exports and
+  extracted a sanitized workload pattern: an agent builds a Vite/TypeScript A*
+  pathfinding visualizer, then continues through implementation and repair
+  turns. Added the scenario contract, prompts, acceptance criteria, and
+  fairness controls under `scenarios/interactive-pathfinding-visualizer/`.
+- **Result:** ✅ one reusable three-round coding-agent task is ready for a
+  future pinned starter repository.
+- **How the scenario was found:** directly from the supplied log envelope's
+  task description and multi-round shape; account-specific context, prompts,
+  responses, and credentials were intentionally excluded.
+- **Permission assessment:** reading attached files and authoring local
+  documentation only; **not a permission issue**.
+
+### 16:25 — FW-Kimi-K3 BYOK runner support added
+- **What we did:** added a non-secret OpenAI-compatible provider configuration
+  that resolves the API endpoint and credential from named environment
+  variables only. Added a FW-Kimi-K3 local config example, explicit validation,
+  and offline tests.
+- **Result:** ✅ TypeScript checking, build, and 12 fixture tests passed;
+  provider resolution never contacts the endpoint during those tests.
+- **How the integration was found:** the official GitHub Copilot SDK BYOK
+  documentation defines `provider.type`, `baseUrl`, `apiKey`/`bearerToken`,
+  `wireApi`, and the requirement to set `model` explicitly.
+- **Permission assessment:** no provider call was made; an unset/invalid future
+  provider credential must be treated as configuration/authentication evidence,
+  not assumed to be a repository or cloud permission issue.
+
+### 17:30 — No-GitHub quickstart flow added
+- **What we did:** added a `npm run quickstart` command accepting a task,
+  optional source artifact, and shell-only FW BYOK environment variables. It
+  creates a fresh local workspace, makes a local baseline Git commit, derives
+  the baseline SHA and local environment fingerprint, and selects available
+  test/build scripts after agent work.
+- **Result:** ✅ TypeScript checking, production build, and 15 offline tests
+  passed. The test creates a local-only Git baseline and does not start a model
+  session.
+- **How the design was found:** this removes manual benchmark metadata while
+  preserving an auditable local baseline. The Copilot SDK's BYOK provider means
+  the runtime does not require GitHub authentication for model inference.
+- **Permission assessment:** the quickstart baseline uses local Git only; it
+  creates no GitHub repository, remote, cloud resource, or credential file.
+
+### 17:45 — Foundry ModelOps routing workshop scope added
+- **What we did:** documented a Foundry workshop blueprint covering dynamic
+  model/deployment inventory, controlled coding-task families, tool-profile
+  isolation, deterministic gates, task-family routing policy, canary rollout,
+  and continuous evaluation.
+- **Result:** ✅ scope and prerequisites are documented without creating an
+  Azure resource or deployment.
+- **How the design was found:** applied official Foundry model-deployment,
+  capacity, toolbox, and evaluation guidance. The design deliberately avoids
+  a static model list because availability, quota, and model features vary by
+  region and deployment.
+- **Permission assessment:** documentation/research only; **not a permission
+  issue**. Foundry catalog/deployment access will require approved Azure access
+  when the hands-on workshop begins.
+
+### 18:00 — Multi-provider quickstart generalized
+- **What we did:** changed quickstart from an FW-Kimi-K3-specific default to
+  explicit candidate provider label, model/deployment identity, provider
+  protocol (`openai`, `azure`, or `anthropic`), and environment-variable names.
+  Added Foundry/Anthropic connection guidance and made the ModelOps guide the
+  repository's primary README entry point.
+- **Result:** pending final offline validation and publication.
+- **How the design was found:** the official Copilot SDK BYOK reference defines
+  the three provider protocol types. Endpoint protocol—not model brand—selects
+  the provider type; Foundry-hosted Anthropic deployments need their documented
+  endpoint protocol confirmed before use.
+- **Permission assessment:** no provider or Foundry request was made. Missing
+  deployment access or endpoint credentials are configuration/authentication
+  blockers, not automatically a GitHub permission issue.
+
+### 18:10 — Generalized provider validation complete
+- **What we did:** ran TypeScript checking, all fixture tests, production build,
+  and diff whitespace validation after adding generic quickstart options.
+- **Result:** ✅ 15 tests passed. The suite verifies OpenAI-compatible provider
+  resolution, Anthropic wire-format rejection, generic quickstart parsing, and
+  local-only baseline creation.
+- **How the fix was found:** a test initially exposed helper declarations
+  accidentally scoped inside the argument parser; the type checker and fixture
+  error made the local source issue explicit.
+- **Permission assessment:** this was a local code issue, **not a permission
+  issue**. No model, Foundry, GitHub, or cloud API was invoked.

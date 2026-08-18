@@ -40,6 +40,11 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 | 5 | Deterministic validation | ✅ **Used with unit fixtures** | Use a local repository command with known expected state. |
 | 6 | Paired candidate comparison | ✅ **Implemented/tested** | Run two candidates from equivalent clean task copies. |
 | 7 | SWE-bench/container adapter | ❌ Not tried | Design after the local contract and report prove useful. |
+| 8 | Interactive A* visualizer scenario | ✅ **Defined 2026-08-18** — three rounds, deterministic criteria, and a contract template added. | Create and pin the clean Vite starter repository described by the scenario. |
+| 9 | FW-Kimi-K3 BYOK configuration | ✅ **Implemented 2026-08-18** — OpenAI-compatible environment-only provider adapter and example added. | Run a provider-authenticated smoke task in a clean workspace. |
+| 10 | No-GitHub quickstart | ✅ **Implemented 2026-08-19** — local baseline, automatic metadata, optional artifact, and auto-validation flow added. | Run a provider-authenticated smoke task. |
+| 11 | Foundry ModelOps routing blueprint | ✅ **Defined 2026-08-19** — scope, prerequisites, task/tool/evaluation separation, and router lifecycle documented. | Select an Azure project/region and inventory live candidates. |
+| 12 | Multi-provider candidate quickstart | ✅ **Implemented 2026-08-19** — candidate labels, model/deployment identity, and OpenAI/Azure/Anthropic endpoint protocol selection added. | Confirm each Foundry deployment's endpoint protocol and run smoke tasks. |
 
 ## 1. Permission-probe tests (P0)
 
@@ -54,6 +59,10 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 - [ ] Validate rate-limit and session-timeout classification from controlled evidence.
 - [ ] Compare cached and non-cached runs only with declared cache policy.
 - [ ] Verify CLI version extraction from the `session.start` raw event.
+- [ ] Materialize the clean, pinned starter repository for
+  `interactive-pathfinding-visualizer-v1`.
+- [ ] Verify FW-Kimi-K3 endpoint compatibility, model identifier, streaming,
+  tool-call behavior, and provider-side usage export with a smoke task.
 
 ## 3. Workshop extensions (P2)
 - [ ] Add an isolated container task adapter.

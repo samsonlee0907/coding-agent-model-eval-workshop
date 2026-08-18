@@ -1,15 +1,22 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
-import { randomUUID } from "node:crypto";
-import { CopilotClient, approveAll, type CopilotSession } from "@github/copilot-sdk";
+import { createHash, randomUUID } from "node:crypto";
+import { CopilotClient, approveAll, type CopilotSession, type ProviderConfig } from "@github/copilot-sdk";
 import { immutableContractHash } from "./contract.js";
 import { EventCollector } from "./event-collector.js";
 import { asRecord } from "./json.js";
 import { deriveMetrics, extractModelCalls, extractToolCalls } from "./metrics.js";
 import { classifyOutcome } from "./outcome.js";
 import { writeRunReport } from "./report.js";
-import type { BenchmarkConfig, BenchmarkRun, JsonRecord, RunContract } from "./types.js";
-import { runValidation } from "./validation.js";
+import type {
+  BenchmarkConfig,
+  BenchmarkRun,
+  CustomProviderConfig,
+  CustomProviderIdentity,
+  JsonRecord,
+  RunContract,
+} from "./types.js";
+import { resolveValidationCommand, runValidation } from "./validation.js";
 
 export async function runBenchmark(config: BenchmarkConfig): Promise<BenchmarkRun> {
   const runId = randomUUID();
@@ -24,13 +31,17 @@ export async function runBenchmark(config: BenchmarkConfig): Promise<BenchmarkRu
   };
   const contract = materializeContract(config);
   assertSupportedPolicy(contract);
+  const provider = resolveCustomProvider(config.contract.customProvider, process.env);
   const collector = new EventCollector(artifacts.rawEvents, artifacts.normalizedEvents);
   collector.captureRunnerEvent("runner.run_started", { runId });
 
   let sessionId: string | null = null;
   let validation = null;
   let runnerError: string | null = null;
-  const client = new CopilotClient({ workingDirectory: config.workspacePath });
+  const client = new CopilotClient({
+    workingDirectory: config.workspacePath,
+    useLoggedInUser: provider ? false : undefined,
+  });
   let session: CopilotSession | null = null;
 
   try {
@@ -42,6 +53,7 @@ export async function runBenchmark(config: BenchmarkConfig): Promise<BenchmarkRu
       systemMessage: { content: contract.execution.instructions },
       availableTools: contract.execution.tools,
       onPermissionRequest: contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
+      provider,
     });
     sessionId = session.sessionId;
     collector.captureRunnerEvent("runner.session_created", { sessionId });
@@ -91,7 +103,7 @@ export async function runBenchmark(config: BenchmarkConfig): Promise<BenchmarkRu
   }
 
   validation = await runValidation(
-    contract.task.validationCommand,
+    resolveValidationCommand(contract.task.validationCommand, config.workspacePath),
     config.workspacePath,
     contract.execution.sessionTimeoutMs,
   );
@@ -137,6 +149,9 @@ function materializeContract(config: BenchmarkConfig): RunContract {
       cliVersion: config.contract.runtime?.cliVersion ?? "runtime-reported-in-session.start-event",
       nodeVersion: config.contract.runtime?.nodeVersion ?? process.version,
     },
+    customProvider: config.contract.customProvider
+      ? createCustomProviderIdentity(config.contract.customProvider, process.env)
+      : undefined,
   };
 }
 
@@ -147,6 +162,60 @@ function assertSupportedPolicy(contract: RunContract): void {
   if (contract.execution.cachePolicy !== "default") {
     throw new RangeError("The installed SDK exposes cache metrics but this MVP does not control cache policy; use execution.cachePolicy 'default'.");
   }
+}
+
+export function resolveCustomProvider(
+  config: CustomProviderConfig | undefined,
+  environment: NodeJS.ProcessEnv,
+): ProviderConfig | undefined {
+  if (!config) {
+    return undefined;
+  }
+  if (config.apiKeyEnv && config.bearerTokenEnv) {
+    throw new TypeError("customProvider must set either apiKeyEnv or bearerTokenEnv, not both.");
+  }
+  const baseUrl = requiredEnvironmentValue(config.baseUrlEnv, environment);
+  const apiKey = config.apiKeyEnv ? requiredEnvironmentValue(config.apiKeyEnv, environment) : undefined;
+  const bearerToken = config.bearerTokenEnv ? requiredEnvironmentValue(config.bearerTokenEnv, environment) : undefined;
+  if (config.type === "anthropic" && config.wireApi) {
+    throw new TypeError("customProvider.wireApi is not supported for Anthropic providers.");
+  }
+  if (config.type !== "azure" && config.azureApiVersion) {
+    throw new TypeError("customProvider.azureApiVersion is only supported for Azure providers.");
+  }
+  return {
+    type: config.type,
+    baseUrl,
+    apiKey,
+    bearerToken,
+    wireApi: config.wireApi,
+    azure: config.azureApiVersion ? { apiVersion: config.azureApiVersion } : undefined,
+  };
+}
+
+export function createCustomProviderIdentity(
+  config: CustomProviderConfig,
+  environment: NodeJS.ProcessEnv,
+): CustomProviderIdentity {
+  const baseUrl = requiredEnvironmentValue(config.baseUrlEnv, environment);
+  return {
+    type: config.type,
+    wireApi: config.wireApi ?? null,
+    endpointFingerprint: createHash("sha256").update(baseUrl).digest("hex"),
+    authentication: config.bearerTokenEnv ? "bearer-token" : config.apiKeyEnv ? "api-key" : "none",
+    azureApiVersion: config.azureApiVersion ?? null,
+  };
+}
+
+function requiredEnvironmentValue(name: string, environment: NodeJS.ProcessEnv): string {
+  if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
+    throw new TypeError(`Environment variable name "${name}" is invalid.`);
+  }
+  const value = environment[name]?.trim();
+  if (!value) {
+    throw new Error(`Required custom-provider environment variable "${name}" is not set.`);
+  }
+  return value;
 }
 
 async function sendRoundWithRetries(

@@ -4,4 +4,5 @@ export * from "./metrics.js";
 export * from "./outcome.js";
 export * from "./report.js";
 export * from "./runner.js";
+export * from "./quickstart.js";
 export * from "./types.js";
