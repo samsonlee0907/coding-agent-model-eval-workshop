@@ -11,7 +11,7 @@ Install:
 1. Node.js 20.19 or later and npm.
 2. Git, available on `PATH`.
 3. A network path to npm (for installation) and the selected Foundry resource
-   (for paid benchmark or judge requests).
+   (for benchmark or judge requests).
 
 The package includes an SDK runtime fallback. An installed compatible
 `copilot` CLI is optional but recommended for controlled cohorts; set
@@ -33,7 +33,7 @@ The validation commands above are offline and do not contact a model provider.
 
 ## 2. Prepare Foundry deployments
 
-Before a paid run, arrange in Microsoft Foundry:
+Before a run, prepare resources in Microsoft Foundry:
 
 1. A Foundry resource and an inference-enabled model deployment for every
    benchmark candidate.
