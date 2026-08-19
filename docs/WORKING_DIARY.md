@@ -167,3 +167,75 @@ Stack: GitHub Copilot SDK `1.0.10-preview.0`, TypeScript, npm, Node.js
   `isPrivate: true`, and `git ls-remote` returned the committed `main` SHA.
 - **Permission assessment:** GitHub CLI access with `repo` scope succeeded; no
   Foundry or model-provider permission probe was performed.
+
+### 10:30 — Foundry quickstart and live-progress usability refinement
+- **What we did:** added a single `FOUNDRY_ENDPOINT`/`FOUNDRY_API_KEY` quickstart
+  path for the observed working GPT and Claude configurations. The GPT provider
+  retains the resource root and the Anthropic provider appends `/anthropic`.
+  Added `high` default reasoning effort with an explicit override and a concise,
+  redacted streaming terminal progress view.
+- **Result:** ✅ 23 offline tests, type checking, production build, and the
+  all-run portfolio report completed successfully.
+- **How the design was found:** incorporated successful local-run behavior:
+  stripping `/anthropic` yielded the working GPT base, while Claude required
+  the suffix. The SDK’s documented `reasoningEffort` session option is recorded
+  in the immutable execution policy.
+- **Permission assessment:** local implementation and artifact analysis only;
+  **not a permission issue**. No new Foundry, model-provider, or GitHub request
+  was made.
+
+### 10:32 — Implementation hardening and command-reference review
+- **What we did:** reviewed the current provider, reporting, progress, contract,
+  and package wiring. Removed forced SDK debug output, deduplicated progress by
+  stable turn/message identity, made request-sanitization policy comparison
+  drift, required cost evidence for every candidate’s resolved samples, and
+  shipped compiled quickstart/portfolio entry points.
+- **Result:** ✅ 25 offline tests, type checking, build, package-content
+  inspection, and 11-run report generation passed.
+- **How the design was found:** a focused source review identified terminal-log
+  redaction, noisy delta reporting, incomplete cost gating, and installability
+  gaps. The command reference now states the exact resource-root base URL and
+  rejects ignored conflicting endpoint flags.
+- **Permission assessment:** local source and package inspection only; **not a
+  permission issue**. No model request or cloud resource action occurred.
+
+### 13:50 — Single-base-URL Foundry inference derivation corrected
+- **What we did:** replaced host-preserving endpoint handling with canonical
+  resource-name extraction. One Foundry resource root or project endpoint now
+  derives `https://<resource>.openai.azure.com/openai/v1` for GPT and
+  `https://<resource>.services.ai.azure.com/anthropic` for Claude.
+- **Result:** ✅ 32 offline tests cover services and OpenAI roots, project
+  endpoints, both provider protocols, invalid hosts/paths, and URL redaction.
+- **How the design was found:** the prior GPT root assumption was invalid for
+  the documented OpenAI-compatible route. The shared adapter now rejects
+  non-Foundry or malformed paths before a provider request rather than passing
+  them through.
+- **Permission assessment:** implementation and fixture validation only; **not
+  a permission issue**. No credential, provider, or cloud request was used.
+
+### 14:10 — Foundry-only contract and FW-Kimi-K3 continuation adaptation
+- **What we did:** replaced generic/custom provider input with exact
+  `openai|anthropic` Foundry provider selection, fixed shell-only
+  `FOUNDRY_ENDPOINT`/`FOUNDRY_API_KEY`, and canonical resource-root validation.
+  Added a loopback OpenAI request transformer that removes only null
+  `messages[].refusal` fields, including nested continuation arrays.
+- **Result:** ✅ offline tests validate strict endpoint rejection, both derived
+  routes, credential requirements, proxy forwarding, null-only preservation,
+  contract drift, report disclosure, and no endpoint leakage.
+- **How the design was found:** the FW-Kimi-K3 artifact recorded a successful
+  first request followed by the documented rejection
+  `messages[2].refusal: None`; the narrow adapter preserves all non-null
+  request data.
+- **Permission assessment:** local implementation and tests only; **not a
+  permission issue**. No credential or live provider request was used.
+
+### 15:20 — Separate LLM-judge evaluation and tool-filter cleanup
+- **What we did:** added an opt-in Foundry judge command for completed run
+  artifacts. It sends bounded, explicitly untrusted evidence to a tool-free
+  judge session, validates strict JSON scores, and writes a separate evaluation
+  artifact without changing deterministic outcomes. Replaced the unsupported
+  `builtin:edit` tool filter with `builtin:apply_patch`.
+- **Result:** ✅ 36 offline tests, type checking, production build, and diff
+  whitespace validation passed; no judge or candidate provider request was made.
+- **Permission assessment:** local source work only; **not a permission
+  issue**.

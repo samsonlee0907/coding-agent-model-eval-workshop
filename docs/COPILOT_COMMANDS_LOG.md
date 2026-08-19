@@ -32,6 +32,13 @@ Legend: ✅ succeeded · ❌ failed (permission or other error) · ⚠️ partia
 | 2026-08-19 18:00 | Multi-provider quickstart generalization | No provider API call | ℹ️ | Added OpenAI/Azure/Anthropic protocol selection and non-secret environment-variable references only. |
 | 2026-08-19 18:10 | `npm run typecheck; npm test; npm run build` | None | ✅ | 15 offline tests passed for generic provider selection and local quickstart. |
 | 2026-08-19 18:15 | `gh repo create coding-agent-model-eval-workshop --private --source . --push` | GitHub repository creation/push (`repo` scope) | ✅ | Created private repository and pushed `main`; remote metadata verified private. |
+| 2026-08-19 10:30 | `npm test; npm run typecheck; npm run build; npm run portfolio -- --runs .benchmark-runs` | None | ✅ | 23 offline tests, TypeScript validation, build, and 11-run report generation passed; no live provider request. |
+| 2026-08-19 10:32 | `npm test; npm run typecheck; npm run build; npm run portfolio -- --runs .benchmark-runs; npm pack --dry-run` | None | ✅ | 25 offline tests, compiled CLI checks, report generation, and package-content inspection passed; no live provider request. |
+| 2026-08-19 13:50 | `npm test; npm run typecheck; npm run build` | None | ✅ | 32 offline tests passed for Foundry base/project URL derivation and report redaction; no live provider request. |
+| 2026-08-19 14:10 | Foundry-only provider and FW-Kimi-K3 compatibility implementation | No provider API call | ℹ️ | Fixed `FOUNDRY_ENDPOINT`/`FOUNDRY_API_KEY` contract; local proxy removes only null OpenAI message refusals. |
+| 2026-08-19 14:10 | `npm test` | None | ✅ | 27 offline tests passed; no model call, credential use, or cloud resource action. |
+| 2026-08-19 15:20 | LLM-judge command and tool-filter cleanup | No provider API call | ℹ️ | Added a tool-free Foundry judge design with bounded evidence; no live judge request was made. |
+| 2026-08-19 15:25 | `npm test; npm run typecheck; npm run build; git diff --check` | None | ✅ | 36 offline tests passed after judge artifact, secret-boundary, repeat-cohort, and tool-filter regression coverage. |
 
 ## Currently confirmed-working permissions
 - None tested. This milestone deliberately made no live Copilot, cloud, or

@@ -10,15 +10,12 @@
       "validationCommand": "npm test && npm run build"
     },
     "candidate": {
-      "provider": "fw",
+      "provider": "openai",
       "model": "FW-Kimi-K3",
       "deployment": "replace-with-region-or-deployment-identity"
     },
-    "customProvider": {
-      "type": "openai",
-      "baseUrlEnv": "FW_KIMI_K3_BASE_URL",
-      "apiKeyEnv": "FW_KIMI_K3_API_KEY",
-      "wireApi": "completions"
+    "foundryProvider": {
+      "type": "openai"
     },
     "execution": {
       "instructions": "You are in a controlled benchmark. Work only in the supplied task workspace. Implement, test, and repair the requested feature; do not access network services or use unrelated tools.",
@@ -28,7 +25,8 @@
       "retries": 0,
       "sessionTimeoutMs": 900000,
       "streaming": true,
-      "cachePolicy": "default"
+      "cachePolicy": "default",
+      "reasoningEffort": "high"
     },
     "runtime": {
       "cliVersion": "runtime-reported-in-session.start-event"

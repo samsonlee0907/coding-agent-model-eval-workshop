@@ -23,6 +23,7 @@ export function renderRunReport(run: BenchmarkRun): string {
     `**Candidate:** ${run.contract.candidate.provider} / ${run.contract.candidate.model}${run.contract.candidate.deployment ? ` / ${run.contract.candidate.deployment}` : ""}`,
     `**Contract hash:** \`${run.contractHash}\``,
     `**Session:** ${run.sessionId ?? "Unavailable — session creation failed before an ID was returned."}`,
+    `**Wire adaptation:** ${run.contract.foundryProvider?.requestAdaptation ?? "legacy/unknown"}`,
     "",
     "## All-run results",
     "",
@@ -37,18 +38,36 @@ export function renderRunReport(run: BenchmarkRun): string {
     "## Validation and root cause",
     "",
     `- **Validation:** ${formatValidation(run)}`,
+    ...formatValidationOutput(run.validation),
     `- **Outcome detail:** ${run.outcome.detail}`,
     `- **Runner error:** ${run.runnerError ?? "None"}`,
+    `- **Provider failure signature:** ${formatProviderFailure(run)}`,
+    `- **SDK configuration messages:** ${formatConfigurationMessages(run)}`,
     "",
     "## Artifacts",
     "",
     `- Raw SDK envelopes (including ephemeral deltas): \`${run.artifacts.rawEvents}\``,
     `- Normalized event stream: \`${run.artifacts.normalizedEvents}\``,
+    `- Redacted runtime diagnostics: \`${run.artifacts.diagnostics}\``,
     `- This report: \`${run.artifacts.report}\``,
     "",
     "Raw artifacts can contain prompts, model output, tool arguments, and tool output; store them according to the repository's data-handling policy.",
     "",
   ].join("\n");
+}
+
+function formatProviderFailure(run: BenchmarkRun): string {
+  const failure = run.diagnostics.providerFailure;
+  if (!failure.signature) {
+    return "None";
+  }
+  return `${failure.signature}${failure.httpStatus ? ` (HTTP ${failure.httpStatus})` : ""}`;
+}
+
+function formatConfigurationMessages(run: BenchmarkRun): string {
+  return run.diagnostics.configurationMessages.length === 0
+    ? "None"
+    : run.diagnostics.configurationMessages.map((message) => `\`${message}\``).join("; ");
 }
 
 export function renderPairedComparison(left: BenchmarkRun, right: BenchmarkRun): string {
@@ -91,4 +110,22 @@ function formatValidation(run: BenchmarkRun): string {
     return `Harness failure: ${run.validation.errorMessage}`;
   }
   return `\`${run.validation.command}\` exited ${run.validation.exitCode} in ${run.validation.durationMs} ms${run.validation.timedOut ? " (timed out)" : ""}.`;
+}
+
+function formatValidationOutput(validation: BenchmarkRun["validation"]): string[] {
+  if (!validation) {
+    return [];
+  }
+  const sections: string[] = [];
+  if (validation.stdout) {
+    sections.push("- **Validation stdout:**", "", indentOutput(validation.stdout), "");
+  }
+  if (validation.stderr) {
+    sections.push("- **Validation stderr:**", "", indentOutput(validation.stderr), "");
+  }
+  return sections;
+}
+
+function indentOutput(output: string): string {
+  return output.trimEnd().split(/\r?\n/).map((line) => `    ${line}`).join("\n");
 }

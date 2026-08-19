@@ -1,79 +1,64 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
-import { createCustomProviderIdentity, resolveCustomProvider } from "../src/runner.js";
+import { deriveFoundryInferenceBase } from "../src/foundry-endpoint.js";
+import { createFoundryProviderIdentity, loadBenchmarkConfig, resolveFoundryProvider } from "../src/runner.js";
 
-test("resolves OpenAI-compatible provider configuration from environment values", () => {
-  const provider = resolveCustomProvider(
-    {
-      type: "openai",
-      baseUrlEnv: "FW_KIMI_K3_BASE_URL",
-      apiKeyEnv: "FW_KIMI_K3_API_KEY",
-      wireApi: "completions",
-    },
-    {
-      FW_KIMI_K3_BASE_URL: "https://fw.example.test/v1",
-      FW_KIMI_K3_API_KEY: "test-only-key",
-    },
-  );
-  assert.deepEqual(provider, {
-    type: "openai",
-    baseUrl: "https://fw.example.test/v1",
-    apiKey: "test-only-key",
-    bearerToken: undefined,
-    wireApi: "completions",
-    azure: undefined,
-  });
-});
+const environment = {
+  FOUNDRY_ENDPOINT: "https://workshop.services.ai.azure.com",
+  FOUNDRY_API_KEY: "test-only-key",
+};
 
-test("rejects missing and ambiguous custom-provider credentials", () => {
-  assert.throws(
-    () => resolveCustomProvider(
-      { type: "openai", baseUrlEnv: "FW_KIMI_K3_BASE_URL", apiKeyEnv: "FW_KIMI_K3_API_KEY" },
-      { FW_KIMI_K3_BASE_URL: "https://fw.example.test/v1" },
-    ),
-    /FW_KIMI_K3_API_KEY/,
+test("derives Foundry OpenAI and Anthropic routes from the canonical resource root", () => {
+  assert.equal(
+    resolveFoundryProvider({ type: "openai" }, environment).baseUrl,
+    "https://workshop.openai.azure.com/openai/v1",
   );
-  assert.throws(
-    () => resolveCustomProvider(
-      {
-        type: "openai",
-        baseUrlEnv: "FW_KIMI_K3_BASE_URL",
-        apiKeyEnv: "FW_KIMI_K3_API_KEY",
-        bearerTokenEnv: "FW_KIMI_K3_BEARER_TOKEN",
-      },
-      {},
-    ),
-    /either apiKeyEnv or bearerTokenEnv/,
-  );
-  assert.throws(
-    () => resolveCustomProvider(
-      {
-        type: "anthropic",
-        baseUrlEnv: "ANTHROPIC_BASE_URL",
-        apiKeyEnv: "ANTHROPIC_API_KEY",
-        wireApi: "completions",
-      },
-      {
-        ANTHROPIC_BASE_URL: "https://api.anthropic.com",
-        ANTHROPIC_API_KEY: "test-only-key",
-      },
-    ),
-    /not supported for Anthropic/,
+  assert.equal(
+    resolveFoundryProvider({ type: "anthropic" }, environment).baseUrl,
+    "https://workshop.services.ai.azure.com/anthropic",
   );
 });
 
-test("fingerprints provider endpoints without recording them in the contract identity", () => {
-  const identity = createCustomProviderIdentity(
-    {
-      type: "openai",
-      baseUrlEnv: "FW_KIMI_K3_BASE_URL",
-      bearerTokenEnv: "FW_KIMI_K3_BEARER_TOKEN",
-      wireApi: "completions",
-    },
-    { FW_KIMI_K3_BASE_URL: "https://fw.example.test/v1" },
+test("rejects non-canonical Foundry endpoints instead of forwarding a likely wrong URL", () => {
+  for (const endpoint of [
+    "https://workshop.openai.azure.com",
+    "https://workshop.services.ai.azure.com/anthropic",
+    "https://workshop.services.ai.azure.com/api/projects/evaluation",
+    "https://gateway.example.test/v1",
+    "http://workshop.services.ai.azure.com",
+    "https://workshop.services.ai.azure.com?api-version=1",
+  ]) {
+    assert.throws(() => deriveFoundryInferenceBase(endpoint, "openai"), /FOUNDRY_ENDPOINT|Foundry resource URL/);
+  }
+});
+
+test("requires the single fixed Foundry credential environment variable", () => {
+  const environmentWithoutKey = {
+    FOUNDRY_ENDPOINT: environment.FOUNDRY_ENDPOINT,
+  };
+  assert.throws(
+    () => resolveFoundryProvider({ type: "openai" }, environmentWithoutKey),
+    /FOUNDRY_API_KEY is required but is not set\. Set it in the current PowerShell session only: \$env:FOUNDRY_API_KEY = "<your-foundry-api-key>"/,
   );
-  assert.equal(identity.authentication, "bearer-token");
-  assert.equal(identity.wireApi, "completions");
-  assert.doesNotMatch(identity.endpointFingerprint, /fw\.example/);
+  assert.doesNotThrow(() => resolveFoundryProvider({ type: "openai" }, environment));
+});
+
+test("rejects legacy custom-provider benchmark configuration at load time", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "benchmark-config-")), "legacy.json");
+  writeFileSync(path, JSON.stringify({ contract: { customProvider: { type: "openai" } } }));
+  assert.throws(() => loadBenchmarkConfig(path), /Legacy\/custom provider configuration is unsupported/);
+});
+
+test("fingerprints the derived endpoint and discloses the selected compatibility adaptation", () => {
+  const identity = createFoundryProviderIdentity({ type: "openai" }, environment);
+  assert.equal(identity.requestAdaptation, "openai-null-refusal-sanitizer");
   assert.match(identity.endpointFingerprint, /^[a-f0-9]{64}$/);
+  assert.doesNotMatch(identity.endpointFingerprint, /workshop/);
+  assert.equal(
+    createFoundryProviderIdentity({ type: "anthropic" }, environment).requestAdaptation,
+    "strip-temperature",
+  );
 });

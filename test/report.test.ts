@@ -3,6 +3,7 @@ import test from "node:test";
 import { immutableContractHash } from "../src/contract.js";
 import { deriveMetrics, extractModelCalls, extractToolCalls } from "../src/metrics.js";
 import { renderPairedComparison, renderRunReport } from "../src/report.js";
+import { createFoundryProviderIdentity } from "../src/runner.js";
 import type { BenchmarkRun, RunContract } from "../src/types.js";
 import { streamingEvents } from "./fixtures/events.js";
 
@@ -24,6 +25,7 @@ const contract: RunContract = {
     sessionTimeoutMs: 60_000,
     streaming: true,
     cachePolicy: "default",
+    reasoningEffort: "high",
   },
   runtime: { sdkVersion: "1.0.10", cliVersion: "1", nodeVersion: "v22" },
 };
@@ -37,7 +39,21 @@ function run(outcome: BenchmarkRun["outcome"]): BenchmarkRun {
     sessionId: "session-1",
     startedAt: "2026-08-18T00:00:00.000Z",
     completedAt: "2026-08-18T00:00:05.000Z",
-    artifacts: { directory: "artifacts", rawEvents: "raw.ndjson", normalizedEvents: "normalized.ndjson", report: "report.md" },
+    artifacts: {
+      directory: "artifacts",
+      rawEvents: "raw.ndjson",
+      normalizedEvents: "normalized.ndjson",
+      diagnostics: "diagnostics.json",
+      report: "report.md",
+    },
+    diagnostics: {
+      schemaVersion: 1,
+      runtime: contract.runtime,
+      selectedModel: "gpt-test",
+      configuredToolFilters: ["builtin:view"],
+      configurationMessages: ["Disabled tools: web_fetch"],
+      providerFailure: { httpStatus: null, signature: null, message: null },
+    },
     modelCalls,
     toolCalls: extractToolCalls(streamingEvents),
     usageMetrics: null,
@@ -48,11 +64,46 @@ function run(outcome: BenchmarkRun["outcome"]): BenchmarkRun {
   };
 }
 
+test("run report preserves captured validation stderr with exit and duration", () => {
+  const benchmarkRun = run({ class: "unresolved", category: "deterministic-evaluator", detail: "validator failed" });
+  benchmarkRun.validation = {
+    command: "npm test",
+    startedAt: "2026-08-18T00:00:03.000Z",
+    completedAt: "2026-08-18T00:00:04.000Z",
+    durationMs: 1_000,
+    exitCode: 1,
+    timedOut: false,
+    errorMessage: null,
+    stdout: "",
+    stderr: "Expected true to equal false\n",
+  };
+
+  const report = renderRunReport(benchmarkRun);
+  assert.match(report, /exited 1 in 1000 ms/);
+  assert.match(report, /Validation stderr/);
+  assert.match(report, /Expected true to equal false/);
+});
+
+test("run report contains a provider fingerprint but not its raw endpoint", () => {
+  const benchmarkRun = run({ class: "resolved", category: "deterministic-evaluator", detail: "passed" });
+  const rawEndpoint = "https://workshop.services.ai.azure.com";
+  benchmarkRun.contract.foundryProvider = createFoundryProviderIdentity(
+    { type: "openai" },
+    { FOUNDRY_ENDPOINT: rawEndpoint, FOUNDRY_API_KEY: "test-only-key" },
+  );
+
+  const report = renderRunReport(benchmarkRun);
+  assert.doesNotMatch(report, /workshop\.services\.ai\.azure\.com/);
+  assert.match(benchmarkRun.contract.foundryProvider.endpointFingerprint, /^[a-f0-9]{64}$/);
+  assert.match(report, /openai-null-refusal-sanitizer/);
+});
+
 test("run report makes unavailable metrics and raw artifact locations visible", () => {
   const report = renderRunReport(run({ class: "resolved", category: "deterministic-evaluator", detail: "passed" }));
   assert.match(report, /Raw SDK envelopes/);
   assert.match(report, /Implementation-phase reporting/);
   assert.match(report, /Unavailable/);
+  assert.match(report, /Redacted runtime diagnostics/);
 });
 
 test("paired report retains failure outcomes", () => {

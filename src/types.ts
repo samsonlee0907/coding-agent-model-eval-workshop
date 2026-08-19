@@ -21,15 +21,19 @@ export interface CandidateContract {
   deployment?: string;
 }
 
+export type ToolCapability = "read" | "edit" | "shell";
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface ExecutionPolicy {
   instructions: string;
-  tools: string[];
+  tools: ToolCapability[];
   permissionMode: "approve-all" | "manual";
   concurrency: number;
   retries: number;
   sessionTimeoutMs: number;
   streaming: true;
   cachePolicy: "default" | "disabled" | "required";
+  reasoningEffort: ReasoningEffort;
 }
 
 export interface RuntimeIdentity {
@@ -38,33 +42,24 @@ export interface RuntimeIdentity {
   nodeVersion: string;
 }
 
-export type CustomProviderType = "openai" | "azure" | "anthropic";
-export type CustomProviderWireApi = "completions" | "responses";
-export type CustomProviderAuth = "api-key" | "bearer-token" | "none";
+export type FoundryProviderType = "openai" | "anthropic";
 
 /**
- * Non-secret custom-provider configuration. Credential values are loaded only
- * from the named process environment variable at runtime.
+ * Foundry-only provider selection. The runner always reads the canonical
+ * resource root and credential from FOUNDRY_ENDPOINT and FOUNDRY_API_KEY.
  */
-export interface CustomProviderConfig {
-  type: CustomProviderType;
-  baseUrlEnv: string;
-  apiKeyEnv?: string;
-  bearerTokenEnv?: string;
-  wireApi?: CustomProviderWireApi;
-  azureApiVersion?: string;
+export interface FoundryProviderConfig {
+  type: FoundryProviderType;
 }
 
 /**
- * Safe provider identity persisted in a run contract. The endpoint is
- * fingerprinted so traces never disclose an internal base URL or credential.
+ * Safe Foundry provider identity persisted in a run contract. The endpoint is
+ * fingerprinted so traces never disclose its raw URL or credential.
  */
-export interface CustomProviderIdentity {
-  type: CustomProviderType;
-  wireApi: CustomProviderWireApi | null;
+export interface FoundryProviderIdentity {
+  type: FoundryProviderType;
   endpointFingerprint: string;
-  authentication: CustomProviderAuth;
-  azureApiVersion: string | null;
+  requestAdaptation: "openai-null-refusal-sanitizer" | "strip-temperature";
 }
 
 export interface RunContract {
@@ -73,7 +68,7 @@ export interface RunContract {
   candidate: CandidateContract;
   execution: ExecutionPolicy;
   runtime: RuntimeIdentity;
-  customProvider?: CustomProviderIdentity;
+  foundryProvider?: FoundryProviderIdentity;
 }
 
 export interface ComparisonContract {
@@ -85,9 +80,9 @@ export interface ComparisonContract {
 }
 
 export interface BenchmarkConfig {
-  contract: Omit<RunContract, "contractVersion" | "runtime" | "customProvider"> & {
+  contract: Omit<RunContract, "contractVersion" | "runtime" | "foundryProvider"> & {
     runtime?: Partial<RuntimeIdentity>;
-    customProvider?: CustomProviderConfig;
+    foundryProvider: FoundryProviderConfig;
   };
   rounds: Array<{ prompt: string; mode?: "enqueue" | "immediate" }>;
   workspacePath: string;
@@ -151,6 +146,8 @@ export interface ValidationResult {
   exitCode: number | null;
   timedOut: boolean;
   errorMessage: string | null;
+  stdout: string;
+  stderr: string;
 }
 
 export type MetricStatus = "available" | "unavailable";
@@ -201,8 +198,10 @@ export interface BenchmarkRun {
     directory: string;
     rawEvents: string;
     normalizedEvents: string;
+    diagnostics: string;
     report: string;
   };
+  diagnostics: RunDiagnostics;
   modelCalls: ModelCall[];
   toolCalls: ToolCall[];
   usageMetrics: JsonRecord | null;
@@ -210,4 +209,50 @@ export interface BenchmarkRun {
   metrics: DerivedMetrics;
   outcome: Outcome;
   runnerError: string | null;
+}
+
+export interface LlmJudgeConfig {
+  provider: FoundryProviderConfig;
+  model: string;
+  reasoningEffort: ReasoningEffort;
+  timeoutMs: number;
+}
+
+export interface LlmJudgeScore {
+  runId: string;
+  candidate: string;
+  codeQuality: number;
+  requirementCoverage: number;
+  maintainability: number;
+  evidenceConfidence: "low" | "medium" | "high";
+  rationale: string;
+  risks: string[];
+}
+
+export interface LlmEvaluationResult {
+  schemaVersion: 1;
+  createdAt: string;
+  judge: FoundryProviderIdentity & {
+    model: string;
+    reasoningEffort: ReasoningEffort;
+    promptVersion: "benchmark-judge-v1";
+  };
+  evaluatedRunIds: string[];
+  scores: LlmJudgeScore[];
+  comparisonSummary: string;
+  limitations: string[];
+  rawResponse: string;
+}
+
+export interface RunDiagnostics {
+  schemaVersion: 1;
+  runtime: RuntimeIdentity;
+  selectedModel: string | null;
+  configuredToolFilters: string[];
+  configurationMessages: string[];
+  providerFailure: {
+    httpStatus: number | null;
+    signature: "anthropic_temperature_deprecated" | "provider_resource_not_found" | "other" | null;
+    message: string | null;
+  };
 }

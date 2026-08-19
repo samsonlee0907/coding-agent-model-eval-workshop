@@ -2,7 +2,11 @@ import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
-import type { BenchmarkConfig, CustomProviderType, CustomProviderWireApi } from "./types.js";
+import type {
+  BenchmarkConfig,
+  FoundryProviderType,
+  ReasoningEffort,
+} from "./types.js";
 
 const ignoredArtifactEntries = new Set([".git", "node_modules", "dist", ".benchmark-artifacts", ".benchmark-runs"]);
 
@@ -10,14 +14,10 @@ export interface QuickstartOptions {
   task: string;
   sourcePath?: string;
   outputDirectory?: string;
-  model?: string;
-  providerLabel?: string;
-  providerType?: CustomProviderType;
-  baseUrlEnv?: string;
-  apiKeyEnv?: string;
-  bearerTokenEnv?: string;
-  wireApi?: CustomProviderWireApi;
+  model: string;
+  provider: FoundryProviderType;
   deployment?: string;
+  reasoningEffort?: ReasoningEffort;
 }
 
 export interface QuickstartWorkspace {
@@ -61,23 +61,21 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
         validationCommand: "auto",
       },
       candidate: {
-        provider: options.providerLabel ?? "custom-byok",
-        model: options.model ?? "replace-with-model-id",
+        provider: options.provider,
+        model: options.model,
         deployment: options.deployment ?? "local-byok",
       },
-      customProvider: {
-        type: options.providerType ?? "openai",
-        baseUrlEnv: options.baseUrlEnv ?? "MODEL_BASE_URL",
-        apiKeyEnv: options.bearerTokenEnv ? undefined : options.apiKeyEnv ?? "MODEL_API_KEY",
-        bearerTokenEnv: options.bearerTokenEnv,
-        wireApi: options.wireApi ?? defaultWireApi(options.providerType),
+      foundryProvider: {
+        type: options.provider,
       },
       execution: {
         instructions: [
           "You are running a local coding benchmark with no GitHub repository or remote.",
           "Read BENCHMARK_TASK.md and implement the requested application in the current workspace.",
           "An optional source artifact may already be present; inspect and use it as task input.",
-          "Work autonomously: create the project if necessary, add tests and build scripts, run validation, and repair failures.",
+          "For greenfield work, create package.json with both test and build scripts, plus behavior tests that cover the requested acceptance behavior.",
+          "Do not declare a standalone HTML/CSS/JavaScript page complete without package.json, tests, and a deterministic production build command.",
+          "Work autonomously: create the project if necessary, run npm test and npm run build, and repair failures.",
           "Do not use network services or access paths outside this workspace.",
         ].join(" "),
         tools: ["read", "edit", "shell"],
@@ -87,11 +85,19 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
         sessionTimeoutMs: 900_000,
         streaming: true,
         cachePolicy: "default",
+        reasoningEffort: options.reasoningEffort ?? "high",
       },
     },
     rounds: [
       { prompt: options.task.trim() },
-      { prompt: "Run the project tests and production build. Repair all failures and complete any missing acceptance behavior." },
+      {
+        prompt: [
+          "Run npm test and npm run build.",
+          "If package.json, its test/build scripts, or behavior tests are missing, create them before proceeding.",
+          "Repair all failures and complete any missing acceptance behavior.",
+          "Do not report success based only on manual or static checks.",
+        ].join(" "),
+      },
     ],
     workspacePath,
     artifactsDirectory: join(outputDirectory, "artifacts"),
@@ -102,31 +108,46 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
 }
 
 export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptions {
+  assertSupportedOptions(argv);
   const task = argumentValue(argv, "--task");
   const taskFile = argumentValue(argv, "--task-file");
   if (task && taskFile) {
     throw new TypeError("Use either --task or --task-file, not both.");
   }
-  const providerType = parseProviderType(argumentValue(argv, "--provider-type"));
-  const wireApi = parseWireApi(argumentValue(argv, "--wire-api"));
-  const apiKeyEnv = argumentValue(argv, "--api-key-env");
-  const bearerTokenEnv = argumentValue(argv, "--bearer-token-env");
-  if (apiKeyEnv && bearerTokenEnv) {
-    throw new TypeError("Use either --api-key-env or --bearer-token-env, not both.");
+  const model = argumentValue(argv, "--model");
+  const provider = parseFoundryProvider(argumentValue(argv, "--provider"));
+  if (!model) {
+    throw new TypeError("--model is required.");
   }
   return {
     task: task ?? (taskFile ? readFileSync(resolve(taskFile), "utf8") : ""),
     sourcePath: argumentValue(argv, "--source"),
     outputDirectory: argumentValue(argv, "--output"),
-    model: argumentValue(argv, "--model"),
-    providerLabel: argumentValue(argv, "--provider"),
-    providerType,
-    baseUrlEnv: argumentValue(argv, "--base-url-env"),
-    apiKeyEnv,
-    bearerTokenEnv,
-    wireApi,
+    model,
+    provider,
     deployment: argumentValue(argv, "--deployment"),
+    reasoningEffort: parseReasoningEffort(argumentValue(argv, "--reasoning-effort")),
   };
+}
+
+function assertSupportedOptions(argv: readonly string[]): void {
+  const optionsWithValues = new Set([
+    "--task",
+    "--task-file",
+    "--model",
+    "--provider",
+    "--deployment",
+    "--reasoning-effort",
+    "--source",
+    "--output",
+  ]);
+  for (const token of argv) {
+    if (token.startsWith("--") && !optionsWithValues.has(token)) {
+      throw new TypeError(
+        `Unsupported option ${token}. This workshop accepts only Foundry --provider openai or --provider anthropic with FOUNDRY_ENDPOINT and FOUNDRY_API_KEY.`,
+      );
+    }
+  }
 }
 
 function argumentValue(argv: readonly string[], name: string): string | undefined {
@@ -141,29 +162,23 @@ function argumentValue(argv: readonly string[], name: string): string | undefine
   return value;
 }
 
-function parseProviderType(value: string | undefined): CustomProviderType | undefined {
+function parseFoundryProvider(value: string | undefined): FoundryProviderType {
+  if (value === "openai" || value === "anthropic") {
+    return value;
+  }
+  throw new TypeError("--provider is required and must be exactly openai or anthropic.");
+}
+
+function parseReasoningEffort(value: string | undefined): ReasoningEffort | undefined {
   if (!value) {
     return undefined;
   }
-  if (value === "openai" || value === "azure" || value === "anthropic") {
+  if (value === "low" || value === "medium" || value === "high" || value === "xhigh" || value === "max") {
     return value;
   }
-  throw new TypeError("--provider-type must be openai, azure, or anthropic.");
+  throw new TypeError("--reasoning-effort must be low, medium, high, xhigh, or max.");
 }
 
-function parseWireApi(value: string | undefined): CustomProviderWireApi | undefined {
-  if (!value) {
-    return undefined;
-  }
-  if (value === "completions" || value === "responses") {
-    return value;
-  }
-  throw new TypeError("--wire-api must be completions or responses.");
-}
-
-function defaultWireApi(providerType: CustomProviderType | undefined): CustomProviderWireApi | undefined {
-  return providerType === "anthropic" ? undefined : "completions";
-}
 
 function copySourceArtifact(sourcePath: string, workspacePath: string): void {
   if (!existsSync(sourcePath)) {

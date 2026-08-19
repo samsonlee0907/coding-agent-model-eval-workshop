@@ -22,6 +22,7 @@ function contract(): RunContract {
       sessionTimeoutMs: 60_000,
       streaming: true,
       cachePolicy: "default",
+      reasoningEffort: "high",
     },
     runtime: { sdkVersion: "1.0.10", cliVersion: "1.2.3", nodeVersion: "v22" },
   };
@@ -37,4 +38,19 @@ test("run contracts are deterministic and detect policy drift", () => {
   const comparison = compareRunContracts(left, right);
   assert.equal(comparison.strictlyComparable, false);
   assert.equal(comparison.drift[0]?.path, "execution.cachePolicy");
+});
+
+test("wire adaptation is strict-comparison drift", () => {
+  const left = contract();
+  const right = contract();
+  left.foundryProvider = {
+    type: "anthropic",
+    endpointFingerprint: "one",
+    requestAdaptation: "strip-temperature",
+  };
+  right.foundryProvider = { type: "openai", endpointFingerprint: "one", requestAdaptation: "openai-null-refusal-sanitizer" };
+
+  const comparison = compareRunContracts(left, right);
+  assert.equal(comparison.strictlyComparable, false);
+  assert.equal(comparison.drift[0]?.path, "foundryProvider.requestAdaptation");
 });

@@ -13,11 +13,6 @@ export function classifyOutcome(facts: OutcomeFacts): Outcome {
   if (facts.validation?.exitCode === 0) {
     return deterministicOutcome("resolved", "Configured deterministic validation command exited with status 0.");
   }
-  if (facts.validation && (facts.validation.timedOut || facts.validation.exitCode !== 0)) {
-    return deterministicOutcome("unresolved", facts.validation.timedOut
-      ? "Configured deterministic validation command timed out."
-      : `Configured deterministic validation command exited with status ${facts.validation.exitCode}.`);
-  }
 
   const evidence = [facts.runnerError, ...facts.toolCalls.map((call) => call.error)].filter(
     (value): value is string => Boolean(value),
@@ -30,6 +25,14 @@ export function classifyOutcome(facts: OutcomeFacts): Outcome {
   }
   if (facts.toolCalls.some((call) => call.resultType === "failure" || call.resultType === "timeout")) {
     return agentOutcome("tool_container_failure", "A tool execution failed and no deterministic evaluator result was recorded.");
+  }
+  if (facts.runnerError) {
+    return agentOutcome("harness_failure", `Coding-agent runtime failed before completing the task: ${facts.runnerError}`);
+  }
+  if (facts.validation && (facts.validation.timedOut || facts.validation.exitCode !== 0)) {
+    return deterministicOutcome("unresolved", facts.validation.timedOut
+      ? "Configured deterministic validation command timed out."
+      : `Configured deterministic validation command exited with status ${facts.validation.exitCode}.`);
   }
   if (facts.toolCalls.length === 0 || !facts.toolCalls.some((call) => isEditTool(call.toolName))) {
     return agentOutcome("empty_patch", "No edit-like tool execution was observed; this is not a deterministic resolution result.");

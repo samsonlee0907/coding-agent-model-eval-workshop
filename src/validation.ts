@@ -3,17 +3,27 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ValidationResult } from "./types.js";
 
+const maxCapturedOutputBytes = 64 * 1024;
+
 export async function runValidation(command: string, cwd: string, timeoutMs: number): Promise<ValidationResult> {
   const startedAt = new Date().toISOString();
   const started = Date.now();
   return new Promise((resolve) => {
-    const child = spawn(command, { cwd, shell: true, stdio: "ignore" });
+    const child = spawn(command, {
+      cwd,
+      shell: true,
+      stdio: ["ignore", "pipe", "pipe"],
+      env: scrubFoundryEnvironment(process.env),
+    });
+    const stdout = new OutputCapture();
+    const stderr = new OutputCapture();
     let settled = false;
     let timedOut = false;
     const finish = (exitCode: number | null, errorMessage: string | null): void => {
       if (settled) {
         return;
       }
+
       settled = true;
       clearTimeout(timer);
       resolve({
@@ -24,8 +34,12 @@ export async function runValidation(command: string, cwd: string, timeoutMs: num
         exitCode,
         timedOut,
         errorMessage,
+        stdout: stdout.value(),
+        stderr: stderr.value(),
       });
     };
+    child.stdout?.on("data", (chunk: Buffer) => stdout.append(chunk));
+    child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill();
@@ -33,6 +47,40 @@ export async function runValidation(command: string, cwd: string, timeoutMs: num
     child.once("error", (error) => finish(null, error.message));
     child.once("close", (code) => finish(code, null));
   });
+}
+
+/**
+ * Candidate code and validators never need the benchmark's Foundry
+ * configuration. Remove it before spawning an agent-controlled process.
+ */
+export function scrubFoundryEnvironment(environment: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const sanitized = { ...environment };
+  delete sanitized.FOUNDRY_API_KEY;
+  delete sanitized.FOUNDRY_ENDPOINT;
+  return sanitized;
+}
+
+class OutputCapture {
+  private readonly chunks: Buffer[] = [];
+  private size = 0;
+  private truncated = false;
+
+  public append(chunk: Buffer): void {
+    const remaining = maxCapturedOutputBytes - this.size;
+    if (remaining <= 0) {
+      this.truncated = true;
+      return;
+    }
+    const retained = chunk.subarray(0, remaining);
+    this.chunks.push(retained);
+    this.size += retained.length;
+    this.truncated ||= retained.length !== chunk.length;
+  }
+
+  public value(): string {
+    const output = Buffer.concat(this.chunks).toString("utf8");
+    return this.truncated ? `${output}\n[output truncated at ${maxCapturedOutputBytes} bytes]` : output;
+  }
 }
 
 /**
@@ -77,5 +125,6 @@ function selectPackageRunner(cwd: string, packageManager: unknown): { test: stri
 }
 
 function missingValidationCommand(reason: string): string {
-  return `node -e "console.error(${JSON.stringify(reason)}); process.exit(2)"`;
+  const encodedReason = Buffer.from(reason, "utf8").toString("base64");
+  return `node -e "console.error(Buffer.from('${encodedReason}', 'base64').toString('utf8')); process.exit(2)"`;
 }

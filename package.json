@@ -7,8 +7,10 @@
     "test": "node --import tsx --test test/**/*.test.ts",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "bench": "tsx src/cli.ts",
-    "quickstart": "tsx src/quickstart-cli.ts"
+    "bench": "node dist/cli.js",
+    "quickstart": "node dist/quickstart-cli.js",
+    "portfolio": "node dist/portfolio-cli.js",
+    "evaluate": "node dist/evaluator-cli.js"
   },
   "keywords": [],
   "author": "",
@@ -27,7 +29,10 @@
   },
   "types": "dist/index.d.ts",
   "bin": {
-    "benchmark-workshop": "dist/cli.js"
+    "benchmark-workshop": "dist/cli.js",
+    "benchmark-workshop-quickstart": "dist/quickstart-cli.js",
+    "benchmark-workshop-portfolio": "dist/portfolio-cli.js",
+    "benchmark-workshop-evaluate": "dist/evaluator-cli.js"
   },
   "files": [
     "dist",

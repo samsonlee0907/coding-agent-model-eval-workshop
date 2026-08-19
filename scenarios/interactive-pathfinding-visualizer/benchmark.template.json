@@ -10,9 +10,12 @@
       "validationCommand": "npm test && npm run build"
     },
     "candidate": {
-      "provider": "replace-with-provider",
+      "provider": "openai",
       "model": "replace-with-model-id",
       "deployment": "optional-deployment-identity"
+    },
+    "foundryProvider": {
+      "type": "openai"
     },
     "execution": {
       "instructions": "You are in a controlled benchmark. Work only in the supplied task workspace. Implement, test, and repair the requested feature; do not access network services or use unrelated tools.",
@@ -22,7 +25,8 @@
       "retries": 0,
       "sessionTimeoutMs": 900000,
       "streaming": true,
-      "cachePolicy": "default"
+      "cachePolicy": "default",
+      "reasoningEffort": "high"
     },
     "runtime": {
       "cliVersion": "runtime-reported-in-session.start-event"

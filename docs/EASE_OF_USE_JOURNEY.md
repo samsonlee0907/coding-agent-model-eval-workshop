@@ -141,6 +141,45 @@ attempts, unclear errors, or required external research/support).
   or a model-provider endpoint.
 - **Time-to-green:** immediate.
 
+## Chapter 12 — Reducing Foundry endpoint and run-observability friction 🟢 Easy
+- **Tries to green:** 1 after observing successful GPT and Claude runs.
+- **What broke:** requiring a separate provider type and endpoint path for each
+  candidate made routine comparison setup error-prone, and terminal output could
+  appear inactive during long agent turns.
+- **How I found the fix:** use one Foundry resource-root environment value,
+  retain it for GPT, append `/anthropic` for Claude, and expose compact
+  lifecycle events while retaining full raw NDJSON privately.
+- **What did NOT work / discover:** the two models still require different
+  wire protocols; the convenience layer must preserve an explicit override for
+  deployments whose model name does not identify the protocol.
+- **Time-to-green:** under one hour; 23 offline tests passed.
+
+## Chapter 13 — Making the happy path safe to copy 🟢 Easy
+- **Tries to green:** 1 review-and-hardening pass.
+- **What broke:** debug logging could bypass the redacted terminal view, model
+  deltas could produce repetitive status lines, and package scripts referenced
+  source files unavailable after publication.
+- **How I found the fix:** default SDK logging to `none`, track streamed turns
+  using stable IDs, require compiled CLI entry points, and put one exact
+  resource-root base URL plus copyable commands at the top of the guide.
+- **What did NOT work / discover:** monetary decision readiness cannot be
+  inferred from one candidate reporting cost; every candidate's resolved
+  samples must provide the evidence.
+- **Time-to-green:** under one hour; 25 offline tests and package inspection
+  passed.
+
+## Chapter 14 — One Foundry URL across GPT and Claude 🟢 Easy
+- **Tries to green:** 1 canonicalization pass.
+- **What broke:** retaining the services host for GPT made a resource root look
+  like a usable OpenAI-compatible inference base, even though GPT requires the
+  resource’s `/openai/v1` route on the OpenAI hostname.
+- **How I found the fix:** canonicalize a resource root or project endpoint to
+  its resource name, then derive the provider-specific base without storing the
+  supplied URL in a run artifact.
+- **What did NOT work / discover:** a 404 after correct route derivation is
+  deployment identity or availability evidence, not a task-code signal.
+- **Time-to-green:** under one hour; 32 offline tests passed.
+
 ## Open items for this document
 - [ ] Rate the first authenticated, isolated SDK session from a human operator's
   perspective, including any entitlement or token error verbatim.
@@ -154,3 +193,30 @@ the event/usage requirements span the SDK repository and two focused GitHub
 Docs pages. The offline fixture architecture keeps that friction out of normal
 build/test loops and makes a future entitlement issue easy to identify as
 permission-related only when a live SDK error actually says so.
+
+## Chapter 14 — Separating deterministic validation from LLM review 🟢 Easy
+- **Tries to green:** 1 offline implementation pass.
+- **What broke:** the earlier report could describe code-quality limitations but
+  could not retain a consistent qualitative review from a selected judge.
+- **How I found the fix:** a separate, tool-free judge session keeps the judge
+  deployment, prompt version, evidence limits, and response apart from the
+  candidate contract.
+- **What did NOT work / discover:** an LLM judge cannot replace the deterministic
+  validator, visual checks, or human review; malformed JSON is an evaluation
+  failure, not a candidate result.
+- **Time-to-green:** offline-only; the first real judge request remains a
+  budgeted operational check.
+
+## Chapter 13 — Foundry-only endpoint and strict continuation compatibility 🟡 Medium
+- **Tries to green:** 1 focused local refactor.
+- **What broke:** broad endpoint/provider input obscured the one supported
+  workshop deployment contract; FW-Kimi-K3 rejected a Copilot SDK continuation
+  containing `refusal: null`.
+- **How I found the fix:** Microsoft Foundry endpoint documentation established
+  canonical routing, and the retained run artifact isolated the second-turn
+  rejected field.
+- **What did NOT work / discover:** first-request OpenAI compatibility did not
+  prove multi-turn compatibility. The narrow loopback transformer is explicit
+  contract evidence, not an invisible workaround.
+- **Time-to-green:** offline tests only; no permission or provider request was
+  needed.

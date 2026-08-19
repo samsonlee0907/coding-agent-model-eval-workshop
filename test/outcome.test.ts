@@ -12,15 +12,22 @@ function validation(exitCode: number | null): ValidationResult {
     exitCode,
     timedOut: false,
     errorMessage: null,
+    stdout: "",
+    stderr: "",
   };
 }
 
-test("deterministic evaluator results take precedence after a completed validation", () => {
+test("successful deterministic validation takes precedence after a completed run", () => {
   assert.equal(classifyOutcome({ validation: validation(0), toolCalls: [], runnerError: "tool failed earlier" }).class, "resolved");
   assert.equal(classifyOutcome({ validation: validation(1), toolCalls: [], runnerError: null }).class, "unresolved");
 });
 
-test("agent and infrastructure outcomes remain explicit without validation", () => {
+test("agent and infrastructure outcomes remain explicit", () => {
   assert.equal(classifyOutcome({ validation: null, toolCalls: [], runnerError: "HTTP 429 rate limit" }).class, "rate_limit");
+  assert.equal(classifyOutcome({
+    validation: validation(1),
+    toolCalls: [],
+    runnerError: "Resource not found on provider (HTTP 404).",
+  }).class, "harness_failure");
   assert.equal(classifyOutcome({ validation: null, toolCalls: [], runnerError: null }).class, "empty_patch");
 });

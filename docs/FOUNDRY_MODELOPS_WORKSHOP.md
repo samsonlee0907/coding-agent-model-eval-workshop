@@ -1,238 +1,115 @@
-# Microsoft Foundry ModelOps routing workshop
+# Microsoft Foundry ModelOps Workshop
+
+This workshop compares Microsoft Foundry deployments while holding the
+multi-round GitHub Copilot SDK agent, task baseline, prompt, tool profile,
+timeouts, and deterministic evaluator constant. It is not a generic provider
+or external-gateway client.
 
 ## Start a local benchmark
 
-The toolkit uses the GitHub Copilot SDK as the persistent coding-agent runtime.
-It does not require a GitHub repository for a first run. Provide a task,
-optional source artifact, and non-secret references to your model endpoint and
-credential environment variables:
-
 ```powershell
-$env:MODEL_BASE_URL = "https://your-provider-endpoint"
-$env:MODEL_API_KEY = "set-this-only-in-your-shell"
+npm ci
+npm run build
 
-npm run quickstart -- `
-  --task "Build a compact TypeScript application with tests and a production build." `
-  --provider "foundry-openai" `
-  --provider-type "openai" `
-  --model "your-foundry-deployment-name"
-```
-
-The quickstart command creates a local-only task workspace, copies an optional
-`--source` artifact, initializes a local Git baseline, derives the baseline SHA
-and environment fingerprint, runs two persistent agent turns, detects test and
-build scripts after implementation, then writes artifacts under
-`.benchmark-runs/`. It creates no GitHub remote and stores no secret value.
-
-### Candidate connection profiles
-
-The `--provider-type` reflects the endpoint protocol—not a model brand. Verify
-the deployment's supported protocol in the Foundry catalog/deployment
-documentation before a benchmark.
-
-| Candidate endpoint | `--provider-type` | Important settings |
-|---|---|---|
-| Foundry OpenAI-compatible `/openai/v1/` endpoint | `openai` | Use the deployment name as `--model`; use `--wire-api responses` only when the endpoint/model supports Responses API, otherwise `completions`. |
-| Native Azure OpenAI endpoint | `azure` | `MODEL_BASE_URL` is the host only; pass `--wire-api` only if the protocol supports it. Extend the config for the required Azure API version before using a versioned deployment. |
-| Direct Anthropic Messages API | `anthropic` | Use the Claude model ID and do **not** set `--wire-api`; the SDK uses the Anthropic Messages API. |
-| Anthropic model exposed by Foundry | depends on Foundry endpoint | Use the protocol the Foundry deployment exposes. Do not assume a Foundry-hosted Claude deployment accepts direct Anthropic Messages API; confirm the deployment's endpoint/authentication details. |
-| External OpenAI-compatible model gateway | `openai` | Record provider/region/deployment separately; use `completions` unless Responses API is confirmed. |
-
-For an Anthropic-compatible endpoint:
-
-```powershell
-$env:FOUNDRY_ANTHROPIC_BASE_URL = "https://your-confirmed-anthropic-compatible-endpoint"
-$env:FOUNDRY_ANTHROPIC_API_KEY = "set-this-only-in-your-shell"
+$env:FOUNDRY_ENDPOINT = "https://<resource-name>.services.ai.azure.com"
+$env:FOUNDRY_API_KEY = "set-this-only-in-your-shell"
 
 npm run quickstart -- `
   --task-file C:\tasks\coding-task.md `
-  --provider "foundry-anthropic" `
-  --provider-type "anthropic" `
-  --model "your-confirmed-claude-model-id" `
-  --base-url-env FOUNDRY_ANTHROPIC_BASE_URL `
-  --api-key-env FOUNDRY_ANTHROPIC_API_KEY
+  --provider openai `
+  --model "gpt-5.6-terra"
 ```
 
-For a strict comparison, generate one local baseline, retain it, and create a
-fresh copy for each candidate. Never compare outputs generated from different
-starter states, tool profiles, prompts, validation, or environment
-fingerprints.
+Use `--provider anthropic --model "<deployment-name>"` for a Claude
+deployment. These are the only accepted provider values. The runner defaults
+to `high` reasoning effort; add `--reasoning-effort low|medium|high|xhigh|max`
+only when that is an explicit comparison variable.
 
-## Outcome
+The resource endpoint must be exactly
+`https://<resource-name>.services.ai.azure.com`. It cannot be an OpenAI host,
+a project endpoint, a path-suffixed endpoint, or an endpoint with credentials,
+query, or fragment. The runner derives:
 
-Produce a versioned **coding-task router policy**, not a claim that one model
-is universally best. The policy assigns eligible models to task classes and
-defines fallback, budget, quality, latency, data-residency, and tool-compatibility
-constraints.
-
-The current benchmark runner is the controlled coding-agent harness. Microsoft
-Foundry supplies model discovery, deployment/capacity governance, evaluation,
-monitoring, and—when appropriate—agent tools. Keep the agent runtime and tool
-profile constant while comparing models.
-
-## Scope
-
-| In scope | Out of scope for the first workshop |
+| Provider | Derived SDK base |
 |---|---|
-| Discover models/deployments currently available to the selected Foundry project and region. | Declaring a static global “best model” list. |
-| Compare a small candidate portfolio on pinned, reproducible coding tasks. | Comparing models that received different prompts, tools, task state, or validation. |
-| Create a routing table with quality, latency, cost, availability, and fallback thresholds. | Fine-tuning models before a baseline routing policy exists. |
-| Validate deterministic code outcomes first; use quality/safety evaluators as secondary signals. | Treating an LLM judge as proof that a repository builds or tests pass. |
-| Pilot, monitor, and revise routing decisions with versioned evidence. | Enabling production auto-routing without a canary or rollback path. |
+| `openai` | `https://<resource>.openai.azure.com/openai/v1` |
+| `anthropic` | `https://<resource>.services.ai.azure.com/anthropic` |
 
-## Recommended workshop flow
+This follows [Microsoft Foundry model endpoints](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/endpoints).
+Use the supplied deployment/model ID verbatim. A 404 after correct routing is
+deployment-identity or availability evidence, not a task-code or validator
+result. For models where Responses is unsupported, use the compatible Chat
+Completions route selected by this runner for `openai`.
 
-### 1. Inventory: catalog, deployment, and constraints
+## Compatibility disclosure
 
-For the selected Azure subscription, Foundry project, and region:
+The contract and report retain only a SHA-256 fingerprint of the derived
+endpoint. They also disclose the local wire adaptation because runs with
+different wire behavior are not strictly comparable:
 
-1. Query the Foundry model catalog and current deployments dynamically. Model
-   availability, region support, SKUs, quota, and tool compatibility change, so
-   do not bake an online list into the workshop.
-2. Record candidate model/deployment identity, provider, version, region,
-   endpoint class, pricing basis, capacity/quota, context limit, and supported
-   request/tool features.
-3. Include only candidates that can meet the task's data-residency, safety, and
-   latency requirements. Preserve rejected candidates and the reason.
-4. Deploy only the short list needed for the workshop. Use serverless or
-   low-capacity development deployments first; assess provisioned throughput
-   only after demand and latency targets are understood.
-
-Foundry deployment selection must validate actual catalog SKU support and
-available subscription quota before candidates are chosen.
-
-### 2. Define task and tool families
-
-Start with 12–20 tasks across these coding-agent classes:
-
-| Task family | Example | Primary deterministic evaluator |
+| Provider | Adaptation | Purpose |
 |---|---|---|
-| Greenfield feature | Build a small TypeScript application from a brief. | Build plus behavior tests. |
-| Targeted bug fix | Repair a failing regression in an existing service. | Original regression test plus full targeted suite. |
-| Multi-file refactor | Introduce a typed API while preserving behavior. | Typecheck, tests, public API contract. |
-| Test/repair loop | Diagnose a seeded failing test and repair it. | Test becomes green without changing its expected behavior. |
-| Long-context change | Use a supplied design artifact across multiple files. | Architectural checks plus behavior tests. |
-| Security/reliability hardening | Fix a seeded validation/error-handling defect. | Negative tests and static/security checks. |
+| `anthropic` | `strip-temperature` | Removes the deprecated `temperature` property from Foundry Anthropic requests. |
+| `openai` | `openai-null-refusal-sanitizer` | Removes only `refusal: null` from every outbound `messages[]` continuation array. |
 
-Run each family through fixed **tool profiles**. The first profile should use
-only the local coding-agent tools needed for file read, edit, and shell/test
-execution. Evaluate Foundry Agent Service tools—such as Code Interpreter,
-function calling, MCP, file search, or web/search tools—in separate
-experiments; otherwise tool differences are incorrectly attributed to the
-model.
+The OpenAI sanitizer is loopback-only and preserves headers/authentication,
+non-null `refusal` values, and every other request field. It addresses the
+observed FW-Kimi-K3 second-turn rejection:
+`400 Extra inputs are not permitted, field: 'messages[2].refusal', value: None`.
+It does not alter Anthropic payloads. Proxy-forwarding failures surface as
+harness errors and the proxy closes with the run.
 
-### 3. Establish the baseline
+## Optional LLM quality judge
 
-Use `npm run quickstart` for an initial from-scratch task. It creates a
-local-only baseline and metadata automatically; no GitHub repository is needed.
-For paired comparisons, reuse copies of the **same generated baseline** for
-every candidate.
+Run deterministic validation first. When qualitative review is useful, run the
+separate `evaluate` command over completed `run.json` artifacts:
 
-For each run, preserve:
-
-- task prompt/rounds, optional source artifact fingerprint, local baseline SHA,
-  dependency/environment fingerprint, tool profile, timeout, retry and cache
-  policy;
-- model/deployment/provider identity and region;
-- raw events, normalized events, validation record, run report, and provider
-  billing export where applicable.
-
-### 4. Score all runs before ranking
-
-Gate routing eligibility on deterministic correctness first:
-
-```text
-eligible = validation pass rate >= task-family threshold
-           AND no unresolved safety/compliance blocker
-           AND deployment is available within the required region
+```powershell
+npm run evaluate -- `
+  --runs .benchmark-runs `
+  --provider openai `
+  --model "<judge-deployment-name>"
 ```
 
-For eligible candidates report:
+The judge uses the same canonical `FOUNDRY_ENDPOINT` and `FOUNDRY_API_KEY`
+configuration as a candidate. It starts a separate, tool-free Copilot SDK
+session using the selected Foundry judge deployment. The evidence packet is
+bounded and explicitly treated as untrusted data so task text cannot redirect
+the judge's instructions; validator commands and output are excluded. The result contains one
+1–5 evidence-based score per candidate, confidence, rationale, risks,
+limitations, judge identity, request adaptation, and raw response.
 
-- resolved rate and unresolved/failure breakdown;
-- cost **per resolved task**, not only average cost;
-- median and p95 E2E time, time to first tool/edit/green validation;
-- token/cache/cost fields only when emitted by the runtime or provider;
-- tool failure rate, timeout/rate-limit rate, and repair-turn count;
-- task-family performance rather than one global aggregate.
+Judge output is supplementary. It cannot prove a build, test, visual behavior,
+security property, or cost. A malformed judge response fails evaluation only;
+it never changes a candidate's deterministic benchmark outcome. Budget for
+the judge request and treat the resulting JSON as restricted artifact data.
 
-Use Foundry quality/safety evaluators as secondary diagnostic signals. Keep
-their evaluator version, rubric, dataset version, and judge model alongside
-the deterministic result.
+## Evidence and fair comparison
 
-### 5. Produce the initial router
+1. Create one local baseline and use fresh copies for all candidates.
+2. Pin task prompt/rounds, validation command, tools, timeout, reasoning effort,
+   runtime versions, and environment fingerprint.
+3. Keep raw and normalized events, validation command/stdout/stderr, and report.
+4. Include resolved, unresolved, timeout, rate-limit, empty-patch, tool, and
+   harness failures in the report; do not silently filter them.
+5. Compare cost, tokens, TTFT/TPOT, and cache fields only when runtime events
+   supply them. Reports label unavailable metrics rather than estimating them.
+6. Treat model/deployment/protocol/adaptation drift as non-comparable unless a
+   decision explicitly accepts the difference.
 
-Create an explicit table such as:
+## Breaking migration
 
-| Task class | Primary route | Fallback | Entry gate | Exit/fallback trigger |
-|---|---|---|---|---|
-| Small greenfield UI | lowest-cost candidate that meets quality threshold | balanced coding model | low complexity, no sensitive artifact | validation fails or time budget exceeded |
-| Standard bug fix/refactor | balanced coding model | strongest coding/reasoning model | normal context/tool needs | first repair turn fails or evaluator risk threshold exceeded |
-| Long-context/high-risk change | strongest eligible model | human escalation | large artifact, high blast radius | missing evidence, timeout, or safety gate |
+This is Foundry-only. Removed settings include `--foundry`,
+`--foundry-resource-url`, `--provider-type`, endpoint/credential environment
+name flags, bearer-token flags, wire-api flags, legacy provider labels,
+project URLs, alternate hosts, and external/BYOK provider profiles. Replace
+them with the fixed `FOUNDRY_ENDPOINT`, `FOUNDRY_API_KEY`, and exact
+`--provider openai|anthropic`.
 
-Keep the routing policy in version control with the benchmark report IDs that
-support it. A router should select only among deployments it has verified as
-available; it needs a capacity/rate-limit fallback and a human-escalation
-route.
+## Scope and limitations
 
-### 6. Pilot and monitor
-
-Use shadow routing first: log the route a policy *would* select while retaining
-the existing production route. Then run a limited canary with rollback rules.
-Continuously evaluate task-family regressions, routing drift, deployment
-availability, cost per resolved task, and safety signals. Re-benchmark after a
-model version, deployment, tool profile, prompt, or task-suite change.
-
-## Prerequisites
-
-### Governance and access
-
-- A named workshop owner for task definitions, evaluation policy, deployment,
-  cost approval, and routing sign-off.
-- Azure subscription, selected Foundry project/region, and access to the model
-  catalog and relevant deployments.
-- Permissions to view quota/capacity and deploy only the approved candidates.
-- Approved budget, rate limits, data classification, retention policy, and
-  incident/rollback owner.
-- Credential approach: API key or Microsoft Entra authentication for Foundry;
-  secret values remain in the shell/secret store, never task config or event
-  artifacts.
-
-### Technical baseline
-
-- Node.js, npm, Git, and an isolated local task workspace; Docker is optional
-  but recommended once tasks need a common Linux/container runtime.
-- The Copilot SDK benchmark runner, fixed tool profile, and a deterministic
-  validation command for every task.
-- A provider adapter per candidate. The SDK supports `openai`, `azure`, and
-  `anthropic` provider protocols. Select based on the deployment's documented
-  endpoint protocol; record Foundry-hosted and external candidates separately
-  for billing and operational ownership.
-- An artifact store with restricted access for raw prompts, responses, tool
-  arguments, and test output.
-
-### Evaluation readiness
-
-- Task suite split into smoke, regression, and coverage tiers. Begin with
-  smoke runs before broader comparisons.
-- Deterministic evaluators for code correctness plus separate rubric/safety
-  evaluators where they add information.
-- A model/deployment manifest that records region, version, quota, context,
-  supported tool/request features, and price source.
-- A rule for unavailable metrics: mark unavailable; never substitute estimates.
-
-## Workshop deliverables
-
-1. Candidate inventory and deployment/capacity manifest.
-2. Versioned coding-task suite, source artifacts, deterministic evaluators, and
-   tool-profile compatibility matrix.
-3. Raw benchmark artifacts and all-run comparison report.
-4. Task-family Pareto analysis: quality, latency, cost, resilience.
-5. Router policy, fallback/escalation rules, and change-control owner.
-6. Pilot/continuous-evaluation dashboard and regression thresholds.
-
-## Official references
-
-- [Foundry model deployment and capacity guidance](https://learn.microsoft.com/azure/foundry/openai/how-to/provisioned-get-started)
-- [Microsoft Foundry toolbox](https://learn.microsoft.com/azure/foundry/agents/how-to/tools/toolbox)
-- [GitHub Copilot SDK BYOK configuration](https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md)
+The current MVP runs local workspaces and deterministic validation. It neither
+creates cloud resources nor discovers deployments, prices, quota, or capacity.
+Use Foundry deployment management separately to prepare an approved candidate
+set. Add SWE-bench/container adapters only as later task modules; they are not
+downloaded or provisioned here.

@@ -44,8 +44,12 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 | 9 | FW-Kimi-K3 BYOK configuration | ✅ **Implemented 2026-08-18** — OpenAI-compatible environment-only provider adapter and example added. | Run a provider-authenticated smoke task in a clean workspace. |
 | 10 | No-GitHub quickstart | ✅ **Implemented 2026-08-19** — local baseline, automatic metadata, optional artifact, and auto-validation flow added. | Run a provider-authenticated smoke task. |
 | 11 | Foundry ModelOps routing blueprint | ✅ **Defined 2026-08-19** — scope, prerequisites, task/tool/evaluation separation, and router lifecycle documented. | Select an Azure project/region and inventory live candidates. |
-| 12 | Multi-provider candidate quickstart | ✅ **Implemented 2026-08-19** — candidate labels, model/deployment identity, and OpenAI/Azure/Anthropic endpoint protocol selection added. | Confirm each Foundry deployment's endpoint protocol and run smoke tasks. |
+| 12 | Foundry candidate quickstart | ✅ **Implemented 2026-08-19** — candidate labels, deployment identity, and exact `openai`/`anthropic` Foundry protocol selection added. | Confirm each Foundry deployment's protocol and run smoke tasks. |
 | 13 | Private workshop publication | ✅ **Published 2026-08-19** — private GitHub repository created and `main` pushed. | Keep releases and routing decisions versioned. |
+| 14 | Foundry shared-endpoint quickstart | ✅ **Implemented 2026-08-19** — one resource-root endpoint, Claude suffix derivation, high reasoning default, and concise streaming terminal progress. | Run repeated candidates from one pinned baseline. |
+| 15 | Foundry inference route derivation | ✅ **Implemented 2026-08-19** — one canonical resource-root URL derives the correct GPT OpenAI-compatible or Claude Anthropic inference base without persisting raw endpoints. | Confirm deployment IDs in a bounded live smoke run. |
+| 16 | Foundry-only provider contract and FW-Kimi-K3 sanitizer | ✅ **Implemented 2026-08-19** — canonical services-root validation, fixed credential names, strict provider enum, per-wire-adaptation contract/report evidence, and offline continuation sanitizer regression coverage. | Execute a bounded live FW-Kimi-K3 multi-turn smoke task. |
+| 17 | Supplementary Foundry LLM judge | ✅ **Implemented 2026-08-19** — separate tool-free judge command, bounded untrusted evidence packet, strict JSON schema validation, and separate evaluation artifact. | Execute a budgeted judge run against a known retained cohort. |
 
 ## 1. Permission-probe tests (P0)
 

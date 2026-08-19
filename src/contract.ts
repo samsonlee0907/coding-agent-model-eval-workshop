@@ -22,6 +22,11 @@ export function compareRunContracts(left: RunContract, right: RunContract): Cont
     ...diff("execution", left.execution, right.execution),
     ...diff("runtime.sdkVersion", left.runtime.sdkVersion, right.runtime.sdkVersion),
     ...diff("runtime.cliVersion", left.runtime.cliVersion, right.runtime.cliVersion),
+    ...diff(
+      "foundryProvider.requestAdaptation",
+      left.foundryProvider?.requestAdaptation ?? "none",
+      right.foundryProvider?.requestAdaptation ?? "none",
+    ),
   ];
   return { strictlyComparable: drift.length === 0, drift };
 }

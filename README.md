@@ -1,41 +1,92 @@
-# Coding Agent Model Eval Workshop
+# Coding Agent Benchmark Workshop
 
-The workshop guide is the primary documentation:
-[Microsoft Foundry ModelOps routing workshop](./docs/FOUNDRY_MODELOPS_WORKSHOP.md).
+An offline-testable TypeScript benchmark harness for multi-round coding agents.
+GitHub Copilot SDK runs persistent, streaming sessions; Microsoft Foundry
+supplies the benchmarked model deployments.
 
-It explains candidate discovery, provider protocol selection, local quickstart,
-fair multi-model comparisons, deterministic evaluators, tool-profile isolation,
-and how to turn results into a versioned coding-task routing policy.
+## Before you start
 
-## Workshop flow
+Follow the step-by-step [setup guide](./docs/SETUP_GUIDE.md) before a live
+benchmark. It covers Node.js, Git, Foundry resource/deployment preparation,
+credentials, local validation, and LLM-judge cost/privacy controls.
 
-1. Discover only models and deployments currently available in the selected
-   Foundry project and region; record version, context, quota, endpoint
-   protocol, tool support, and price source.
-2. Run the same coding task family from equivalent local baselines with a fixed
-   prompt, tools, timeout, validation command, and environment fingerprint.
-3. Gate candidates on deterministic build/test results before comparing cost or
-   latency. Include failures, rate limits, timeouts, and tool failures.
-4. Build routing rules per task family using resolved rate, cost per resolved
-   task, p95 latency, availability, safety/compliance needs, and fallbacks.
-5. Shadow-route first, canary second, then continuously re-evaluate after a
-   model, deployment, prompt, tool, or task-suite change.
+## Foundry-only quickstart
 
-## Prerequisites
+Install and build:
 
-- Node.js, npm, Git, and an isolated local workspace. No GitHub repository is
-  needed for quickstart.
-- A model endpoint plus credential available through shell environment
-  variables; never write secrets to configuration or artifacts.
-- A Foundry project/region and catalog/deployment/quota access when evaluating
-  Foundry models.
-- Deterministic test/build validation for each coding task and restricted
-  storage for raw agent traces.
+```powershell
+npm ci
+npm run build
+```
 
-## Quick links
+Set the two shell-only values. The endpoint must be exactly the canonical
+Foundry resource root: no project path, `/anthropic`, `/openai/v1`, query, or
+alternate host.
 
-- [Start a local benchmark](./docs/FOUNDRY_MODELOPS_WORKSHOP.md#start-a-local-benchmark)
-- [Candidate connection profiles](./docs/FOUNDRY_MODELOPS_WORKSHOP.md#candidate-connection-profiles)
-- [ModelOps workshop flow](./docs/FOUNDRY_MODELOPS_WORKSHOP.md#recommended-workshop-flow)
-- [Included A* coding scenario](./scenarios/interactive-pathfinding-visualizer/task.md)
-- [GitHub Copilot SDK BYOK reference](https://github.com/github/copilot-sdk/blob/main/docs/auth/byok.md)
+```powershell
+$env:FOUNDRY_ENDPOINT = "https://<resource-name>.services.ai.azure.com"
+$env:FOUNDRY_API_KEY = "set-this-only-in-your-shell"
+```
+
+Run a GPT deployment:
+
+```powershell
+npm run quickstart -- `
+  --task "Build a compact TypeScript application with tests and a production build." `
+  --provider openai `
+  --model "gpt-5.6-terra"
+```
+
+For a Claude deployment, change only the provider and deployment name:
+`--provider anthropic --model "claude-sonnet-5"`.
+
+The runner derives `https://<resource>.openai.azure.com/openai/v1` for
+`openai`, and `https://<resource>.services.ai.azure.com/anthropic` for
+`anthropic`. It records only a SHA-256 endpoint fingerprint. A 404 after
+correct routing means to verify deployment identity and availability; it is not
+task-code evidence.
+
+## Current MVP
+
+- Two persistent coding-agent rounds, streamed progress, append-only raw and
+  normalized event artifacts, deterministic validation, and comparison reports.
+- Default reasoning effort is `high`; use `--reasoning-effort` only for an
+  intentional comparison cohort.
+- Foundry Anthropic requests use an internal `strip-temperature` adaptation.
+  Foundry OpenAI requests use `openai-null-refusal-sanitizer`, which removes
+  only `refusal: null` in `messages[]` payloads to support strict deployments
+  such as FW-Kimi-K3. Adaptations are included in contracts and strict
+  comparability checks.
+- No credential is written to configuration, contracts, reports, or artifacts.
+  Automated tests never make a live model call.
+
+## Supplementary LLM judging
+
+After collecting completed `run.json` artifacts, an opt-in judge can score
+their bounded, redacted evidence packet. It is a separate, billable Foundry
+request and does not replace deterministic validation or modify run outcomes.
+
+```powershell
+npm run evaluate -- `
+  --runs .benchmark-runs `
+  --provider openai `
+  --model "<judge-deployment-name>"
+```
+
+The judge uses the same `FOUNDRY_ENDPOINT` and `FOUNDRY_API_KEY` shell values.
+Use `--provider anthropic` for a Foundry Claude judge, `--reasoning-effort` to
+make an intentional cohort choice, and `--output <path>` to choose the
+evaluation JSON location. The output records judge model, protocol adaptation,
+prompt version, scores, limitations, and raw judge response. Treat it as
+restricted benchmark data: it can contain task prompts and judge text.
+
+## Breaking migration
+
+Only `--provider openai` and `--provider anthropic` are supported. Removed:
+`--foundry`, `--foundry-resource-url`, `--provider-type`, custom endpoint and
+credential flags, legacy provider labels, project URLs, alternate hosts, and
+external/BYOK gateway profiles. Use `FOUNDRY_ENDPOINT` and `FOUNDRY_API_KEY`.
+
+See the [Foundry ModelOps workshop](./docs/FOUNDRY_MODELOPS_WORKSHOP.md), the
+[scenario](./scenarios/interactive-pathfinding-visualizer/task.md), and the
+[developer-experience journal](./docs/WORKING_DIARY.md).

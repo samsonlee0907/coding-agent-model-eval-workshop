@@ -10,6 +10,7 @@ export class EventCollector {
   public constructor(
     public readonly rawEventsPath: string,
     public readonly normalizedEventsPath: string,
+    private readonly onEvent?: (event: NormalizedEvent) => void,
   ) {
     mkdirSync(dirname(rawEventsPath), { recursive: true });
     mkdirSync(dirname(normalizedEventsPath), { recursive: true });
@@ -46,6 +47,7 @@ export class EventCollector {
     appendFileSync(this.rawEventsPath, `${JSON.stringify(raw)}\n`, "utf8");
     appendFileSync(this.normalizedEventsPath, `${JSON.stringify(normalized)}\n`, "utf8");
     this.normalized.push(normalized);
+    this.onEvent?.(normalized);
     return normalized;
   }
 }
