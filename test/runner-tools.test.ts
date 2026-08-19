@@ -1,10 +1,10 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { isAbsolute, relative } from "node:path";
 import test from "node:test";
 import {
-  prepareCopilotRuntimeDirectory,
+  createIsolatedCopilotRuntimeDirectory,
   resolveCopilotCliPath,
   resolveSdkToolAllowlist,
 } from "../src/runner.js";
@@ -19,14 +19,14 @@ test("maps benchmark tool capabilities to source-qualified SDK built-ins", () =>
   ]);
 });
 
-test("creates the isolated Copilot home before the runtime receives a prompt", () => {
-  const artifactsDirectory = mkdtempSync(join(tmpdir(), "benchmark-runtime-"));
+test("creates isolated Copilot state in a short temporary path", () => {
+  const runtimeDirectory = createIsolatedCopilotRuntimeDirectory();
   try {
-    const runtimeDirectory = prepareCopilotRuntimeDirectory(artifactsDirectory);
-    assert.equal(runtimeDirectory, join(artifactsDirectory, "copilot-runtime"));
     assert.equal(existsSync(runtimeDirectory), true);
+    assert.equal(isAbsolute(runtimeDirectory), true);
+    assert.equal(relative(tmpdir(), runtimeDirectory).startsWith(".."), false);
   } finally {
-    rmSync(artifactsDirectory, { recursive: true, force: true });
+    rmSync(runtimeDirectory, { recursive: true, force: true });
   }
 });
 

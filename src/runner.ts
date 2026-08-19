@@ -1,7 +1,8 @@
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { tmpdir } from "node:os";
 import {
   createServer,
   request as httpRequest,
@@ -65,7 +66,7 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   let runnerError: string | null = null;
   const sdkToolAllowlist = resolveSdkToolAllowlist(contract.execution.tools);
   const cliPath = resolveCopilotCliPath(process.env);
-  const runtimeDirectory = prepareCopilotRuntimeDirectory(artifactsDirectory);
+  const runtimeDirectory = createIsolatedCopilotRuntimeDirectory();
   const client = new CopilotClient({
     workingDirectory: config.workspacePath,
     baseDirectory: runtimeDirectory,
@@ -231,13 +232,11 @@ export function resolveSdkToolAllowlist(capabilities: readonly ToolCapability[])
 }
 
 /**
- * COPILOT_HOME must already exist because current Copilot CLI versions open
- * their SQLite state lazily when the first prompt is sent.
+ * Keep COPILOT_HOME short on Windows: the CLI adds session-state paths beneath
+ * it, and SQLite cannot reliably open paths nested under long artifact roots.
  */
-export function prepareCopilotRuntimeDirectory(artifactsDirectory: string): string {
-  const runtimeDirectory = join(artifactsDirectory, "copilot-runtime");
-  mkdirSync(runtimeDirectory, { recursive: true });
-  return runtimeDirectory;
+export function createIsolatedCopilotRuntimeDirectory(): string {
+  return mkdtempSync(join(tmpdir(), "benchmark-copilot-runtime-"));
 }
 
 /**
