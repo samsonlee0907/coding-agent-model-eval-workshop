@@ -8,9 +8,13 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "bench": "node dist/cli.js",
+    "prebench": "npm run build",
     "quickstart": "node dist/quickstart-cli.js",
+    "prequickstart": "npm run build",
     "portfolio": "node dist/portfolio-cli.js",
-    "evaluate": "node dist/evaluator-cli.js"
+    "preportfolio": "npm run build",
+    "evaluate": "node dist/evaluator-cli.js",
+    "preevaluate": "npm run build"
   },
   "keywords": [],
   "author": "",
