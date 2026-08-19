@@ -65,7 +65,7 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   let runnerError: string | null = null;
   const sdkToolAllowlist = resolveSdkToolAllowlist(contract.execution.tools);
   const cliPath = resolveCopilotCliPath(process.env);
-  const runtimeDirectory = join(artifactsDirectory, "copilot-runtime");
+  const runtimeDirectory = prepareCopilotRuntimeDirectory(artifactsDirectory);
   const client = new CopilotClient({
     workingDirectory: config.workspacePath,
     baseDirectory: runtimeDirectory,
@@ -217,7 +217,7 @@ function assertFoundryOnlyConfig(config: unknown): asserts config is BenchmarkCo
 
 const sdkToolsByCapability: Record<ToolCapability, readonly string[]> = {
   read: ["view", "glob"],
-  edit: ["apply_patch"],
+  edit: ["edit"],
   shell: process.platform === "win32" ? ["powershell"] : ["bash"],
 };
 
@@ -228,6 +228,16 @@ const sdkToolsByCapability: Record<ToolCapability, readonly string[]> = {
 export function resolveSdkToolAllowlist(capabilities: readonly ToolCapability[]): string[] {
   const builtInTools = [...new Set(capabilities.flatMap((capability) => sdkToolsByCapability[capability]))];
   return new ToolSet().addBuiltIn(builtInTools).toArray();
+}
+
+/**
+ * COPILOT_HOME must already exist because current Copilot CLI versions open
+ * their SQLite state lazily when the first prompt is sent.
+ */
+export function prepareCopilotRuntimeDirectory(artifactsDirectory: string): string {
+  const runtimeDirectory = join(artifactsDirectory, "copilot-runtime");
+  mkdirSync(runtimeDirectory, { recursive: true });
+  return runtimeDirectory;
 }
 
 /**
