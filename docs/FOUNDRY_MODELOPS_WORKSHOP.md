@@ -97,15 +97,6 @@ the judge request and treat the resulting JSON as restricted artifact data.
 6. Treat model/deployment/protocol/adaptation drift as non-comparable unless a
    decision explicitly accepts the difference.
 
-## Breaking migration
-
-This is Foundry-only. Removed settings include `--foundry`,
-`--foundry-resource-url`, `--provider-type`, endpoint/credential environment
-name flags, bearer-token flags, wire-api flags, legacy provider labels,
-project URLs, alternate hosts, and external/BYOK provider profiles. Replace
-them with the fixed `FOUNDRY_ENDPOINT`, `FOUNDRY_API_KEY`, and exact
-`--provider openai|anthropic`.
-
 ## Scope and limitations
 
 The current MVP runs local workspaces and deterministic validation. It neither

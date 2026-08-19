@@ -80,13 +80,6 @@ evaluation JSON location. The output records judge model, protocol adaptation,
 prompt version, scores, limitations, and raw judge response. Treat it as
 restricted benchmark data: it can contain task prompts and judge text.
 
-## Breaking migration
-
-Only `--provider openai` and `--provider anthropic` are supported. Removed:
-`--foundry`, `--foundry-resource-url`, `--provider-type`, custom endpoint and
-credential flags, legacy provider labels, project URLs, alternate hosts, and
-external/BYOK gateway profiles. Use `FOUNDRY_ENDPOINT` and `FOUNDRY_API_KEY`.
-
 See the [Foundry ModelOps workshop](./docs/FOUNDRY_MODELOPS_WORKSHOP.md), the
 [scenario](./scenarios/interactive-pathfinding-visualizer/task.md), and the
 [developer-experience journal](./docs/WORKING_DIARY.md).
