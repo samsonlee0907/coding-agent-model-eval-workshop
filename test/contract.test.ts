@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { compareRunContracts, immutableContractHash } from "../src/contract.js";
+import { compareRunContractSet, compareRunContracts, createComparisonContract, immutableContractHash } from "../src/contract.js";
 import type { RunContract } from "../src/types.js";
 
 function contract(): RunContract {
@@ -81,4 +81,38 @@ test("configuring identical MCP servers stays strictly comparable and stable", (
 
   assert.equal(compareRunContracts(left, right).strictlyComparable, true);
   assert.equal(immutableContractHash(left), immutableContractHash(right));
+});
+
+test("compares more than two candidates against a shared baseline", () => {
+  const a = contract();
+  const b = contract();
+  const c = contract();
+  b.candidate = { provider: "foundry", model: "model-b" };
+  c.candidate = { provider: "foundry", model: "model-c" };
+
+  const comparable = compareRunContractSet([a, b, c]);
+  assert.equal(comparable.strictlyComparable, true);
+  assert.equal(comparable.drift.length, 0);
+
+  const comparison = createComparisonContract("cmp-1", [a, b, c]);
+  assert.equal(comparison.candidates.length, 3);
+  assert.deepEqual(comparison.candidates.map((candidate) => candidate.model), ["gpt-test", "model-b", "model-c"]);
+});
+
+test("attributes set-comparison drift to the diverging candidate", () => {
+  const a = contract();
+  const b = contract();
+  const c = contract();
+  c.execution.reasoningEffort = "low";
+
+  const comparison = compareRunContractSet([a, b, c]);
+  assert.equal(comparison.strictlyComparable, false);
+  assert.equal(
+    comparison.drift.some((entry) => entry.path === "candidate[2].execution.reasoningEffort"),
+    true,
+  );
+});
+
+test("createComparisonContract rejects fewer than two candidates", () => {
+  assert.throws(() => createComparisonContract("cmp-1", [contract()]), /at least two candidates/);
 });

@@ -119,7 +119,8 @@ export interface ComparisonContract {
   comparisonId: string;
   sharedTask: TaskContract;
   sharedExecution: ExecutionPolicy;
-  candidates: [CandidateContract, CandidateContract];
+  /** Two or more candidates evaluated against the same shared task/execution. */
+  candidates: CandidateContract[];
 }
 
 export interface BenchmarkConfig {

@@ -1,5 +1,5 @@
 import { writeFileSync } from "node:fs";
-import { compareRunContracts } from "./contract.js";
+import { compareRunContractSet } from "./contract.js";
 import type { BenchmarkRun, Metric } from "./types.js";
 
 export function renderRunReport(run: BenchmarkRun): string {
@@ -70,11 +70,15 @@ function formatConfigurationMessages(run: BenchmarkRun): string {
     : run.diagnostics.configurationMessages.map((message) => `\`${message}\``).join("; ");
 }
 
-export function renderPairedComparison(left: BenchmarkRun, right: BenchmarkRun): string {
-  const comparison = compareRunContracts(left.contract, right.contract);
+export function renderComparison(runs: readonly BenchmarkRun[]): string {
+  if (runs.length < 2) {
+    throw new RangeError("A candidate comparison requires at least two runs.");
+  }
+  const comparison = compareRunContractSet(runs.map((run) => run.contract));
   return [
-    "# Paired benchmark comparison",
+    "# Candidate benchmark comparison",
     "",
+    `**Candidates:** ${runs.length}  `,
     `**Strictly comparable:** ${comparison.strictlyComparable ? "Yes" : "No — contract drift detected"}`,
     comparison.drift.length === 0
       ? ""
@@ -82,8 +86,7 @@ export function renderPairedComparison(left: BenchmarkRun, right: BenchmarkRun):
     "",
     "| Candidate | Outcome | E2E | Input tokens | Output tokens | Cost |",
     "|---|---|---:|---:|---:|---:|",
-    comparisonRow(left),
-    comparisonRow(right),
+    ...runs.map(comparisonRow),
     "",
     "All candidates are included, including unresolved, rate-limited, timeout, tool/container, and harness outcomes.",
     "",

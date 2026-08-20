@@ -31,17 +31,42 @@ export function compareRunContracts(left: RunContract, right: RunContract): Cont
   return { strictlyComparable: drift.length === 0, drift };
 }
 
+/**
+ * Compares two or more run contracts as a set. Every candidate is measured
+ * against the first (the shared baseline); because strict comparability is an
+ * equivalence, matching the baseline means the whole set is mutually
+ * comparable. Drift paths are prefixed with the candidate index so a mismatch
+ * is attributable. A single contract is trivially comparable; an empty set is
+ * not.
+ */
+export function compareRunContractSet(contracts: readonly RunContract[]): ContractComparison {
+  if (contracts.length <= 1) {
+    return { strictlyComparable: contracts.length === 1, drift: [] };
+  }
+  const [baseline, ...rest] = contracts;
+  const drift = rest.flatMap((candidate, index) =>
+    compareRunContracts(baseline, candidate).drift.map((entry) => ({
+      ...entry,
+      path: `candidate[${index + 1}].${entry.path}`,
+    })),
+  );
+  return { strictlyComparable: drift.length === 0, drift };
+}
+
 export function createComparisonContract(
   comparisonId: string,
-  left: RunContract,
-  right: RunContract,
+  contracts: readonly RunContract[],
 ): ComparisonContract {
+  if (contracts.length < 2) {
+    throw new RangeError("A comparison contract requires at least two candidates.");
+  }
+  const [shared] = contracts;
   return {
     contractVersion: 1,
     comparisonId,
-    sharedTask: left.task,
-    sharedExecution: left.execution,
-    candidates: [left.candidate, right.candidate],
+    sharedTask: shared.task,
+    sharedExecution: shared.execution,
+    candidates: contracts.map((contract) => contract.candidate),
   };
 }
 

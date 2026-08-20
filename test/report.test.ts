@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { immutableContractHash } from "../src/contract.js";
 import { deriveMetrics, extractModelCalls, extractToolCalls } from "../src/metrics.js";
-import { renderPairedComparison, renderRunReport } from "../src/report.js";
+import { renderComparison, renderRunReport } from "../src/report.js";
 import { createFoundryProviderIdentity } from "../src/runner.js";
 import type { BenchmarkRun, RunContract } from "../src/types.js";
 import { streamingEvents } from "./fixtures/events.js";
@@ -106,11 +106,30 @@ test("run report makes unavailable metrics and raw artifact locations visible", 
   assert.match(report, /Redacted runtime diagnostics/);
 });
 
-test("paired report retains failure outcomes", () => {
-  const report = renderPairedComparison(
+test("comparison report retains failure outcomes across candidates", () => {
+  const report = renderComparison([
     run({ class: "resolved", category: "deterministic-evaluator", detail: "passed" }),
     run({ class: "rate_limit", category: "agent-or-infrastructure", detail: "limited" }),
-  );
+  ]);
   assert.match(report, /rate_limit/);
   assert.match(report, /Strictly comparable:\*\* Yes/);
+  assert.match(report, /\*\*Candidates:\*\* 2/);
+});
+
+test("comparison report supports more than two candidates", () => {
+  const report = renderComparison([
+    run({ class: "resolved", category: "deterministic-evaluator", detail: "passed" }),
+    run({ class: "unresolved", category: "deterministic-evaluator", detail: "failed" }),
+    run({ class: "timeout", category: "agent-or-infrastructure", detail: "timed out" }),
+  ]);
+  assert.match(report, /\*\*Candidates:\*\* 3/);
+  assert.match(report, /timeout/);
+  assert.match(report, /unresolved/);
+});
+
+test("comparison report requires at least two runs", () => {
+  assert.throws(
+    () => renderComparison([run({ class: "resolved", category: "deterministic-evaluator", detail: "passed" })]),
+    /at least two runs/,
+  );
 });

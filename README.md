@@ -46,8 +46,9 @@ side-by-side comparison report.
   runs after each session for an objective pass/fail signal.
 - **Honest telemetry** — metrics with no underlying event are labeled `"unavailable"`, never
   invented or estimated.
-- **Paired, contract-aware comparisons** — two candidates are compared only when their run
-  contracts line up; drift is flagged as "not strictly comparable" rather than hidden.
+- **Contract-aware comparisons** — two or more candidates are compared only when their run
+  contracts line up; drift is flagged as "not strictly comparable" (and attributed to the
+  diverging candidate) rather than hidden.
 - **Self-contained reports** — HTML/Markdown output that puts efficiency and quality next to each
   other, with full raw-event artifacts for traceability.
 - **Optional LLM-judge** — a clearly-labeled qualitative score for tasks where "correct" is
@@ -175,9 +176,9 @@ for details.
 npm run portfolio -- --runs .benchmark-runs
 ```
 
-Scans a directory of completed runs, groups paired candidates sharing the same task/run contract,
+Scans a directory of completed runs, groups candidates sharing the same task/run contract,
 flags contract drift as "not strictly comparable", and emits an aggregate report lining up
-efficiency and quality across all discovered runs. (Same command on all platforms.)
+efficiency and quality across every discovered candidate. (Same command on all platforms.)
 
 ### Optional: LLM-judge quality scoring
 
