@@ -30,6 +30,7 @@ side-by-side comparison report.
 - [Installation](#installation)
 - [Configuration](#configuration)
 - [Usage](#usage)
+- [Authoring tasks, instructions, and tools](#authoring-tasks-instructions-and-tools)
 - [Project structure](#project-structure)
 - [Scope and limitations](#scope-and-limitations)
 - [Development](#development)
@@ -171,6 +172,50 @@ transcripts) against your task's acceptance criteria. Optional and clearly label
 overrides a deterministic result, and it makes a live model call that consumes Foundry quota. See
 [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
 
+## Authoring tasks, instructions, and tools
+
+**You bring the coding task.** This toolkit is the harness, not the task set — nothing is
+benchmarked until you supply a task for the agent to attempt. The `--task` flag above is enough
+for a quick single-prompt run, but for real benchmarks (multi-round tasks, a pinned repository
+state, custom agent instructions, or a specific tool scope) author a JSON config like the
+annotated [`benchmark.example.json`](benchmark.example.json) and run it with:
+
+```bash
+npm run bench -- --config ./my-task.json
+```
+
+The fields that shape what the agent does:
+
+| Field | Purpose |
+|---|---|
+| `contract.task.prompt` | The task statement the agent works from. |
+| `rounds[]` | One or more follow-up prompts, replayed in order, so you can model natural multi-round work (start → review/repair → …). |
+| `contract.task.validationCommand` | The deterministic quality gate run after the session (e.g. `npm test && npm run build`). |
+| `contract.task.repository.commitSha` | Pins the starting repo state so a comparison is reproducible. |
+| `contract.execution.instructions` | The **system prompt / agent instructions** — passed straight to the SDK as the session's system message. Use this to set behaviour, constraints, and acceptance expectations. |
+| `contract.execution.tools` | The tool capabilities the agent may use. |
+
+So **custom system-prompt instructions are fully supported today** via
+`contract.execution.instructions`.
+
+### Web search, custom skills, and MCP tools — not yet supported
+
+The tool scope in this MVP is fixed to **`read`, `edit`, and `shell`** (mapped to the Copilot
+SDK's built-in file/shell tools). The runner does **not** wire up web search, MCP servers, or
+user-supplied skills/custom tools, and the example instructions deliberately steer the agent away
+from the network. That means:
+
+- A task that *requires* live internet access (web search, fetching docs) cannot be exercised
+  faithfully yet.
+- Your own tools/skills (via MCP or custom agents) cannot be registered for the agent to invoke,
+  so you cannot benchmark a model's tool-invocation behaviour against them here.
+
+Supporting these is a planned extension: it requires widening the `ToolCapability` model and the
+session wiring (`availableTools` / `mcpServers` / `customAgents`) **and** extending the immutable
+run contract and drift detection, so that enabling a tool or skill is captured as part of the
+comparison and two runs with different tool access are never treated as strictly comparable. Until
+that lands, keep tasks self-contained within the workspace.
+
 ## Project structure
 
 ```text
@@ -199,6 +244,10 @@ This is a first working milestone, not a finished benchmark suite:
 
 - **Provider scope**: only Foundry-hosted deployments reachable through an OpenAI- or
   Anthropic-compatible wire shape. No other providers are wired in.
+- **Tooling scope**: agents get `read | edit | shell` only. Web search, MCP servers, and
+  user-supplied skills/custom tools are not wired in yet — see
+  [Authoring tasks, instructions, and tools](#authoring-tasks-instructions-and-tools). Custom
+  system-prompt instructions, however, *are* supported.
 - **Validation**: a single configured shell command runs once per candidate. No SWE-bench
   container harness yet — the contract and outcome model are designed so a future module can add
   one without breaking existing reports.
