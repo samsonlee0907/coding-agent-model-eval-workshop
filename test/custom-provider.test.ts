@@ -4,7 +4,12 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { deriveFoundryInferenceBase } from "../src/foundry-endpoint.js";
-import { createFoundryProviderIdentity, loadBenchmarkConfig, resolveFoundryProvider } from "../src/runner.js";
+import {
+  createFoundryProviderIdentity,
+  loadBenchmarkConfig,
+  requiredEnvironmentValue,
+  resolveFoundryProvider,
+} from "../src/runner.js";
 
 const environment = {
   FOUNDRY_ENDPOINT: "https://workshop.services.ai.azure.com",
@@ -41,9 +46,24 @@ test("requires the single fixed Foundry credential environment variable", () => 
   };
   assert.throws(
     () => resolveFoundryProvider({ type: "openai" }, environmentWithoutKey),
-    /FOUNDRY_API_KEY is required but is not set\. Set it in the current PowerShell session only: \$env:FOUNDRY_API_KEY = "<your-foundry-api-key>"/,
+    /FOUNDRY_API_KEY is required but is not set\. Set it in the current shell session only:/,
   );
   assert.doesNotThrow(() => resolveFoundryProvider({ type: "openai" }, environment));
+});
+
+test("missing FOUNDRY_API_KEY remediation is platform-appropriate, not PowerShell-only", () => {
+  assert.throws(
+    () => requiredEnvironmentValue("FOUNDRY_API_KEY", {}, "win32"),
+    /\$env:FOUNDRY_API_KEY = "<your-foundry-api-key>"/,
+  );
+  assert.throws(
+    () => requiredEnvironmentValue("FOUNDRY_API_KEY", {}, "linux"),
+    /export FOUNDRY_API_KEY="<your-foundry-api-key>"/,
+  );
+  assert.throws(
+    () => requiredEnvironmentValue("FOUNDRY_API_KEY", {}, "darwin"),
+    /export FOUNDRY_API_KEY="<your-foundry-api-key>"/,
+  );
 });
 
 test("rejects legacy custom-provider benchmark configuration at load time", () => {

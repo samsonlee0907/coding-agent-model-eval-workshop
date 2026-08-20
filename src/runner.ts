@@ -512,15 +512,22 @@ export function createFoundryProviderIdentity(
   };
 }
 
-function requiredEnvironmentValue(name: string, environment: NodeJS.ProcessEnv): string {
+export function requiredEnvironmentValue(
+  name: string,
+  environment: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform = process.platform,
+): string {
   if (!/^[A-Z_][A-Z0-9_]*$/.test(name)) {
     throw new TypeError(`Environment variable name "${name}" is invalid.`);
   }
   const value = environment[name]?.trim();
   if (!value) {
     if (name === "FOUNDRY_API_KEY") {
+      const remediation = platform === "win32"
+        ? '$env:FOUNDRY_API_KEY = "<your-foundry-api-key>"'
+        : 'export FOUNDRY_API_KEY="<your-foundry-api-key>"';
       throw new Error(
-        'FOUNDRY_API_KEY is required but is not set. Set it in the current PowerShell session only: $env:FOUNDRY_API_KEY = "<your-foundry-api-key>"',
+        `FOUNDRY_API_KEY is required but is not set. Set it in the current shell session only: ${remediation}`,
       );
     }
     throw new Error(`Required Foundry environment variable "${name}" is not set.`);
