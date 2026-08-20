@@ -185,7 +185,7 @@ efficiency and quality across all discovered runs. (Same command on all platform
 npm run evaluate -- --runs .benchmark-runs
 ```
 
-Asks a Foundry model to score two candidates' *validated artifacts* (never raw prompts or tool
+Asks a Foundry model to score each candidate's *validated artifacts* (never raw prompts or tool
 transcripts) against your task's acceptance criteria. Optional and clearly labeled: it never
 overrides a deterministic result, and it makes a live model call that consumes Foundry quota. See
 [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
@@ -271,7 +271,7 @@ coding-agent-model-eval-workshop/
 │   ├── contract.ts          Immutable run/comparison contracts + drift detection
 │   ├── foundry-endpoint.ts  Derives OpenAI/Anthropic-compatible routes from a Foundry resource endpoint
 │   ├── report.ts            Self-contained HTML/Markdown comparison report generation
-│   ├── evaluator.ts         Optional LLM-judge scoring of two candidates' artifacts (quality signal)
+│   ├── evaluator.ts         Optional LLM-judge scoring of each candidate's artifacts (quality signal)
 │   └── quickstart.ts, portfolio.ts, cli.ts, ...  CLI entry points
 ├── test/                    node:test suite — fixtures/mocks only, no live SDK/network calls
 ├── docs/                    Setup guide, workshop exercises, and the bake-off developer journal
