@@ -198,23 +198,31 @@ The fields that shape what the agent does:
 So **custom system-prompt instructions are fully supported today** via
 `contract.execution.instructions`.
 
-### Web search, custom skills, and MCP tools — not yet supported
+### Web search, custom skills, and MCP tools — not yet wired in here
 
-The tool scope in this MVP is fixed to **`read`, `edit`, and `shell`** (mapped to the Copilot
-SDK's built-in file/shell tools). The runner does **not** wire up web search, MCP servers, or
-user-supplied skills/custom tools, and the example instructions deliberately steer the agent away
-from the network. That means:
+This is a property of **this harness**, not a hard limit of the SDK. It helps to separate three
+different tool mechanisms the Copilot SDK exposes:
 
-- A task that *requires* live internet access (web search, fetching docs) cannot be exercised
-  faithfully yet.
-- Your own tools/skills (via MCP or custom agents) cannot be registered for the agent to invoke,
-  so you cannot benchmark a model's tool-invocation behaviour against them here.
+1. **Client-side built-in tools** — run on the host (file read/`view`, `glob`, `edit`, and a
+   `shell`/`bash` tool, plus session/agent helpers). This harness enables `read`, `edit`, and
+   `shell`. **There is no built-in web-search or web-fetch client tool.**
+2. **Your own MCP servers / custom tools** — the SDK's `createSession` accepts `mcpServers`,
+   custom `tools`, and `customAgents`, which you then expose via `availableTools`. This is the
+   practical way to give the agent real web access (point it at a fetch/search MCP server) or to
+   benchmark a model's invocation of *your* skills. The SDK fully supports it; this harness simply
+   doesn't wire it up yet.
+3. **Provider-hosted server tools** — GitHub Copilot can run a hosted `web_search` on the model
+   provider's side; the SDK reports it through `assistant.server_tool_progress` events and the
+   `serverTools` envelope. It is **not** a client toggle — it depends on the provider/model
+   offering it, and it is generally **not available through a custom Foundry (BYOK) provider**,
+   which is the only provider this workshop uses.
 
-Supporting these is a planned extension: it requires widening the `ToolCapability` model and the
-session wiring (`availableTools` / `mcpServers` / `customAgents`) **and** extending the immutable
-run contract and drift detection, so that enabling a tool or skill is captured as part of the
-comparison and two runs with different tool access are never treated as strictly comparable. Until
-that lands, keep tasks self-contained within the workspace.
+So for web-capable or custom-tool tasks in this Foundry-based workshop, the realistic route is
+mechanism #2 (an MCP server or custom tool). Wiring it in is a planned extension: beyond the
+session config, it means widening the `ToolCapability` model **and** extending the immutable run
+contract and drift detection, so that enabling a tool/skill is captured as part of the comparison
+and two runs with different tool access are never treated as strictly comparable. Until that
+lands, keep tasks self-contained within the workspace.
 
 ## Project structure
 
