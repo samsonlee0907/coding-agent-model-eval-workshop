@@ -24,6 +24,41 @@ export interface CandidateContract {
 export type ToolCapability = "read" | "edit" | "shell";
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh" | "max";
 
+/**
+ * A local (stdio) MCP server the agent may call during a run. Structurally
+ * compatible with the Copilot SDK's `MCPStdioServerConfig`, but kept as a
+ * project-owned type so the config surface stays adapter-tolerant.
+ *
+ * Secret-bearing string values (env, args) may use `${ENV_VAR}` placeholders.
+ * The runner expands them from the process environment at launch, so config
+ * files and the immutable contract never store raw credentials.
+ */
+export interface McpStdioServerSpec {
+  type?: "stdio" | "local";
+  command: string;
+  args?: string[];
+  env?: Record<string, string>;
+  workingDirectory?: string;
+  /** Tools to include from this server. Omit or `["*"]` for all; `[]` for none. */
+  tools?: string[];
+  timeout?: number;
+}
+
+/**
+ * A remote (HTTP/SSE) MCP server. Structurally compatible with the SDK's
+ * `MCPHTTPServerConfig`. `url` and `headers` values may use `${ENV_VAR}`
+ * placeholders resolved at launch.
+ */
+export interface McpHttpServerSpec {
+  type: "http" | "sse";
+  url: string;
+  headers?: Record<string, string>;
+  tools?: string[];
+  timeout?: number;
+}
+
+export type McpServerSpec = McpStdioServerSpec | McpHttpServerSpec;
+
 export interface ExecutionPolicy {
   instructions: string;
   tools: ToolCapability[];
@@ -34,6 +69,14 @@ export interface ExecutionPolicy {
   streaming: true;
   cachePolicy: "default" | "disabled" | "required";
   reasoningEffort: ReasoningEffort;
+  /**
+   * Optional Model Context Protocol servers to make available to the agent, in
+   * addition to the built-in `read | edit | shell` tools. Keyed by server name.
+   * Omit entirely to keep the default tool scope; presence becomes part of the
+   * immutable contract, so runs with different MCP access are not strictly
+   * comparable.
+   */
+  mcpServers?: Record<string, McpServerSpec>;
 }
 
 export interface RuntimeIdentity {

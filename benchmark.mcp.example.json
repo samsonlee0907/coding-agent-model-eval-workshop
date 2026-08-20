@@ -1,0 +1,58 @@
+{
+  "contract": {
+    "task": {
+      "id": "example-mcp-enabled-task",
+      "prompt": "Research the current recommended configuration for the target library using the available fetch tool, then implement the requested change, run the configured validation command, and repair any failures before reporting completion.",
+      "repository": {
+        "commitSha": "replace-with-immutable-target-sha",
+        "containerFingerprint": "replace-with-container-image-or-local-environment-fingerprint"
+      },
+      "validationCommand": "npm test"
+    },
+    "candidate": {
+      "provider": "openai",
+      "model": "replace-with-model-id",
+      "deployment": "optional-deployment-identity"
+    },
+    "foundryProvider": {
+      "type": "openai"
+    },
+    "execution": {
+      "instructions": "You are in a benchmark. Work autonomously in this workspace: inspect, plan, edit, run tests, and repair failures. You may use the configured MCP tools to gather external information when the task requires it.",
+      "tools": ["read", "edit", "shell"],
+      "permissionMode": "approve-all",
+      "concurrency": 1,
+      "retries": 0,
+      "sessionTimeoutMs": 600000,
+      "streaming": true,
+      "cachePolicy": "default",
+      "reasoningEffort": "high",
+      "mcpServers": {
+        "fetch": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-fetch"]
+        },
+        "search": {
+          "type": "http",
+          "url": "https://your-mcp-search-host.example/mcp",
+          "headers": {
+            "Authorization": "Bearer ${SEARCH_MCP_TOKEN}"
+          }
+        }
+      }
+    },
+    "runtime": {
+      "cliVersion": "runtime-reported-in-session.start-event"
+    }
+  },
+  "rounds": [
+    {
+      "prompt": "Start the implementation task now. Use the fetch/search MCP tools if you need external documentation."
+    },
+    {
+      "prompt": "Review your changes, run the configured validation, and repair any remaining failures."
+    }
+  ],
+  "workspacePath": "C:\\replace\\with\\isolated-task-workspace",
+  "artifactsDirectory": "C:\\replace\\with\\benchmark-artifacts"
+}

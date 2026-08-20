@@ -1,0 +1,25 @@
+Build an in-memory order management core in this repository. Work
+autonomously: set up the project, plan briefly if useful, write the code, add
+tests, and run the configured validation command.
+
+Requirements:
+- Create a TypeScript npm project with `npm test` and `npm run build` scripts.
+- Implement an OrderStore backed only by local in-memory state (for example a
+  Map). Do not use a database, network calls, or on-disk persistence.
+- Support these operations:
+  - createOrder(customerId): returns a new order with a unique id, status
+    "pending", and no items.
+  - addItem(orderId, sku, unitPrice, quantity): adds or increases a line item;
+    quantity must be a positive integer and unitPrice a non-negative number.
+  - removeItem(orderId, sku): removes a line item.
+  - orderTotal(orderId): returns the sum of unitPrice * quantity across items.
+  - updateStatus(orderId, status): advances the order through the status
+    machine pending -> paid -> fulfilled, with cancel allowed from pending or
+    paid. Reject any illegal transition.
+  - listOrders(status?): returns all orders, optionally filtered by status.
+- Reject operations on unknown order ids and mutations of an order that is
+  "fulfilled" or "cancelled" with a clear, typed error.
+- Expose a small, documented interface (a class or module API is fine; a thin
+  CLI wrapper is optional) and keep the domain logic testable without any UI.
+
+Do not ask for clarification. Use sensible defaults and complete the feature.

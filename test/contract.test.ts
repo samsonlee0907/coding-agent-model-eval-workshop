@@ -54,3 +54,31 @@ test("wire adaptation is strict-comparison drift", () => {
   assert.equal(comparison.strictlyComparable, false);
   assert.equal(comparison.drift[0]?.path, "foundryProvider.requestAdaptation");
 });
+
+test("differing MCP tool access makes a comparison not strictly comparable", () => {
+  const left = contract();
+  const right = contract();
+  right.execution.mcpServers = {
+    fetch: { command: "npx", args: ["-y", "mcp-server-fetch"] },
+  };
+
+  const comparison = compareRunContracts(left, right);
+  assert.equal(comparison.strictlyComparable, false);
+  assert.equal(
+    comparison.drift.some((entry) => entry.path.startsWith("execution.mcpServers")),
+    true,
+  );
+  // Adding the field must change the immutable contract identity.
+  assert.notEqual(immutableContractHash(left), immutableContractHash(right));
+});
+
+test("configuring identical MCP servers stays strictly comparable and stable", () => {
+  const left = contract();
+  const right = contract();
+  const servers = { fetch: { command: "npx", args: ["-y", "mcp-server-fetch"] } };
+  left.execution.mcpServers = { ...servers };
+  right.execution.mcpServers = { ...servers };
+
+  assert.equal(compareRunContracts(left, right).strictlyComparable, true);
+  assert.equal(immutableContractHash(left), immutableContractHash(right));
+});

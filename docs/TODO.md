@@ -64,8 +64,8 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 - [ ] Validate rate-limit and session-timeout classification from controlled evidence.
 - [ ] Compare cached and non-cached runs only with declared cache policy.
 - [ ] Verify CLI version extraction from the `session.start` raw event.
-- [ ] Materialize the clean, pinned starter repository for
-  `interactive-pathfinding-visualizer-v1`.
+- [ ] Prepare a clean baseline workspace for
+  `in-memory-ordering-system-v1` (greenfield: an empty git-initialized folder).
 - [ ] Verify FW-Kimi-K3 endpoint compatibility, model identifier, streaming,
   tool-call behavior, and provider-side usage export with a smoke task.
 

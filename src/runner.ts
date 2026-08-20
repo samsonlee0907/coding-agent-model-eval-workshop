@@ -18,6 +18,7 @@ import {
   approveAll,
   ToolSet,
   type CopilotSession,
+  type MCPServerConfig,
   type ProviderConfig,
 } from "@github/copilot-sdk";
 import { immutableContractHash } from "./contract.js";
@@ -33,6 +34,7 @@ import type {
   FoundryProviderConfig,
   FoundryProviderIdentity,
   JsonRecord,
+  McpServerSpec,
   NormalizedEvent,
   RunContract,
   RunDiagnostics,
@@ -64,7 +66,8 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   let sessionId: string | null = null;
   let validation = null;
   let runnerError: string | null = null;
-  const sdkToolAllowlist = resolveSdkToolAllowlist(contract.execution.tools);
+  const sdkToolAllowlist = resolveSdkToolAllowlist(contract.execution.tools, contract.execution.mcpServers);
+  const mcpServers = resolveMcpServersForLaunch(contract.execution.mcpServers, process.env);
   const cliPath = resolveCopilotCliPath(process.env);
   const runtimeDirectory = createIsolatedCopilotRuntimeDirectory();
   const client = new CopilotClient({
@@ -99,6 +102,7 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
       availableTools: sdkToolAllowlist,
       onPermissionRequest: contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
       provider: sessionProvider,
+      ...(mcpServers ? { mcpServers } : {}),
     });
     sessionId = session.sessionId;
     collector.captureRunnerEvent("runner.session_created", { sessionId });
@@ -224,11 +228,70 @@ const sdkToolsByCapability: Record<ToolCapability, readonly string[]> = {
 
 /**
  * Keeps the benchmark contract provider-neutral while translating its
- * capabilities to source-qualified Copilot SDK tool filters.
+ * capabilities to source-qualified Copilot SDK tool filters. When the contract
+ * configures MCP servers, their tools are also exposed (`mcp:*`); the per-server
+ * `tools` filter still governs which individual tools each server advertises.
+ * With no MCP servers configured the output is identical to the built-in-only
+ * allowlist, so existing read/edit/shell runs are unaffected.
  */
-export function resolveSdkToolAllowlist(capabilities: readonly ToolCapability[]): string[] {
+export function resolveSdkToolAllowlist(
+  capabilities: readonly ToolCapability[],
+  mcpServers?: Record<string, McpServerSpec>,
+): string[] {
   const builtInTools = [...new Set(capabilities.flatMap((capability) => sdkToolsByCapability[capability]))];
-  return new ToolSet().addBuiltIn(builtInTools).toArray();
+  const toolSet = new ToolSet().addBuiltIn(builtInTools);
+  if (mcpServers && Object.keys(mcpServers).length > 0) {
+    toolSet.addMcp("*");
+  }
+  return toolSet.toArray();
+}
+
+/**
+ * Expands `${ENV_VAR}` placeholders inside MCP server specs from the process
+ * environment at launch time and returns the SDK-shaped server map. Because the
+ * contract stores the unexpanded placeholders, secrets never land in config
+ * files or run artifacts. Returns `undefined` when no servers are configured so
+ * the `createSession` call is byte-identical to the default flow.
+ */
+export function resolveMcpServersForLaunch(
+  mcpServers: Record<string, McpServerSpec> | undefined,
+  environment: NodeJS.ProcessEnv,
+): Record<string, MCPServerConfig> | undefined {
+  if (!mcpServers || Object.keys(mcpServers).length === 0) {
+    return undefined;
+  }
+  const resolved: Record<string, MCPServerConfig> = {};
+  for (const [name, spec] of Object.entries(mcpServers)) {
+    resolved[name] = expandPlaceholders(spec, environment, `mcpServers.${name}`) as MCPServerConfig;
+  }
+  return resolved;
+}
+
+function expandPlaceholders(value: unknown, environment: NodeJS.ProcessEnv, path: string): unknown {
+  if (typeof value === "string") {
+    return value.replace(/\$\{([A-Z_][A-Z0-9_]*)\}/g, (_match, name: string) => {
+      const resolved = environment[name];
+      if (resolved === undefined) {
+        throw new Error(
+          `MCP configuration ${path} references environment variable ${name}, which is not set. ` +
+            "Export it before running, or remove the placeholder.",
+        );
+      }
+      return resolved;
+    });
+  }
+  if (Array.isArray(value)) {
+    return value.map((item, index) => expandPlaceholders(item, environment, `${path}[${index}]`));
+  }
+  if (value && typeof value === "object") {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>).map(([key, item]) => [
+        key,
+        expandPlaceholders(item, environment, `${path}.${key}`),
+      ]),
+    );
+  }
+  return value;
 }
 
 /**

@@ -239,3 +239,26 @@ Stack: GitHub Copilot SDK `1.0.10-preview.0`, TypeScript, npm, Node.js
   whitespace validation passed; no judge or candidate provider request was made.
 - **Permission assessment:** local source work only; **not a permission
   issue**.
+
+### 16:00 — MCP tool support and ordering-system scenario
+- **What we did:** added optional `contract.execution.mcpServers` so a benchmark
+  can attach Model Context Protocol servers (web fetch/search or user skills)
+  alongside the built-in `read | edit | shell` tools. The runner exposes MCP
+  tools via `mcp:*`, expands `${ENV_VAR}` placeholders in server specs at launch
+  so secrets never enter config files or the immutable contract, and folds MCP
+  access into contract drift detection. Configs without `mcpServers` are
+  byte-identical to before. Replaced the pathfinding scenario with a
+  self-contained `in-memory-ordering-system` scenario (order state machine using
+  local in-memory storage) with inlined prompts and a ready-to-run quickstart
+  prompt file. Added `benchmark.mcp.example.json`.
+- **Result:** ✅ 46 offline tests, type checking, and production build passed;
+  new tests cover the MCP allowlist, `${ENV_VAR}` expansion (and the missing-var
+  failure), and MCP-driven contract drift. No live provider or MCP request was
+  made during testing.
+- **How the design was found:** the installed Copilot SDK declares
+  `SessionConfig.mcpServers`, `MCPServerConfig`, and `ToolSet.addMcp`; the
+  contract hash/drift already walk the whole `execution` object, so an optional
+  field is captured automatically.
+- **Permission assessment:** local implementation and fixture validation only;
+  **not a permission issue**. The `${ENV_VAR}` design keeps MCP credentials in
+  the environment, never in tracked files.

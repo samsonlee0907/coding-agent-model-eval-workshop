@@ -6,6 +6,7 @@ import test from "node:test";
 import {
   createIsolatedCopilotRuntimeDirectory,
   resolveCopilotCliPath,
+  resolveMcpServersForLaunch,
   resolveSdkToolAllowlist,
 } from "../src/runner.js";
 
@@ -17,6 +18,53 @@ test("maps benchmark tool capabilities to source-qualified SDK built-ins", () =>
     "builtin:edit",
     `builtin:${expectedShell}`,
   ]);
+});
+
+test("leaves the allowlist unchanged when no MCP servers are configured", () => {
+  const expectedShell = process.platform === "win32" ? "powershell" : "bash";
+  const expected = ["builtin:view", "builtin:glob", "builtin:edit", `builtin:${expectedShell}`];
+  assert.deepEqual(resolveSdkToolAllowlist(["read", "edit", "shell"], undefined), expected);
+  assert.deepEqual(resolveSdkToolAllowlist(["read", "edit", "shell"], {}), expected);
+});
+
+test("exposes MCP tools in the allowlist only when servers are configured", () => {
+  const allowlist = resolveSdkToolAllowlist(["read", "edit", "shell"], {
+    fetch: { command: "npx", args: ["-y", "mcp-server-fetch"] },
+  });
+  assert.equal(allowlist.includes("mcp:*"), true);
+  assert.equal(allowlist.includes("builtin:view"), true);
+});
+
+test("returns undefined MCP launch config when none are configured", () => {
+  assert.equal(resolveMcpServersForLaunch(undefined, {}), undefined);
+  assert.equal(resolveMcpServersForLaunch({}, {}), undefined);
+});
+
+test("expands ${ENV_VAR} placeholders in MCP specs at launch", () => {
+  const resolved = resolveMcpServersForLaunch(
+    {
+      search: {
+        type: "http",
+        url: "https://mcp.example/${SEARCH_HOST_PATH}",
+        headers: { Authorization: "Bearer ${SEARCH_TOKEN}" },
+      },
+    },
+    { SEARCH_HOST_PATH: "v1/search", SEARCH_TOKEN: "secret-value" },
+  );
+  const server = resolved?.search as { url: string; headers: Record<string, string> };
+  assert.equal(server.url, "https://mcp.example/v1/search");
+  assert.equal(server.headers.Authorization, "Bearer secret-value");
+});
+
+test("fails fast when an MCP placeholder references an unset variable", () => {
+  assert.throws(
+    () =>
+      resolveMcpServersForLaunch(
+        { search: { type: "http", url: "https://mcp.example", headers: { Authorization: "Bearer ${MISSING_TOKEN}" } } },
+        {},
+      ),
+    /MISSING_TOKEN/,
+  );
 });
 
 test("creates isolated Copilot state in a short temporary path", () => {

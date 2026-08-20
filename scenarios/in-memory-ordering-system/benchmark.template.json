@@ -1,0 +1,48 @@
+{
+  "contract": {
+    "task": {
+      "id": "in-memory-ordering-system-v1",
+      "prompt": "Build an in-memory order management core in this repository. Work autonomously: set up the project, plan briefly if useful, write the code, add tests, and run the configured validation command. Implement an OrderStore backed only by local in-memory state (for example a Map) with createOrder, addItem, removeItem, orderTotal, updateStatus (pending -> paid -> fulfilled, cancel from pending or paid), and listOrders(status?). Validate inputs, reject unknown ids and mutation of fulfilled/cancelled orders with typed errors, keep domain logic testable, and provide npm test and npm run build scripts. See scenarios/in-memory-ordering-system/task.md for the full specification.",
+      "repository": {
+        "commitSha": "replace-with-pinned-baseline-repository-sha",
+        "containerFingerprint": "replace-with-node-image-and-lockfile-fingerprint"
+      },
+      "validationCommand": "npm test && npm run build"
+    },
+    "candidate": {
+      "provider": "openai",
+      "model": "replace-with-model-id",
+      "deployment": "optional-deployment-identity"
+    },
+    "foundryProvider": {
+      "type": "openai"
+    },
+    "execution": {
+      "instructions": "You are in a controlled benchmark. Work only in the supplied task workspace. Implement, test, and repair the requested feature; do not access network services or use unrelated tools.",
+      "tools": ["read", "edit", "shell"],
+      "permissionMode": "approve-all",
+      "concurrency": 1,
+      "retries": 0,
+      "sessionTimeoutMs": 900000,
+      "streaming": true,
+      "cachePolicy": "default",
+      "reasoningEffort": "high"
+    },
+    "runtime": {
+      "cliVersion": "runtime-reported-in-session.start-event"
+    }
+  },
+  "rounds": [
+    {
+      "prompt": "Build an in-memory order management core in this repository. Work autonomously: set up the project, plan briefly if useful, write the code, add tests, and run the configured validation command. Implement an OrderStore backed only by local in-memory state (for example a Map). Support createOrder(customerId), addItem(orderId, sku, unitPrice, quantity) with quantity a positive integer and unitPrice non-negative, removeItem(orderId, sku), orderTotal(orderId), updateStatus advancing pending -> paid -> fulfilled with cancel allowed from pending or paid, and listOrders(status?). Reject unknown order ids and mutation of fulfilled/cancelled orders with typed errors. Provide npm test and npm run build scripts and keep the domain logic testable without any UI. Do not ask for clarification; use sensible defaults and complete the feature."
+    },
+    {
+      "prompt": "Act as the implementation reviewer. Exercise the OrderStore and repair every issue you find: (1) orderTotal reflects multiple SKUs and quantity merges when the same SKU is added twice; (2) addItem rejects zero/negative/non-integer quantity and negative unitPrice without corrupting state; (3) illegal status transitions are rejected, including pending -> fulfilled directly, any transition out of fulfilled, and re-cancelling a cancelled order; (4) cancel is allowed from pending and paid, and cancelled or fulfilled orders reject addItem/removeItem/updateStatus; (5) listOrders() returns every order and listOrders(status) returns exactly the matching subset; (6) unknown order ids produce a typed error rather than a crash. Add focused tests for every repaired behavior, run the configured validation command, and leave the workspace passing."
+    },
+    {
+      "prompt": "Perform a final benchmark handoff: inspect the diff, run all configured tests and the production build, repair failures, and briefly state what was implemented and what validation ran. Do not add unrelated features."
+    }
+  ],
+  "workspacePath": "C:\\replace\\with\\a-clean-pinned-task-workspace",
+  "artifactsDirectory": "C:\\replace\\with\\benchmark-artifacts"
+}

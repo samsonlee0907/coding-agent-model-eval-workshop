@@ -151,6 +151,24 @@ your validation command, and writes the raw NDJSON log, normalized run data, and
 Foundry deployment). See [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md) for every flag, including
 reasoning effort, timeouts, and concurrency.
 
+### Run a bundled scenario
+
+The [`scenarios/`](scenarios/) directory ships ready-to-adapt task definitions. Each is a
+folder with a human-readable `task.md`, a `benchmark.template.json` (with prompts inlined),
+and a filled-in example. The quickest way to try one is to feed its prompt to `quickstart`,
+which scaffolds a throwaway workspace for you:
+
+```bash
+npm run quickstart -- \
+  --task-file scenarios/in-memory-ordering-system/round1.prompt.txt \
+  --provider openai --model "<your-deployment-name>"
+```
+
+For a rigorous, reproducible multi-round run, copy the scenario's
+`benchmark.template.json`, fill the placeholder fields, and run it with `npm run bench --
+--config <file>`. See the scenario's own `task.md` (its *How to run this scenario* section)
+for details.
+
 ### Compare candidates
 
 ```bash
@@ -193,36 +211,52 @@ The fields that shape what the agent does:
 | `contract.task.validationCommand` | The deterministic quality gate run after the session (e.g. `npm test && npm run build`). |
 | `contract.task.repository.commitSha` | Pins the starting repo state so a comparison is reproducible. |
 | `contract.execution.instructions` | The **system prompt / agent instructions** — passed straight to the SDK as the session's system message. Use this to set behaviour, constraints, and acceptance expectations. |
-| `contract.execution.tools` | The tool capabilities the agent may use. |
+| `contract.execution.tools` | The tool capabilities the agent may use (`read`, `edit`, `shell`). |
+| `contract.execution.mcpServers` | Optional [Model Context Protocol](https://modelcontextprotocol.io) servers to expose to the agent (e.g. a web fetch/search server or your own skills). Omit to keep the default tool scope. |
 
 So **custom system-prompt instructions are fully supported today** via
 `contract.execution.instructions`.
 
-### Web search, custom skills, and MCP tools — not yet wired in here
+### Web search, custom skills, and MCP tools
 
-This is a property of **this harness**, not a hard limit of the SDK. It helps to separate three
-different tool mechanisms the Copilot SDK exposes:
+The agent's default tool scope is the built-in `read | edit | shell` set. To give
+it more — real web access, your own skills, or any other integration — attach one
+or more **Model Context Protocol (MCP)** servers under
+`contract.execution.mcpServers`. It helps to separate the three tool mechanisms the
+Copilot SDK exposes:
 
-1. **Client-side built-in tools** — run on the host (file read/`view`, `glob`, `edit`, and a
-   `shell`/`bash` tool, plus session/agent helpers). This harness enables `read`, `edit`, and
-   `shell`. **There is no built-in web-search or web-fetch client tool.**
-2. **Your own MCP servers / custom tools** — the SDK's `createSession` accepts `mcpServers`,
-   custom `tools`, and `customAgents`, which you then expose via `availableTools`. This is the
-   practical way to give the agent real web access (point it at a fetch/search MCP server) or to
-   benchmark a model's invocation of *your* skills. The SDK fully supports it; this harness simply
-   doesn't wire it up yet.
-3. **Provider-hosted server tools** — GitHub Copilot can run a hosted `web_search` on the model
-   provider's side; the SDK reports it through `assistant.server_tool_progress` events and the
-   `serverTools` envelope. It is **not** a client toggle — it depends on the provider/model
-   offering it, and it is generally **not available through a custom Foundry (BYOK) provider**,
-   which is the only provider this workshop uses.
+1. **Client-side built-in tools** — run on the host (file `view`, `glob`, `edit`, and
+   a `shell`/`bash` tool). This harness enables `read`, `edit`, and `shell`. **There
+   is no built-in web-search or web-fetch client tool.**
+2. **Your own MCP servers / custom tools** — the practical way to give the agent real
+   web access (point it at a fetch/search MCP server) or to benchmark a model's
+   invocation of *your* skills. **This harness now wires this in:** add servers under
+   `contract.execution.mcpServers` and their tools are exposed to the agent
+   automatically (`mcp:*`) alongside the built-ins. See
+   [`benchmark.mcp.example.json`](benchmark.mcp.example.json) for a fetch + HTTP-search
+   example.
+3. **Provider-hosted server tools** — GitHub Copilot can run a hosted `web_search` on
+   the model provider's side, reported through `assistant.server_tool_progress` events.
+   It is **not** a client toggle — it depends on the provider/model offering it and is
+   generally **not available through a custom Foundry (BYOK) provider**, which is the
+   only provider this workshop uses. So in this Foundry-based workshop, mechanism #2 is
+   the route for web-capable or custom-tool tasks.
 
-So for web-capable or custom-tool tasks in this Foundry-based workshop, the realistic route is
-mechanism #2 (an MCP server or custom tool). Wiring it in is a planned extension: beyond the
-session config, it means widening the `ToolCapability` model **and** extending the immutable run
-contract and drift detection, so that enabling a tool/skill is captured as part of the comparison
-and two runs with different tool access are never treated as strictly comparable. Until that
-lands, keep tasks self-contained within the workspace.
+**Keeping secrets out of files.** String values inside an MCP server spec (env values,
+HTTP headers, args) may use `${ENV_VAR}` placeholders. The runner expands them from the
+process environment at launch, so config files — and the immutable run contract — store
+only the placeholder, never the resolved credential. A referenced variable that is not
+set fails the run fast with a clear message.
+
+**MCP access is part of the contract.** Configured MCP servers are folded into the
+immutable run contract and drift detection: two runs with different MCP/tool access are
+never treated as *strictly comparable*, so an efficiency comparison can't silently mix a
+web-enabled run with a sandboxed one. Runs with **no** `mcpServers` behave exactly as
+before — the default `read | edit | shell` flow is unchanged.
+
+> Custom sub-agents and preloaded skill directories are a further SDK capability not yet
+> surfaced as config here; MCP servers already cover the "give the agent a web/search or
+> custom tool" case.
 
 ## Project structure
 
@@ -241,8 +275,9 @@ coding-agent-model-eval-workshop/
 │   └── quickstart.ts, portfolio.ts, cli.ts, ...  CLI entry points
 ├── test/                    node:test suite — fixtures/mocks only, no live SDK/network calls
 ├── docs/                    Setup guide, workshop exercises, and the bake-off developer journal
-├── scenarios/               Example benchmark task definitions you can adapt
+├── scenarios/               Ready-to-adapt benchmark task definitions (see each scenario's task.md)
 ├── benchmark.example.json   Annotated example benchmark run configuration
+├── benchmark.mcp.example.json  Example config that attaches MCP web-fetch/search tools
 └── .benchmark-runs/         Local, gitignored output directory created by your own runs
 ```
 
@@ -252,10 +287,11 @@ This is a first working milestone, not a finished benchmark suite:
 
 - **Provider scope**: only Foundry-hosted deployments reachable through an OpenAI- or
   Anthropic-compatible wire shape. No other providers are wired in.
-- **Tooling scope**: agents get `read | edit | shell` only. Web search, MCP servers, and
-  user-supplied skills/custom tools are not wired in yet — see
-  [Authoring tasks, instructions, and tools](#authoring-tasks-instructions-and-tools). Custom
-  system-prompt instructions, however, *are* supported.
+- **Tooling scope**: agents get `read | edit | shell` by default. You can additionally
+  attach MCP servers (web fetch/search or your own skills) via
+  `contract.execution.mcpServers`, and that access is captured in the run contract — see
+  [Web search, custom skills, and MCP tools](#web-search-custom-skills-and-mcp-tools).
+  Custom sub-agents and preloaded skill directories are not yet surfaced as config.
 - **Validation**: a single configured shell command runs once per candidate. No SWE-bench
   container harness yet — the contract and outcome model are designed so a future module can add
   one without breaking existing reports.
