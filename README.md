@@ -88,16 +88,16 @@ Notes:
 
 **PowerShell (Windows)**
 ```powershell
-git clone https://github.com/samsonlee0907/coding-agent-benchmark-tool.git
-cd coding-agent-benchmark-tool
+git clone https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
+cd coding-agent-model-eval-workshop
 npm install
 npm run build
 ```
 
 **bash / zsh (Linux/macOS)**
 ```bash
-git clone https://github.com/samsonlee0907/coding-agent-benchmark-tool.git
-cd coding-agent-benchmark-tool
+git clone https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
+cd coding-agent-model-eval-workshop
 npm install
 npm run build
 ```
@@ -174,7 +174,7 @@ overrides a deterministic result, and it makes a live model call that consumes F
 ## Project structure
 
 ```text
-coding-agent-benchmark-tool/
+coding-agent-model-eval-workshop/
 ├── src/                     TypeScript source for the CLI, SDK adapter, and report engine
 │   ├── runner.ts            Session/task orchestration, Foundry provider wiring, env-based credentials
 │   ├── event-collector.ts   Append-only NDJSON raw-event capture + normalization to the stable data model

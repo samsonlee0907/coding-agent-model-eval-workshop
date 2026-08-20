@@ -8,7 +8,7 @@ call, [TODO.md](./TODO.md) for the coverage matrix, and
 [EASE_OF_USE_JOURNEY.md](./EASE_OF_USE_JOURNEY.md) for the human-experience
 record.
 
-Repo: `C:\Users\samsonlee\GHCP\copilot-coding-agent-benchmark-workshop`
+Repo: `coding-agent-model-eval-workshop` (local checkout under your workspace directory)
 Stack: GitHub Copilot SDK `1.0.10-preview.0`, TypeScript, npm, Node.js
 
 ---
