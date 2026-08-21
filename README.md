@@ -447,7 +447,7 @@ coding-agent-model-eval-workshop/
 │   ├── evaluator.ts         Optional LLM-judge review of each candidate's final code (quality signal)
 │   └── quickstart.ts, portfolio.ts, cli.ts, ...  CLI entry points
 ├── test/                    node:test suite — fixtures/mocks only, no live SDK/network calls
-├── docs/                    Setup guide, workshop exercises, and the bake-off developer journal
+├── docs/                    Setup guide (docs/SETUP_GUIDE.md)
 ├── scenarios/               Ready-to-adapt benchmark task definitions (see each scenario's task.md)
 ├── benchmark.example.json   Annotated example benchmark run configuration
 ├── benchmark.mcp.example.json  Example config that attaches MCP web-fetch/search tools
@@ -492,9 +492,7 @@ This is a first working milestone, not a finished benchmark suite:
   parsing/citation verification, and report generation entirely against fixtures/mocks.
 
 For hands-on exercises, run-contract guidance, reproducibility/fair-comparison checklists, and
-responsible cost controls, see [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md) and
-[`docs/FOUNDRY_MODELOPS_WORKSHOP.md`](docs/FOUNDRY_MODELOPS_WORKSHOP.md). The bake-off
-developer-experience journal lives in [`docs/`](docs/) alongside them.
+responsible cost controls, see [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
 
 ## Development
 
