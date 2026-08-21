@@ -1,8 +1,11 @@
+export * from "./artifact-inspection.js";
+export * from "./conformance.js";
 export * from "./contract.js";
 export * from "./event-collector.js";
 export * from "./evaluator.js";
 export * from "./evaluator-options.js";
 export * from "./foundry-endpoint.js";
+export * from "./html-report.js";
 export * from "./metrics.js";
 export * from "./outcome.js";
 export * from "./portfolio.js";
@@ -11,3 +14,4 @@ export * from "./progress.js";
 export * from "./runner.js";
 export * from "./quickstart.js";
 export * from "./types.js";
+export * from "./workspace-changes.js";

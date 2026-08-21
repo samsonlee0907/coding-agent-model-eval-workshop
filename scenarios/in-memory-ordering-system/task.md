@@ -52,6 +52,10 @@ Requirements:
   "fulfilled" or "cancelled" with a clear, typed error.
 - Expose a small, documented interface (a class or module API is fine; a thin
   CLI wrapper is optional) and keep the domain logic testable without any UI.
+- The package must be usable by an external consumer: `package.json` must
+  declare an entry point (`main`, `module`, or `exports`) that resolves to a
+  file the build actually emits, and that entry must export a class named
+  `OrderStore` constructible with `new OrderStore()`.
 
 Do not ask for clarification. Use sensible defaults and complete the feature.
 ```
@@ -103,6 +107,36 @@ The evaluator should use repository tests plus this behavior checklist:
 Use the exact command in the scenario contract (normally `npm test && npm run
 build`) as the deterministic evaluator. A nonzero exit classifies the run as
 `unresolved`; a harness failure must remain a separate outcome.
+
+## Conformance probe
+
+The table above is checked by the candidate's *own* tests, which only proves the
+candidate agrees with itself. [`conformance/probe.mjs`](conformance/probe.mjs)
+is owned by this task and is never shown to the agent. It imports the delivered
+package through its own declared entry point and exercises it:
+
+| Check | Severity | What it establishes |
+|---|---|---|
+| `entry-resolves` | required | The manifest's entry point resolves and exports a constructible `OrderStore` with all six methods. |
+| `create-order` | required | New orders get unique ids, `"pending"` status, and no items. |
+| `total-merges-skus` | required | Totals are correct across SKUs, adding the same SKU twice merges quantity, and removal updates the total. |
+| `rejects-bad-input` | required | Zero/negative/non-integer quantity and negative unitPrice are rejected without corrupting existing state. |
+| `status-machine` | required | `pending → paid → fulfilled` succeeds; `pending → fulfilled`, any transition out of `fulfilled`, and re-cancelling are rejected; cancel works from both `pending` and `paid`. |
+| `terminal-guard` | required | `fulfilled` and `cancelled` orders reject `addItem` and `removeItem`. |
+| `list-filter` | required | `listOrders()` returns every order; `listOrders(status)` returns exactly the matching subset. |
+| `unknown-id` | required | Every operation on an unknown id throws an `Error` rather than returning `undefined` or crashing. |
+| `no-state-leak` | **advisory** | Mutating an object returned by `listOrders()` does not corrupt the store. The prompt does not require defensive copying, so this records *Weak* rather than *Fail*. |
+
+A check exits 0 when the expectation held and 1 when it did not. Because these
+run against the built artifact rather than the source, they can fail a candidate
+whose own test suite passed — which is the entire point.
+
+Run a single check by hand against a delivered workspace:
+
+```bash
+cd <delivered-workspace>
+node <repo>/scenarios/in-memory-ordering-system/conformance/probe.mjs total-merges-skus
+```
 
 ## Fair-comparison controls
 

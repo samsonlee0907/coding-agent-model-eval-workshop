@@ -7,7 +7,23 @@
         "commitSha": "replace-with-pinned-baseline-repository-sha",
         "containerFingerprint": "replace-with-node-image-and-lockfile-fingerprint"
       },
-      "validationCommand": "npm test && npm run build"
+      "validationCommand": "npm test && npm run build",
+      "conformanceProbe": {
+        "description": "Task-owned behavioural checks. Never shown to the agent; run against the built artifact through its own declared entry point.",
+        "setupCommand": "npm run build",
+        "timeoutMs": 120000,
+        "checks": [
+          { "id": "entry-resolves", "description": "The manifest entry point resolves and exports a constructible OrderStore with all six methods.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" entry-resolves" },
+          { "id": "create-order", "description": "New orders get unique ids, pending status, and no items.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" create-order" },
+          { "id": "total-merges-skus", "description": "Totals are correct across SKUs and adding the same SKU twice merges quantity.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" total-merges-skus" },
+          { "id": "rejects-bad-input", "description": "Invalid quantity and unitPrice are rejected without corrupting existing state.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" rejects-bad-input" },
+          { "id": "status-machine", "description": "Legal transitions succeed and illegal ones are rejected.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" status-machine" },
+          { "id": "terminal-guard", "description": "Fulfilled and cancelled orders reject further mutation.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" terminal-guard" },
+          { "id": "list-filter", "description": "listOrders() returns every order and listOrders(status) returns exactly the matching subset.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" list-filter" },
+          { "id": "unknown-id", "description": "Every operation on an unknown order id throws an Error.", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" unknown-id" },
+          { "id": "no-state-leak", "description": "Mutating an object returned by listOrders() does not corrupt the store.", "severity": "advisory", "command": "node \"C:\\replace\\with\\repo\\scenarios\\in-memory-ordering-system\\conformance\\probe.mjs\" no-state-leak" }
+        ]
+      }
     },
     "candidate": {
       "provider": "openai",
@@ -34,7 +50,7 @@
   },
   "rounds": [
     {
-      "prompt": "Build an in-memory order management core in this repository. Work autonomously: set up the project, plan briefly if useful, write the code, add tests, and run the configured validation command. Implement an OrderStore backed only by local in-memory state (for example a Map). Support createOrder(customerId), addItem(orderId, sku, unitPrice, quantity) with quantity a positive integer and unitPrice non-negative, removeItem(orderId, sku), orderTotal(orderId), updateStatus advancing pending -> paid -> fulfilled with cancel allowed from pending or paid, and listOrders(status?). Reject unknown order ids and mutation of fulfilled/cancelled orders with typed errors. Provide npm test and npm run build scripts and keep the domain logic testable without any UI. Do not ask for clarification; use sensible defaults and complete the feature."
+      "prompt": "Build an in-memory order management core in this repository. Work autonomously: set up the project, plan briefly if useful, write the code, add tests, and run the configured validation command. Implement an OrderStore backed only by local in-memory state (for example a Map). Support createOrder(customerId), addItem(orderId, sku, unitPrice, quantity) with quantity a positive integer and unitPrice non-negative, removeItem(orderId, sku), orderTotal(orderId), updateStatus advancing pending -> paid -> fulfilled with cancel allowed from pending or paid, and listOrders(status?). Reject unknown order ids and mutation of fulfilled/cancelled orders with typed errors. Provide npm test and npm run build scripts and keep the domain logic testable without any UI. package.json must declare an entry point (main, module, or exports) that resolves to a file the build emits, and that entry must export a class named OrderStore constructible with new OrderStore(). Do not ask for clarification; use sensible defaults and complete the feature."
     },
     {
       "prompt": "Act as the implementation reviewer. Exercise the OrderStore and repair every issue you find: (1) orderTotal reflects multiple SKUs and quantity merges when the same SKU is added twice; (2) addItem rejects zero/negative/non-integer quantity and negative unitPrice without corrupting state; (3) illegal status transitions are rejected, including pending -> fulfilled directly, any transition out of fulfilled, and re-cancelling a cancelled order; (4) cancel is allowed from pending and paid, and cancelled or fulfilled orders reject addItem/removeItem/updateStatus; (5) listOrders() returns every order and listOrders(status) returns exactly the matching subset; (6) unknown order ids produce a typed error rather than a crash. Add focused tests for every repaired behavior, run the configured validation command, and leave the workspace passing."

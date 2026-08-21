@@ -28,6 +28,7 @@ import { asRecord } from "./json.js";
 import { deriveMetrics, extractModelCalls, extractToolCalls } from "./metrics.js";
 import { classifyOutcome } from "./outcome.js";
 import { writeRunReport } from "./report.js";
+import { captureWorkspaceChanges } from "./workspace-changes.js";
 import type {
   BenchmarkConfig,
   BenchmarkRun,
@@ -41,6 +42,8 @@ import type {
   ToolCapability,
 } from "./types.js";
 import { resolveValidationCommand, runValidation, scrubFoundryEnvironment } from "./validation.js";
+import { inspectArtifact } from "./artifact-inspection.js";
+import { runConformanceProbe } from "./conformance.js";
 
 export interface BenchmarkRunOptions {
   onEvent?: (event: NormalizedEvent) => void;
@@ -57,6 +60,10 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     normalizedEvents: join(artifactsDirectory, "normalized-events.ndjson"),
     diagnostics: join(artifactsDirectory, "diagnostics.json"),
     report: join(artifactsDirectory, "report.md"),
+    changes: join(artifactsDirectory, "changes.patch"),
+    workspace: resolve(config.workspacePath),
+    inspection: join(artifactsDirectory, "artifact-inspection.json"),
+    conformance: join(artifactsDirectory, "conformance-probe.json"),
   };
   const contract = materializeContract(config);
   assertSupportedPolicy(contract);
@@ -162,14 +169,61 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     }
   }
 
+  const workspaceChanges = captureWorkspaceChanges(config.workspacePath, contract.task.repository.commitSha);
+  if (workspaceChanges.patch !== null) {
+    writeFileSync(artifacts.changes, workspaceChanges.patch, "utf8");
+  }
+  collector.captureRunnerEvent("runner.workspace_changes_captured", {
+    available: workspaceChanges.patch !== null,
+    filesChanged: workspaceChanges.filesChanged,
+    insertions: workspaceChanges.insertions,
+    deletions: workspaceChanges.deletions,
+    reason: workspaceChanges.reason ?? null,
+  });
+
   validation = await runValidation(
     resolveValidationCommand(contract.task.validationCommand, config.workspacePath),
     config.workspacePath,
     contract.execution.sessionTimeoutMs,
   );
   collector.captureRunnerEvent("runner.validation_finished", asRecord(validation));
-  collector.captureRunnerEvent("runner.run_finished", { runId });
 
+  // Captured after validation so the inspected artifact is the exact tree the
+  // deterministic command was run against.
+  const inspection = inspectArtifact(config.workspacePath);
+  writeFileSync(artifacts.inspection, `${JSON.stringify(inspection, null, 2)}\n`, "utf8");
+  collector.captureRunnerEvent("runner.artifact_inspected", {
+    available: inspection.available,
+    reason: inspection.reason ?? null,
+    sourceFiles: inspection.totals.sourceFiles,
+    testFiles: inspection.totals.testFiles,
+    sourceLines: inspection.totals.sourceLines,
+    unresolvedEntryPoints: inspection.entryPoints.filter((entry) => !entry.exists).length,
+    driftedDependencies: inspection.dependencyDrift.filter((entry) => entry.satisfied === false).length,
+    testFilesUnderBuildOutput: inspection.testFilesUnderBuildOutput.length,
+  });
+  // Runs last so the probe sees the same tree validation and inspection saw.
+  // A probe is task-owned and the agent never sees it, so passing it is
+  // evidence about the delivered code rather than about the delivered tests.
+  const conformance = contract.task.conformanceProbe
+    ? await runConformanceProbe(
+        contract.task.conformanceProbe,
+        config.workspacePath,
+        contract.task.conformanceProbe.timeoutMs ?? contract.execution.sessionTimeoutMs,
+      )
+    : null;
+  if (conformance !== null) {
+    writeFileSync(artifacts.conformance, `${JSON.stringify(conformance, null, 2)}\n`, "utf8");
+    collector.captureRunnerEvent("runner.conformance_probe_finished", {
+      available: conformance.available,
+      reason: conformance.reason ?? null,
+      conformant: conformance.conformant,
+      ...conformance.totals,
+      durationMs: conformance.durationMs,
+    });
+  }
+
+  collector.captureRunnerEvent("runner.run_finished", { runId });
   const events = collector.events();
   const modelCalls = extractModelCalls(events);
   const toolCalls = extractToolCalls(events);
@@ -187,6 +241,7 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     toolCalls,
     usageMetrics: findUsageMetrics(events),
     validation,
+    ...(conformance === null ? {} : { conformance }),
     metrics: deriveMetrics(events, modelCalls),
     outcome: classifyOutcome({ validation, toolCalls, runnerError }),
     runnerError,

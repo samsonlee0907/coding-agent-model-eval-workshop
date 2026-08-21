@@ -44,6 +44,14 @@ side-by-side comparison report.
   tool/edit timings, and token/cache usage, derived from captured SDK events.
 - **Deterministic quality check** — a configurable validation command (e.g. `npm test && npm run build`)
   runs after each session for an objective pass/fail signal.
+- **Conformance probes** — task-authored behavioural checks run against the delivered artifact after
+  validation. The agent never sees them, so passing one is evidence about the *code*, not about the
+  tests the candidate chose to write. A candidate that validates green while failing a required
+  expectation is reported as a divergence rather than quietly counted as a success.
+- **Code artifact inspection** — every run's final workspace is measured, not just diffed: file/LOC
+  inventory, export surface, and integrity checks that catch defects a *passing* test command hides
+  (unresolvable manifest entry points, installed dependencies the manifest disallows, test files
+  double-collected from build output). No model required.
 - **Honest telemetry** — metrics with no underlying event are labeled `"unavailable"`, never
   invented or estimated.
 - **Contract-aware comparisons** — two or more candidates are compared only when their run
@@ -51,8 +59,9 @@ side-by-side comparison report.
   diverging candidate) rather than hidden.
 - **Self-contained reports** — HTML/Markdown output that puts efficiency and quality next to each
   other, with full raw-event artifacts for traceability.
-- **Optional LLM-judge** — a clearly-labeled qualitative score for tasks where "correct" is
-  subjective; never overrides the deterministic result.
+- **Optional LLM-judge code review** — reads each candidate's *final source files* (line-numbered),
+  scores seven dimensions, and returns findings that must cite `file:line`. The harness re-verifies
+  every citation and badges the ones it cannot anchor. Never overrides the deterministic result.
 
 ## How it works
 
@@ -63,8 +72,9 @@ Each run moves through four stages, each owned by a focused part of the codebase
 2. **Capture** (`event-collector.ts`) — append every raw SDK event to an NDJSON log live
    (including streaming deltas), then normalize it into a stable data model of runs, model calls,
    tool calls, and validation results.
-3. **Measure & validate** (`metrics.ts`, `validation.ts`) — derive efficiency metrics and run the
-   deterministic validation command for a quality signal.
+3. **Measure & validate** (`metrics.ts`, `validation.ts`, `conformance.ts`, `artifact-inspection.ts`) —
+   derive efficiency metrics, run the deterministic validation command, then probe and inspect the
+   delivered artifact for behaviour and defects the candidate's own test suite can hide.
 4. **Compare & report** (`contract.ts`, `outcome.ts`, `report.ts`) — classify the outcome, check
    contract comparability, and emit a report that lines up efficiency and quality.
 
@@ -90,16 +100,16 @@ Notes:
 
 **PowerShell (Windows)**
 ```powershell
-git clone https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
-cd coding-agent-model-eval-workshop
+git clone https://github.com/samsonlee0907/coding-agent-benchmark-tool.git
+cd coding-agent-benchmark-tool
 npm install
 npm run build
 ```
 
 **bash / zsh (Linux/macOS)**
 ```bash
-git clone https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
-cd coding-agent-model-eval-workshop
+git clone https://github.com/samsonlee0907/coding-agent-benchmark-tool.git
+cd coding-agent-benchmark-tool
 npm install
 npm run build
 ```
@@ -183,13 +193,171 @@ efficiency and quality across every discovered candidate. (Same command on all p
 ### Optional: LLM-judge quality scoring
 
 ```bash
-npm run evaluate -- --runs .benchmark-runs
+npm run evaluate -- --runs .benchmark-runs --provider openai --model "<your-judge-deployment>"
 ```
 
-Asks a Foundry model to score each candidate's *validated artifacts* (never raw prompts or tool
-transcripts) against your task's acceptance criteria. Optional and clearly labeled: it never
-overrides a deterministic result, and it makes a live model call that consumes Foundry quota. See
+Asks a Foundry model to review each candidate's *delivered code* against your task's acceptance
+criteria. Since `benchmark-judge-v3` the reviewer receives the artifact itself, not just a diff:
+
+- **Every hand-authored source, test, and config file in its final state**, line-numbered as `N| code`
+  so each claim can be anchored to a citation. Build output and `node_modules/` are excluded.
+- **The package manifest verbatim** — small, high-signal, and never truncated.
+- **The deterministic integrity results** below, supplied as established facts so the reviewer spends
+  its reasoning on consequences rather than re-deriving checks the harness already performed.
+- **The captured source diff** (`changes.patch`) for authorship context, and **redacted validation
+  output** (test counts, failures) — never raw prompts or tool transcripts.
+
+Secret-shaped values (URLs, `KEY=`/`token=`/`secret=` pairs) are stripped before anything reaches the
+judge. The total source budget is shared across candidates, so prompts stay bounded as you add
+candidates rather than growing without limit.
+
+It scores seven dimensions (1–5): **correctness, test adequacy, API design, reproducibility,
+requirement coverage, maintainability**, and overall **code quality**. Dimensions are deliberately
+unweighted — a fast, small implementation and a thorough, slower one should read as different
+profiles, not collapse into one number. It also returns:
+
+- **Findings**, each citing a `file:line`. **The harness re-checks every citation** against the
+  inspected artifact and marks any it cannot anchor as `unverified`, so an unchecked claim never
+  reads as an established one.
+- **Cross-candidate divergences** — observations that only appear when implementations are read side
+  by side (for example, the same requirement handled differently across candidates). Per-run scoring
+  structurally cannot produce these.
+- **Reviewed files**, so review coverage is auditable against what the harness actually supplied.
+
+When a run has no inspectable artifact the judge is told so explicitly, reports no code findings, and
+lowers its confidence rather than inferring quality from timing alone. `--provider` (`openai` or
+`anthropic`) and `--model` (your Foundry judge deployment) are both required, since it makes a live
+model call that consumes Foundry quota. It writes an `llm-evaluation-<timestamp>.json` artifact into
+the runs directory. Optional and clearly labeled: it never overrides a deterministic result. See
 [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
+
+Each run records its diff as a `changes.patch` artifact next to `run.json`, captured non-mutating
+(via a throwaway git index, so the real workspace index is untouched) and excluding build/dependency
+output. The HTML report's **Code Δ** column summarizes it (files changed, insertions, deletions).
+
+**Keeping real code in front of the judge.** Two safeguards stop generated files from crowding out
+the code you actually want reviewed:
+
+- **Lockfiles are excluded at capture time** (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,
+  `bun.lockb`, `*.lock`) alongside `node_modules/`, `dist/` and `build/`. Declared dependency ranges
+  remain visible through `package.json`, which is kept.
+- **Source hunks are ordered first.** Before truncating to the judge's diff budget,
+  `prioritiseSourceHunks` reorders the patch so hand-authored files precede generated and
+  dependency-managed ones. Without this, git's alphabetical path order lets a large lockfile consume
+  the whole budget before any `src/` hunk is reached — which silently starves the judge of the code
+  it is supposed to review while still appearing to succeed.
+
+### Code artifact inspection (no model required)
+
+Every run inspects its final workspace after validation and writes `artifact-inspection.json` beside
+`run.json`. This is measured evidence, not a model opinion, and it runs whether or not you ever call
+the judge. It records the file/LOC inventory and export surface, and performs three integrity checks
+that a **passing test command can conceal**:
+
+| Check | What it catches |
+| --- | --- |
+| **Entry-point resolution** | A manifest whose `main`/`types`/`bin`/`exports` points at a path the build never emits. The package's own tests pass by importing relative paths, but importing it by name fails. |
+| **Declared-vs-installed dependencies** | A workspace validated against packages its own manifest does not allow (including pre-releases). The green result is not reproducible from that manifest. |
+| **Tests collected from build output** | A test file present in both `src/` and `dist/`, which inflates a reported test count without adding a single new assertion. |
+
+These appear in the report's **Code artifact inspection** section with a per-candidate explanation of
+every flag, and roll up into an **Artifact integrity** card in the decision summary. Runs recorded
+before this existed have no captured inspection; the report re-inspects their recorded workspace when
+it is still on disk, and otherwise labels the artifact unavailable rather than guessing.
+
+### Conformance probes (no model required)
+
+Validation runs the candidate's **own** test suite, so a green result only proves the candidate agrees
+with itself. A conformance probe answers the stricter question: *does the delivered artifact behave the
+way the task author specified?* Declare one on the task contract:
+
+```jsonc
+"task": {
+  "validationCommand": "npm test && npm run build",
+  "conformanceProbe": {
+    "setupCommand": "npm run build",
+    "timeoutMs": 120000,
+    "checks": [
+      { "id": "entry-resolves",  "description": "The declared entry point exports a constructible OrderStore.",
+        "command": "node \"C:\\path\\to\\scenarios\\<task>\\conformance\\probe.mjs\" entry-resolves" },
+      { "id": "no-state-leak",   "description": "Mutating a returned object does not corrupt the store.",
+        "severity": "advisory",
+        "command": "node \"C:\\path\\to\\scenarios\\<task>\\conformance\\probe.mjs\" no-state-leak" }
+    ]
+  }
+}
+```
+
+Each check is an independent command run in the delivered workspace **after** validation, so authoring
+one needs no output protocol: **exit 0 means the expectation held**. Checks run with the benchmark's
+Foundry credentials stripped from the environment, and the agent never sees them — which is what makes
+a pass evidence about the *code* rather than about the tests the candidate chose to write. Commands are
+run with the workspace as the working directory, so reference the probe by absolute path.
+
+| Result | Meaning |
+| --- | --- |
+| **Pass** | The check exited 0. |
+| **Fail** | A `required` check exited non-zero. One is enough to make the artifact non-conformant. |
+| **Weak** | An `advisory` check exited non-zero — recorded and shown, but not held against the verdict. Use this for behaviour the prompt did not actually require. |
+| **Error** | The check could not be executed (spawn failure or timeout). **Never counted against the artifact**; a required check that errored leaves the verdict *Inconclusive* rather than failing it. |
+
+If `setupCommand` exits non-zero no check runs at all and every one is recorded as `error`, because an
+unbuildable artifact is different evidence from a wrong one.
+
+The probe **does not change `outcome.class`**, which stays anchored to the configured validation
+command so runs recorded before probes existed remain comparable. Instead the verdict is reported
+separately, and a run that validated green while failing a required expectation is called out as a
+**divergence** — a red banner in the conformance section, a card in the decision summary, and a column
+in the run table. Treat the conformance verdict as the stronger behavioural signal. The verdict is also
+handed to the LLM judge as established fact it may not dispute.
+
+[`scenarios/in-memory-ordering-system`](scenarios/in-memory-ordering-system) ships a worked 9-check
+probe; see [its task brief](scenarios/in-memory-ordering-system/task.md#conformance-probe) for what
+each check establishes.
+
+### Generate an HTML comparison report
+
+```bash
+npm run report:html -- --runs .benchmark-runs
+```
+
+Produces a single self-contained `comparison-report.html` (no external assets) with seven parts:
+
+1. **Decision summary** — data-derived cards naming the fastest deterministic pass, the conformance
+   tally (naming any candidate that validated green while failing a required expectation), artifact
+   integrity across the inspected candidates, the highest judged code quality (when an evaluation is
+   attached), and the key interpretation constraint (contract drift or unpriced cost). Every figure is
+   read straight from the runs, the probes, the inspections, or the judge; none is inferred.
+2. **Run comparison** — every run's outcome and efficiency metrics (E2E, tokens, cache reads, cost
+   multiplier, model/tool calls, TTFT, validation) plus a **Conformance** column and a **Code Δ** column
+   (files changed / insertions / deletions from each run's `changes.patch`), with outcome badges and
+   relative bars.
+3. **Conformance probe** — a check × candidate matrix with a verdict row, a divergence banner when
+   validation and conformance disagree, and the captured failure output for every non-passing check.
+   Candidates whose run declared no probe read *Not probed* rather than passing by default.
+4. **Code artifact inspection** — source/test file and line counts, export count, and the three
+   integrity checks above, each red flag spelled out in prose beneath the table.
+5. **Agent efficiency profile** — transposed (metrics as rows, candidates as columns) because you
+   compare one metric across candidates, not one candidate across metrics. Covers time to first tool
+   call / first edit / green test, TPOT, cache read & write tokens, cache hit share, tokens per tool
+   call, and tool calls per edit. These describe *how* a candidate reached its outcome, which is what
+   separates two candidates that both resolved. Nothing is estimated — a metric the stream did not
+   support is marked *Unavailable* with the reason on hover. An agent that writes files through a
+   shell rather than an edit tool legitimately shows *Unavailable* for the edit-derived rows.
+6. **Comparability & lineage** — task ID, baseline commit, container fingerprint, reasoning effort,
+   and wire adaptation per run.
+7. **LLM-judge code review** (closing section) — when an `llm-evaluation-*.json` artifact is present,
+   the latest one is joined by run ID and rendered as the judge's comparative read, a
+   dimension × candidate score matrix, cross-candidate divergences, a severity-ordered **code
+   findings** table with `file:line` citations (unresolvable citations badged `unverified`), and a
+   per-candidate card carrying review coverage, the full rationale, and risks & caveats. Evaluations
+   produced by an earlier prompt version are banner-flagged as having seen only a truncated diff.
+   Otherwise this section explains how to produce an evaluation.
+
+Unavailable metrics stay labeled, failures are kept in, and contract drift is flagged as *not
+strictly comparable*. Override the inputs with `--output <file.html>` and `--evaluation <file.json>`.
+The quality read reflects whatever the joined evaluation contains, so re-run `npm run evaluate` after
+new runs to refresh the judge's scores before regenerating the report.
 
 ## Authoring tasks, instructions, and tools
 
@@ -262,17 +430,21 @@ before — the default `read | edit | shell` flow is unchanged.
 ## Project structure
 
 ```text
-coding-agent-model-eval-workshop/
+coding-agent-benchmark-tool/
 ├── src/                     TypeScript source for the CLI, SDK adapter, and report engine
 │   ├── runner.ts            Session/task orchestration, Foundry provider wiring, env-based credentials
 │   ├── event-collector.ts   Append-only NDJSON raw-event capture + normalization to the stable data model
 │   ├── metrics.ts           Derives E2E / TTFT / TPOT / tool / token / cache efficiency metrics
 │   ├── outcome.ts           Classifies each run (resolved/unresolved vs. agent/infra failure classes)
 │   ├── validation.ts        Runs the configured deterministic validation command and records the result
+│   ├── conformance.ts       Runs task-authored behavioural checks against the delivered artifact
+│   ├── workspace-changes.ts Non-mutating capture of the agent's source diff vs the task baseline (changes.patch)
+│   ├── artifact-inspection.ts  Final-artifact inventory, manifest/entry-point and dependency-drift integrity checks
 │   ├── contract.ts          Immutable run/comparison contracts + drift detection
 │   ├── foundry-endpoint.ts  Derives OpenAI/Anthropic-compatible routes from a Foundry resource endpoint
-│   ├── report.ts            Self-contained HTML/Markdown comparison report generation
-│   ├── evaluator.ts         Optional LLM-judge scoring of each candidate's artifacts (quality signal)
+│   ├── report.ts            Per-run and paired Markdown comparison report generation
+│   ├── html-report.ts       Self-contained HTML report joining run metrics with LLM-judge scores
+│   ├── evaluator.ts         Optional LLM-judge review of each candidate's final code (quality signal)
 │   └── quickstart.ts, portfolio.ts, cli.ts, ...  CLI entry points
 ├── test/                    node:test suite — fixtures/mocks only, no live SDK/network calls
 ├── docs/                    Setup guide, workshop exercises, and the bake-off developer journal
@@ -296,13 +468,28 @@ This is a first working milestone, not a finished benchmark suite:
 - **Validation**: a single configured shell command runs once per candidate. No SWE-bench
   container harness yet — the contract and outcome model are designed so a future module can add
   one without breaking existing reports.
-- **Cost**: reported cost reflects whatever the SDK/Foundry telemetry emits. When no priced usage
-  is available, cost is `0` and explicitly labeled as such — never inferred from token counts.
+- **Cost**: reported cost reflects whatever the SDK/Foundry telemetry emits. When no priced usage is
+  available the value is `0`, which the report renders as **Unpriced** so it is never averaged with
+  real figures — cost is never inferred from token counts.
 - **TTFT/TPOT**: computed only when the session streamed token-level deltas; otherwise marked
   `"unavailable"`, never estimated.
+- **Inspection scope**: the file/LOC inventory and export surface are language-agnostic, but the
+  entry-point and dependency-drift checks read `package.json` and `node_modules`, so they only apply
+  to npm/JS/TS artifacts. A non-Node artifact still gets the inventory, but those two checks
+  contribute no evidence — read a clean integrity badge there as "nothing was checked", not "nothing
+  is wrong".
+- **Behavioural conformance**: `conformanceProbe` checks are authored per task, so a task that
+  declares none gets no behavioural evidence and its candidates read *Not probed* — an honest gap, not
+  a pass. A probe is only as good as the checks written for it, and it can only assert what the prompt
+  actually specified; behaviour the prompt left open should be marked `advisory` so it is recorded
+  without deciding the verdict. The probe also does not change `outcome.class`, which stays anchored to
+  the validation command, so a divergence must be read from the conformance verdict.
+- **LLM-judge scope**: the judge reads the delivered code and must cite `file:line`, and the harness
+  verifies those citations — but it does not execute anything. It explains and ranks qualitatively;
+  deterministic validation and inspection remain the only things that decide an outcome.
 - **Automated tests never make live calls**: they exercise the adapter, normalization,
-  contract/drift detection, metric derivation, outcome classification, and report generation
-  entirely against fixtures/mocks.
+  contract/drift detection, metric derivation, outcome classification, artifact inspection, judge
+  parsing/citation verification, and report generation entirely against fixtures/mocks.
 
 For hands-on exercises, run-contract guidance, reproducibility/fair-comparison checklists, and
 responsible cost controls, see [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md) and

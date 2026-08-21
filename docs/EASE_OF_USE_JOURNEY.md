@@ -220,3 +220,57 @@ permission-related only when a live SDK error actually says so.
   contract evidence, not an invisible workaround.
 - **Time-to-green:** offline tests only; no permission or provider request was
   needed.
+
+## Chapter 14 — Giving the judge something real to read 🟢 Smooth
+- **Tries to green:** 1 sustained implementation pass across five source files.
+- **What broke:** nothing at runtime — the friction was conceptual. Repeated
+  attempts to improve *judge output* by improving the *prompt* kept failing,
+  because the judge was reasoning about a truncated diff and inferring the
+  delivered code rather than reading it.
+- **How I found the fix:** inverting the question. Instead of "how do we make
+  the judge better at reviewing?", "what is the judge actually being shown?"
+  The answer was: not the code. Capturing the final artifact turned a prompt
+  problem into a data problem, which is tractable.
+- **What did NOT work / discover:** enlarging the diff budget. A bigger diff is
+  still the wrong artifact — six candidates' diffs were being truncated, and
+  three of them contained no implementation file at all. Also discovered that
+  a *green* validation command is much weaker evidence than it looks: two of six
+  runs passed their own tests while shipping structurally broken packages, which
+  is precisely what the new integrity checks now surface without a model.
+- **Editing gotcha:** replacing a function's opening line with `edit` orphans
+  its body. Include enough of the body in `old_str` to keep the replacement
+  self-contained.
+- **Time-to-green:** offline tests, typecheck, build, backfill, and a headless
+  browser render check; no permission or provider request was needed.
+
+## Round: conformance probes (task-authored behavioural checks)
+
+- **Rating:** 4/5 to build, 5/5 to author a check.
+- **What was easy:** deciding the check protocol. Making each check an
+  independent shell command with "exit 0 means the expectation held" removed an
+  entire design conversation — no JSON contract, no output parser, no reporting
+  convention. Authoring the 9th check took under a minute.
+- **What was subtle:** the three-way distinction between *fail*, *weak*, and
+  *error*. Collapsing them would have been much easier and much worse: a check
+  that could not run says nothing about the artifact, and a check for behaviour
+  the prompt never required should not decide a verdict. Getting this right is
+  the difference between a probe that is trusted and one that gets ignored.
+- **What broke:** the first `conformant` computation counted an errored required
+  check as a failure, which directly contradicted the rule the code's own
+  comment stated. Writing the timeout test surfaced it. Worth noting that the
+  bug survived a typecheck, a build, and 88 passing tests — only a test written
+  specifically to pin the documented semantics caught it.
+- **Biggest temptation resisted:** letting the probe overwrite `outcome.class`.
+  It would have made the report read better and quietly invalidated every run
+  recorded before probes existed. Reporting the disagreement is more useful than
+  resolving it silently.
+- **Payoff:** immediate and larger than expected. Backfilling six existing runs
+  found a candidate whose package cannot be imported at all, which had been
+  sitting in the report as a clean `resolved` for several rounds. No amount of
+  prompt engineering on the judge would have found that; a four-line check did.
+- **Scenario-authoring lesson:** the first draft of the probe asserted more than
+  the prompt asked for. A probe is only fair if every required check maps to
+  something the task actually specified — otherwise the fix belongs in the
+  prompt, not in the check. Both were amended together.
+- **Time-to-green:** offline tests, typecheck, build, a six-run backfill, and a
+  headless browser render; no permission or provider request was needed.

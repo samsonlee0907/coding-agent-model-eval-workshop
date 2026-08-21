@@ -58,3 +58,37 @@ Legend: ✅ succeeded · ❌ failed (permission or other error) · ⚠️ partia
 - Copilot CLI/SDK authentication using an entitled account or supported BYOK.
 - SDK session creation, tool permission handling, live streaming events, and
   usage metrics against an isolated benchmark workspace.
+
+## 2026-08-20 — Full-artifact judge review and derived-efficiency reporting
+
+| # | Command | Purpose | Result | Permission issue? |
+|---|---------|---------|--------|-------------------|
+| 1 | `npm run typecheck` | Type-check the artifact inspector, v3 judge, and new report section. | ✅ Clean. | No |
+| 2 | `node --import tsx --test --test-reporter=tap "test/*.test.ts"` | Full offline suite including 17 new tests. | ✅ 88 pass / 0 fail. | No |
+| 3 | `npm run report:html -- --runs .benchmark-runs` | Regenerate the comparison report over the six retained runs. | ✅ 6 runs, 6 judged scores, report written. | No |
+
+**Notes.** No live provider, judge, or MCP request was made. The v3 judge prompt
+remains unexercised against a real model because `FOUNDRY_ENDPOINT` /
+`FOUNDRY_API_KEY` are unset in this environment — a **configuration** gap, not a
+permission denial. Run `npm run evaluate -- --runs .benchmark-runs --provider
+openai --model "<judge-deployment>"` followed by `npm run report:html -- --runs
+.benchmark-runs` to produce and render a v3 review.
+
+## 2026-08-20 — Conformance probes
+
+| # | Command | Purpose | Result | Permission issue? |
+|---|---------|---------|--------|-------------------|
+| 1 | `node scenarios/in-memory-ordering-system/conformance/probe.mjs <check>` | Exercise each of the 9 task-owned checks directly against the six delivered workspaces. | ✅ Four candidates 9/9; FW-Kimi-K2.6 failed the advisory state-leak check; GPT-5.6-Luna failed all 9. | No |
+| 2 | `node --import tsx --test --test-reporter=tap "test/conformance.test.ts"` | Pin the pass/weak/fail/error semantics, setup short-circuit, and loader back-compat. | ✅ 16 pass / 0 fail. | No |
+| 3 | `npm run typecheck` | Type-check the probe engine, contract types, runner wiring, and report section. | ✅ Clean. | No |
+| 4 | `node --import tsx --test --test-reporter=tap "test/*.test.ts"` | Full offline suite after adding 21 conformance tests. | ✅ 109 pass / 0 fail. | No |
+| 5 | `npm run report:html -- --runs .benchmark-runs` | Regenerate the report with the conformance matrix, divergence banner, and decision card. | ✅ 6 runs, 7 sections, 0 page errors, no horizontal overflow. | No |
+
+**Notes.** No live provider, judge, or MCP request was made; every check ran as a
+local child process with `FOUNDRY_API_KEY` / `FOUNDRY_ENDPOINT` stripped from its
+environment so candidate code never sees benchmark credentials. The
+conformance-aware judge prompt is still unexercised against a real model because
+those variables are unset here — a **configuration** gap, not a permission
+denial. Run `npm run evaluate -- --runs .benchmark-runs --provider openai --model
+"<judge-deployment>"` followed by `npm run report:html -- --runs .benchmark-runs`
+to score the candidates with conformance evidence attached.

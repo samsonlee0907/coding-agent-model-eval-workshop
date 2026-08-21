@@ -14,7 +14,9 @@
     "portfolio": "node dist/portfolio-cli.js",
     "preportfolio": "npm run build",
     "evaluate": "node dist/evaluator-cli.js",
-    "preevaluate": "npm run build"
+    "preevaluate": "npm run build",
+    "report:html": "node dist/html-report-cli.js",
+    "prereport:html": "npm run build"
   },
   "keywords": [],
   "author": "",
@@ -36,7 +38,8 @@
     "benchmark-workshop": "dist/cli.js",
     "benchmark-workshop-quickstart": "dist/quickstart-cli.js",
     "benchmark-workshop-portfolio": "dist/portfolio-cli.js",
-    "benchmark-workshop-evaluate": "dist/evaluator-cli.js"
+    "benchmark-workshop-evaluate": "dist/evaluator-cli.js",
+    "benchmark-workshop-report-html": "dist/html-report-cli.js"
   },
   "files": [
     "dist",

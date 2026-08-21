@@ -262,3 +262,97 @@ Stack: GitHub Copilot SDK `1.0.10-preview.0`, TypeScript, npm, Node.js
 - **Permission assessment:** local implementation and fixture validation only;
   **not a permission issue**. The `${ENV_VAR}` design keeps MCP credentials in
   the environment, never in tracked files.
+
+### 18:30 — Full-artifact judge review and derived-efficiency reporting
+- **What we did:** closed the report's central evidence gap. Until now the LLM
+  judge only ever saw a truncated *diff*, which shows what changed but cannot
+  show whether the delivered code is correct. Added
+  `src/artifact-inspection.ts`, a deterministic inspector that captures each
+  run's final workspace after validation (file/LOC inventory by role, export
+  surface, persisted sources) plus three integrity checks chosen specifically
+  because **a passing test command hides them**: manifest entry points that
+  resolve to nothing, installed dependencies the manifest's own range
+  disallows, and test files collected from build output (which double-counts
+  assertions). Rewrote the judge to prompt `benchmark-judge-v3`: it now reads
+  line-numbered final sources, is handed the integrity results as established
+  facts it must not re-derive, and must anchor every finding to `file:line` —
+  citations the harness independently re-verifies and badges when unresolvable.
+  Added an **Agent efficiency profile** report section rendering metrics the
+  collector already captured but nothing displayed (time to first tool call /
+  first edit / green test, TPOT, cache write tokens, cache hit share, tokens per
+  tool call, tool calls per edit), and changed a reported cost of `0` to render
+  as **Unpriced** so an absent price signal is never averaged with real figures.
+- **Result:** ✅ 88 offline tests, type checking, and the production build
+  passed. Backfilling the six retained runs, the inspector reproduced by pure
+  static means the same defects an earlier manual review had found by hand:
+  FW-Kimi-K2.6 shipped three out-of-range dependencies (including a `vitest`
+  pre-release) plus a shadow test file under `dist/`, and GPT-5.6-Luna declared
+  a `main` entry point the build never emits. Both candidates had validated
+  green. Report regenerated and checked in a headless browser: 0 page errors,
+  no horizontal overflow.
+- **How the design was found:** the division of labour resolved the problem, not
+  a better prompt. Deterministic checks establish *facts*; the judge explains
+  *consequences*. Handing the judge verified facts plus real source removes the
+  two things that made earlier scores unreliable — guessing from a diff, and
+  re-deriving what the harness can simply measure.
+- **Notable evidence:** claude-opus-5 renders `Unavailable` for both
+  edit-derived efficiency rows. That is correct, not a bug: it wrote files
+  through `powershell` rather than the `edit` tool, so the harness abstains
+  instead of inventing a denominator. Exactly the behaviour the "never estimate"
+  rule is for.
+- **Permission assessment:** local implementation, backfill, and offline fixture
+  validation only; **not a permission issue**. The v3 prompt has not yet been
+  exercised against a live judge because no Foundry credentials are configured
+  in this environment — a **configuration** gap, not a denial.
+
+### 20:10 — Conformance probes: closing the "green but wrong" gap
+
+- **Goal:** the previous round gave the judge the real source, but every
+  automated signal still traced back to the candidate's *own* test suite. A
+  candidate that writes agreeable tests validates green regardless of whether it
+  met the spec. Close that with task-authored behavioural checks the agent never
+  sees.
+- **Design:** a probe is a list of independent shell commands declared on the
+  task contract and run in the delivered workspace after validation. Exit 0 means
+  the expectation held — no output protocol, no reporting contract, so authoring
+  a check costs a few lines. Severity is `required` (a failure means
+  non-conformant) or `advisory` (recorded as *Weak*, never decides the verdict);
+  a check that could not execute records *Error* and is never counted against the
+  artifact, because absence of evidence is not evidence of a defect. A failed
+  `setupCommand` short-circuits everything to *Error*: an unbuildable artifact is
+  different evidence from a wrong one.
+- **The one judgement call:** the probe deliberately does **not** rewrite
+  `outcome.class`. Outcome is documented as deriving from the configured
+  validation command, and silently redefining it would break comparability with
+  every run already recorded. The conformance verdict is reported separately and
+  a green-but-non-conformant run is called out as a **divergence** — banner,
+  decision-summary card, and run-table column.
+- **Result:** ✅ 109 offline tests (up from 88), type check, and build all pass.
+  Wrote a 9-check probe for the ordering-system scenario and backfilled the six
+  retained runs. It immediately paid for itself:
+  - **GPT-5.6-Luna failed 8 of 8 required checks** — its manifest declares
+    `dist/order-store.js`, which the build never emits, so *no consumer can
+    import the package at all*. It had validated **green** and is recorded as
+    `resolved`. This is the divergence banner's reason to exist, demonstrated on
+    real data rather than a fixture.
+  - **FW-Kimi-K2.6 failed the advisory `no-state-leak` check** — mutating an
+    object returned by `listOrders()` corrupts the store, because the returned
+    object aliases internal state. A genuine defect its own suite missed. Marked
+    advisory because the prompt never required defensive copying, so it is
+    recorded as a weakness without being held against the verdict.
+  - The remaining four candidates were fully conformant.
+- **Fairness correction:** the probe asserts that the package is importable
+  through its own declared entry point and exports a constructible `OrderStore`.
+  The original prompt only asked for "a small, documented interface", so that
+  requirement was added explicitly to both `task.md` and the round-1 prompt.
+  A probe may only assert what the task actually specified; anything else belongs
+  in `advisory`.
+- **Bug found while writing tests:** the first `conformant` computation treated a
+  required check that *errored* as a failure, contradicting the documented rule
+  that an unexecutable check is never evidence against the artifact. Fixed to
+  return `null` (*Inconclusive*) when any required check could not run, and the
+  timeout test now pins that behaviour.
+- **Permission assessment:** local implementation, backfill, and offline fixture
+  validation only; **not a permission issue**. The conformance-aware judge prompt
+  still has not met a live model — no Foundry credentials in this environment,
+  which remains a **configuration** gap, not a denial.

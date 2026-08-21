@@ -50,7 +50,7 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 | 15 | Foundry inference route derivation | ✅ **Implemented 2026-08-19** — one canonical resource-root URL derives the correct GPT OpenAI-compatible or Claude Anthropic inference base without persisting raw endpoints. | Confirm deployment IDs in a bounded live smoke run. |
 | 16 | Foundry-only provider contract and FW-Kimi-K3 sanitizer | ✅ **Implemented 2026-08-19** — canonical services-root validation, fixed credential names, strict provider enum, per-wire-adaptation contract/report evidence, and offline continuation sanitizer regression coverage. | Execute a bounded live FW-Kimi-K3 multi-turn smoke task. |
 | 17 | Supplementary Foundry LLM judge | ✅ **Implemented 2026-08-19** — separate tool-free judge command, bounded untrusted evidence packet, strict JSON schema validation, and separate evaluation artifact. | Execute a budgeted judge run against a known retained cohort. |
-
+| 18 | Full-artifact judge review and derived-efficiency reporting | ✅ **Implemented 2026-08-20** — deterministic artifact inspection (inventory, export surface, entry-point/dependency-drift/shadow-test integrity checks), judge prompt v3 reading line-numbered final sources with harness-verified `file:line` citations, and an Agent efficiency profile section rendering previously-unused captured metrics. | Exercise the v3 prompt against a live budgeted judge run; no Foundry credentials are configured in this environment. |
 ## 1. Permission-probe tests (P0)
 
 | # | Primitive | What to try | Permission(s) to watch for | Status |
@@ -73,3 +73,20 @@ and [GitHub Docs streaming events reference](https://docs.github.com/en/copilot/
 - [ ] Add an isolated container task adapter.
 - [ ] Add a SWE-bench task source without bundling the dataset.
 - [ ] Add aggregate outlier statistics after multiple retained runs exist.
+- [x] Add an optional task-authored `conformanceProbe` run against the built
+  artifact after validation, rendered as a PASS/WEAK/FAIL matrix. **Done** —
+  `src/conformance.ts`, a 9-check probe for the ordering-system scenario, and a
+  divergence banner for candidates that validate green while failing a required
+  expectation. Backfilling the six retained runs caught GPT-5.6-Luna shipping a
+  package no consumer can import (8/8 required checks failed, still recorded
+  `resolved`) and FW-Kimi-K2.6 leaking internal state through `listOrders()`.
+- [ ] Author conformance probes for the remaining scenarios. A task with no
+  probe reads *Not probed*, which is honest but contributes no behavioural
+  evidence.
+- [ ] Let a check declare its probe script once per task instead of repeating an
+  absolute path in every `command`. Checks run with the workspace as cwd, so the
+  path is currently duplicated nine times in the ordering-system contract.
+- [ ] Re-run the judge with conformance evidence attached and confirm the
+  non-conformant candidate is scored accordingly (blocked: no Foundry
+  credentials configured in this environment).
+

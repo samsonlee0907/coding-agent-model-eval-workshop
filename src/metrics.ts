@@ -121,6 +121,10 @@ function unavailable(reason: string): Metric<number> {
   return { status: "unavailable", value: null, reason };
 }
 
-function isEditTool(value: unknown): boolean {
+/**
+ * Edit detection is name-based because the SDK does not label a tool call as
+ * mutating. Exported so the report derives "edits" exactly as the metric does.
+ */
+export function isEditTool(value: unknown): boolean {
   return typeof value === "string" && /(edit|write|apply_patch|create_file)/i.test(value);
 }
