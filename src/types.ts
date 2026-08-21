@@ -518,7 +518,12 @@ export interface RunDiagnostics {
   configurationMessages: string[];
   providerFailure: {
     httpStatus: number | null;
-    signature: "anthropic_temperature_deprecated" | "provider_resource_not_found" | "other" | null;
+    signature:
+      | "anthropic_temperature_deprecated"
+      | "provider_resource_not_found"
+      | "azure_key_auth_disabled"
+      | "other"
+      | null;
     message: string | null;
   };
 }

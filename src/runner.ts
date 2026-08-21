@@ -395,6 +395,17 @@ export function createRunDiagnostics(
     .filter((event) => event.eventType === "session.info" && event.data.infoType === "configuration")
     .flatMap((event) => typeof event.data.message === "string" ? [event.data.message] : []);
   const httpStatus = runnerError?.match(/\b([45]\d{2})\b/)?.[1];
+  // The generic session-level auth error the CLI surfaces (and that we store as
+  // runnerError) never carries the underlying provider error code, so detect
+  // this signature from the raw model.call_failure event instead of runnerError.
+  const azureKeyAuthDisabled = events.some((event) => {
+    if (event.eventType !== "model.call_failure") {
+      return false;
+    }
+    const errorMessage = event.data.errorMessage;
+    return typeof errorMessage === "string"
+      && /AuthenticationTypeDisabled|key.?based authentication is disabled/i.test(errorMessage);
+  });
   return {
     schemaVersion: 1,
     runtime,
@@ -403,7 +414,9 @@ export function createRunDiagnostics(
     configurationMessages,
     providerFailure: {
       httpStatus: httpStatus ? Number(httpStatus) : null,
-      signature: /temperature.*deprecated/i.test(runnerError ?? "")
+      signature: azureKeyAuthDisabled
+        ? "azure_key_auth_disabled"
+      : /temperature.*deprecated/i.test(runnerError ?? "")
         ? "anthropic_temperature_deprecated"
       : /resource not found on provider.*\b404\b/i.test(runnerError ?? "")
         ? "provider_resource_not_found"
