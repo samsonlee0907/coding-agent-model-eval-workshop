@@ -494,16 +494,6 @@ This is a first working milestone, not a finished benchmark suite:
 For hands-on exercises, run-contract guidance, reproducibility/fair-comparison checklists, and
 responsible cost controls, see [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
 
-## Development
-
-```bash
-npm run typecheck   # tsc --noEmit
-npm test            # node:test suite (fixtures/mocks, no network)
-npm run build       # compile to dist/
-```
-
-The same commands work verbatim in PowerShell and bash/zsh.
-
 ## Example run outcome
 
 Real output from three local runs — the same task and execution policy against three Foundry
