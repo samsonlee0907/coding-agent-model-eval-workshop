@@ -1,4 +1,4 @@
-# Coding Agent Benchmark Workshop
+# Coding Agent Model Evaluation Workshop
 
 > A TypeScript/npm toolkit for benchmarking coding models on **efficiency vs. quality** —
 > running real, multi-round agent sessions and reporting what each model spends against whether
