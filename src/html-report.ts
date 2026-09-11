@@ -10,7 +10,6 @@ import type {
   BenchmarkRun,
   ConformanceCheckResult,
   ConformanceProbeResult,
-  JudgeFinding,
   LlmEvaluationResult,
   LlmJudgeScore,
   Metric,
@@ -679,11 +678,6 @@ function judgeSection(
 ): string {
   const judge = evaluation.judge;
   const readsFullSource = judge.promptVersion === "benchmark-judge-v3";
-  const insights = evaluation.comparativeInsights ?? [];
-  const findings = runs.flatMap((run) => (scoreByRunId.get(run.runId)?.findings ?? []).map((finding) => ({
-    finding,
-    candidate: candidateLabel(run),
-  })));
   return [
     "<section>",
     "<h2>LLM-judge code review</h2>",
@@ -696,19 +690,12 @@ function judgeSection(
     pill(`Prompt: ${judge.promptVersion}`, readsFullSource ? "good" : "warn"),
     pill(`Endpoint ${judge.endpointFingerprint.slice(0, 12)}\u2026`, "muted"),
     "</div>",
-    "<h3>Judge's comparative read</h3>",
-    `<blockquote class="lead">${escapeHtml(evaluation.comparisonSummary)}</blockquote>`,
+    "<p class=\"note\">Only structured score availability, numeric dimensions, and count-based review coverage are included here. Judge narratives, findings, evidence, insights, risks, and limitations are omitted for publication safety; the full evaluation artifact remains sensitive local evidence.</p>",
     dimensionMatrix(runs, scoreByRunId),
-    comparativeInsightsBlock(insights),
-    findingsBlock(findings),
-    "<h3>Per-candidate analysis</h3>",
+    "<h3>Per-candidate score availability</h3>",
     "<div class=\"quality-grid\">",
     ...runs.map((run) => judgeCard(run, scoreByRunId.get(run.runId), inspections.get(run.runId))),
     "</div>",
-    "<h3>Stated limitations of this evaluation</h3>",
-    evaluation.limitations.length === 0
-      ? "<p class=\"note\">None stated.</p>"
-      : `<ul class="limitations">${evaluation.limitations.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>`,
     orphanScores.length === 0
       ? ""
       : `<p class="note warn-text">${orphanScores.length} judged run${orphanScores.length === 1 ? " is" : "s are"} no longer present in this runs directory and ${orphanScores.length === 1 ? "was" : "were"} omitted: ${orphanScores.map((score) => `<code>${escapeHtml(score.runId)}</code>`).join(", ")}.</p>`,
@@ -760,66 +747,6 @@ function dimensionMatrix(runs: readonly BenchmarkRun[], scoreByRunId: Map<string
   ].join("\n");
 }
 
-function comparativeInsightsBlock(insights: readonly { theme: string; observation: string; candidates: string[] }[]): string {
-  if (insights.length === 0) {
-    return "";
-  }
-  return [
-    "<h3>Cross-candidate divergences</h3>",
-    "<p class=\"note\">Observations that only appear when the implementations are read side by side &mdash; per-candidate scoring cannot produce these.</p>",
-    "<div class=\"insight-grid\">",
-    ...insights.map((insight) => [
-      "<article class=\"insight\">",
-      `<span class="insight-theme">${escapeHtml(insight.theme)}</span>`,
-      `<p>${escapeHtml(insight.observation)}</p>`,
-      insight.candidates.length === 0
-        ? ""
-        : `<div class="insight-candidates">${insight.candidates.map((candidate) => `<code>${escapeHtml(candidate)}</code>`).join(" ")}</div>`,
-      "</article>",
-    ].join("")),
-    "</div>",
-  ].join("\n");
-}
-
-/**
- * Findings ordered by severity, each anchored to a line of inspected code.
- * Citations the harness could not resolve are shown but explicitly marked, so a
- * reviewer can tell a checked claim from an unanchored one at a glance.
- */
-function findingsBlock(entries: ReadonlyArray<{ finding: JudgeFinding; candidate: string }>): string {
-  if (entries.length === 0) {
-    return "";
-  }
-  const rank = { high: 0, medium: 1, low: 2 } as const;
-  const ordered = [...entries].sort((left, right) =>
-    rank[left.finding.severity] - rank[right.finding.severity] || left.candidate.localeCompare(right.candidate));
-  const unverified = ordered.filter((entry) => !entry.finding.citationVerified).length;
-  return [
-    "<h3>Code findings</h3>",
-    `<p class="note">${ordered.length} finding${ordered.length === 1 ? "" : "s"}, highest severity first. ${
-      unverified === 0
-        ? "Every citation resolved to a real line in the inspected artifact."
-        : `${unverified} citation${unverified === 1 ? " could" : "s could"} not be resolved against the inspected artifact and ${unverified === 1 ? "is" : "are"} marked <span class="badge warn">unverified</span> &mdash; treat ${unverified === 1 ? "it" : "them"} as an unchecked claim.`
-    }</p>`,
-    "<div class=\"table-wrap\">",
-    "<table>",
-    "<thead><tr><th>Severity</th><th>Candidate</th><th>Location</th><th>Category</th><th>Finding</th></tr></thead>",
-    "<tbody>",
-    ...ordered.map(({ finding, candidate }) => [
-      "<tr>",
-      `<td><span class="badge ${finding.severity === "high" ? "bad" : finding.severity === "medium" ? "warn" : "muted"}">${escapeHtml(finding.severity)}</span></td>`,
-      `<td class="candidate">${escapeHtml(candidate)}</td>`,
-      `<td><code>${escapeHtml(finding.file)}${finding.line === null ? "" : `:${finding.line}`}</code>${finding.citationVerified ? "" : " <span class=\"badge warn\">unverified</span>"}</td>`,
-      `<td><span class="dim">${escapeHtml(finding.category)}</span></td>`,
-      `<td>${escapeHtml(finding.claim)}${finding.evidence ? `<div class="finding-evidence"><code>${escapeHtml(finding.evidence)}</code></div>` : ""}</td>`,
-      "</tr>",
-    ].join("")),
-    "</tbody>",
-    "</table>",
-    "</div>",
-  ].join("\n");
-}
-
 function judgeCard(
   run: BenchmarkRun,
   score: LlmJudgeScore | undefined,
@@ -846,10 +773,7 @@ function judgeCard(
     scoreChip("Maintainability", score.maintainability),
     "</div>",
     reviewCoverage(score, inspection),
-    `<p class="rationale-text">${escapeHtml(score.rationale)}</p>`,
-    score.risks.length === 0
-      ? "<p class=\"muted-cell\">No risks reported.</p>"
-      : `<div class="risks"><span class="risks-label">Risks &amp; caveats</span><ul>${score.risks.map((risk) => `<li>${escapeHtml(risk)}</li>`).join("")}</ul></div>`,
+    "<p class=\"muted-cell\">Narrative details omitted for publication safety.</p>",
     "</article>",
   ].join("");
 }

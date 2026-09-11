@@ -86,11 +86,11 @@ git -C $workspaceB status --porcelain
 ```
 
 In each copied config, replace every `REPLACE_...` value. Set the same task,
-baseline, environment fingerprint, rounds, execution policy, validator, and
-cohort `artifactsDirectory` (`$runs`); change only the recorded candidate
-provider/model/deployment and that attempt's `workspacePath`. Before **every**
-run, reset or check out the pinned baseline in its dedicated workspace and
-confirm `git status --porcelain` is empty.
+baseline, environment fingerprint, **ordered round prompts and modes**,
+execution policy, validator, and cohort `artifactsDirectory` (`$runs`); change
+only the recorded candidate provider/model/deployment and that attempt's
+`workspacePath`. Before **every** run, reset or check out the pinned baseline
+in its dedicated workspace and confirm `git status --porcelain` is empty.
 
 ```powershell
 git -C $workspaceA checkout --detach $baseline
@@ -139,6 +139,12 @@ acceptance discipline across the cohort. Rounds model additional user turns
 after initial work; they should not repeat or change the task or silently add
 requirements.
 
+Round plans are immutable comparison inputs: prompt text, order, count, and
+`enqueue`/`immediate` mode must match for a strict comparison. New run
+contracts persist them as version 2. Older version-1 artifacts remain readable,
+but their unrecorded round plans make comparisons conservatively **not strictly
+comparable**.
+
 For example, a two-round repair task can first say **"Implement the task and
 its focused tests."** and then **"Review the changes against the task, run
 validation, and repair remaining failures."** This measures the same
@@ -156,7 +162,7 @@ score:
 | Required conformance check | A task-owned expected behavior held against the delivered artifact. | A nonzero exit makes the conformance verdict non-conformant. |
 | Advisory conformance check | A useful but non-decisive signal. | A nonzero exit records **Weak**, not failure. |
 | Artifact inspection | Inventory/export facts and npm artifact-integrity checks. | Independent evidence; unavailable checks do not become passes. |
-| Optional fixed-rubric LLM judge | Qualitative review of final source with verifiable citations. | Supplementary only; never overrides deterministic outcome. |
+| Optional fixed-rubric LLM judge | Qualitative review of final source with verifiable citations. | Supplementary only; never overrides deterministic outcome. Its full free-text output stays local-sensitive. |
 
 There are no built-in numeric weights, and JSON does not support custom judge
 dimensions or weights today. Keep deterministic acceptance in validation and
@@ -241,7 +247,9 @@ event logs, validation/probe output, diagnostics, patches, and copied
 workspaces can contain task content, paths, or other information unsuitable for
 publication. The sanitized HTML report is not proof that every raw artifact is
 safe to share: it is a separate export that retains only allowlisted replay and
-conformance metadata, and it makes no external requests.
+conformance metadata plus structured numeric judge scores, and it makes no
+external requests. The full `llm-evaluation-*.json` judge artifact remains
+sensitive local evidence.
 
 Run `npm run prices:refresh -- --runs <cohort-parent>` after collecting a
 cohort. It detects OpenAI and/or Anthropic candidates and fetches only the

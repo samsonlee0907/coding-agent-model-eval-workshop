@@ -89,7 +89,6 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
       },
     },
     rounds: [
-      { prompt: options.task.trim() },
       {
         prompt: [
           "Run npm test and npm run build.",

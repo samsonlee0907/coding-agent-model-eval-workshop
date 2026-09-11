@@ -618,10 +618,11 @@ function closeServer(server: Server): Promise<void> {
 
 function materializeContract(config: BenchmarkConfig): RunContract {
   return {
-    contractVersion: 1,
+    contractVersion: 2,
     task: config.contract.task,
     candidate: config.contract.candidate,
     execution: config.contract.execution,
+    rounds: config.rounds.map((round) => ({ ...round })),
     runtime: {
       sdkVersion: config.contract.runtime?.sdkVersion ?? installedSdkVersion(),
       cliVersion: config.contract.runtime?.cliVersion ?? "runtime-reported-in-session.start-event",

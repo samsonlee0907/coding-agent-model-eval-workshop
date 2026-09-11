@@ -128,11 +128,11 @@ function evaluationFor(runIds: readonly string[]): LlmEvaluationResult {
       requirementCoverage: 4,
       maintainability: index === 0 ? 4 : 2,
       evidenceConfidence: "low" as const,
-      rationale: `Rationale for ${runId} with <script> unsafe & "quoted".`,
-      risks: index === 0 ? ["A stated risk"] : [],
+      rationale: `JUDGE-FREE-TEXT-SECRET rationale for ${runId}`,
+      risks: index === 0 ? ["JUDGE-FREE-TEXT-SECRET risk"] : [],
     })),
-    comparisonSummary: "Candidate A leads on maintainability.",
-    limitations: ["Judged from artifacts only."],
+    comparisonSummary: "JUDGE-FREE-TEXT-SECRET summary",
+    limitations: ["JUDGE-FREE-TEXT-SECRET limitation"],
     rawResponse: "{}",
   };
 }
@@ -189,14 +189,30 @@ test("html replay keeps metadata but never embeds output-bearing event payloads"
   }
 });
 
-test("html report escapes untrusted judge text", () => {
+test("html report omits all free-text judge content", () => {
   const runs = [
     run("run-a", "openai", "model-a", resolved),
     run("run-b", "anthropic", "model-b", resolved),
   ];
-  const html = renderHtmlComparisonReport(runs, evaluationFor(["run-a", "run-b"]));
-  assert.doesNotMatch(html, /<script>/);
-  assert.match(html, /&lt;script&gt;/);
+  const evaluation = evaluationFor(["run-a", "run-b"]);
+  evaluation.comparativeInsights = [{
+    theme: "JUDGE-FREE-TEXT-SECRET theme",
+    observation: "JUDGE-FREE-TEXT-SECRET observation",
+    candidates: ["JUDGE-FREE-TEXT-SECRET candidate"],
+  }];
+  evaluation.scores[0]!.findings = [{
+    file: "JUDGE-FREE-TEXT-SECRET.ts",
+    line: 1,
+    severity: "high",
+    category: "correctness",
+    claim: "JUDGE-FREE-TEXT-SECRET claim",
+    evidence: "JUDGE-FREE-TEXT-SECRET evidence",
+    citationVerified: true,
+  }];
+  const html = renderHtmlComparisonReport(runs, evaluation);
+  assert.match(html, /Narrative details omitted for publication safety/);
+  assert.match(html, /Score dimensions/);
+  assert.doesNotMatch(html, /JUDGE-FREE-TEXT-SECRET/);
 });
 
 test("html report notes when no evaluation is attached", () => {
@@ -270,12 +286,11 @@ test("html report renders a decision summary and per-candidate quality cards", (
   assert.match(html, /Decision summary/);
   assert.match(html, /Fastest deterministic pass/);
   assert.match(html, /Highest judged code quality/);
-  // Per-candidate analysis cards replace the old score table.
-  assert.match(html, /Per-candidate analysis/);
+  // Per-candidate score cards retain structured values only.
+  assert.match(html, /Per-candidate score availability/);
   assert.match(html, /quality-card/);
-  assert.match(html, /Judge's comparative read/);
-  // The judge's full rationale narrative is surfaced (escaped).
-  assert.match(html, /Rationale for run-a/);
+  assert.match(html, /Narrative details omitted for publication safety/);
+  assert.doesNotMatch(html, /JUDGE-FREE-TEXT-SECRET/);
 });
 
 test("html report requires at least one run", () => {
@@ -339,7 +354,7 @@ test("report surfaces deterministic artifact integrity a passing test command hi
   }
 });
 
-test("report marks judge findings whose citation does not resolve to inspected code", () => {
+test("report retains numeric judge evidence while omitting findings and insights", () => {
   const root = mkdtempSync(join(tmpdir(), "report-findings-"));
   try {
     mkdirSync(join(root, "src"), { recursive: true });
@@ -362,14 +377,10 @@ test("report marks judge findings whose citation does not resolve to inspected c
 
     const html = renderHtmlComparisonReport([inspected], evaluation);
 
-    assert.match(html, /Code findings/);
-    assert.match(html, /Anchored claim/);
-    assert.match(html, /Unanchored claim/);
-    assert.match(html, /1 citation could not be resolved/);
-    assert.match(html, /badge warn">unverified/);
-    // Cross-candidate divergences and the new dimensions are rendered.
-    assert.match(html, /Cross-candidate divergences/);
-    assert.match(html, /Only one candidate rejects NaN\./);
+    assert.match(html, /Narrative details omitted for publication safety/);
+    assert.doesNotMatch(html, /Anchored claim/);
+    assert.doesNotMatch(html, /Unanchored claim/);
+    assert.doesNotMatch(html, /Only one candidate rejects NaN\./);
     assert.match(html, /Test adequacy/);
     assert.match(html, /Reviewed <strong>1<\/strong> of <strong>1<\/strong>/);
   } finally {

@@ -47,7 +47,7 @@
   },
   "rounds": [
     {
-      "prompt": "Start the implementation task now. Use the fetch/search MCP tools if you need external documentation."
+      "prompt": "Review the task specification, use the fetch/search MCP tools only when needed for the stated research, then implement and validate the requested change."
     },
     {
       "prompt": "Review your changes, run the configured validation, and repair any remaining failures."

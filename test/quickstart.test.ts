@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { createQuickstartWorkspace, parseQuickstartOptions } from "../src/quickstart.js";
+import { benchmarkWorkRequests, dispatchBenchmarkWorkRequests } from "../src/runner.js";
 import { resolveValidationCommand, runValidation } from "../src/validation.js";
 import { scrubFoundryEnvironment } from "../src/validation.js";
 
@@ -28,6 +29,28 @@ test("quickstart creates a local baseline with the Foundry-only provider contrac
   assert.equal(existsSync(join(quickstart.workspacePath, ".git")), true);
   assert.equal(readFileSync(join(quickstart.workspacePath, "reference.txt"), "utf8"), "source artifact");
   assert.doesNotMatch(readFileSync(quickstart.configPath, "utf8"), /services\.ai\.azure\.com/);
+});
+
+test("quickstart dispatches its task before its validation-and-repair follow-up", async () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-quickstart-order-"));
+  const quickstart = createQuickstartWorkspace({
+    task: "Build a counter application.",
+    outputDirectory: join(root, "output"),
+    model: "gpt-5.6-terra",
+    provider: "openai",
+  });
+  const sent: string[] = [];
+  await dispatchBenchmarkWorkRequests(
+    benchmarkWorkRequests(quickstart.config.contract.task.prompt, quickstart.config.rounds),
+    async (request) => { sent.push(request.prompt); },
+    0,
+    () => {},
+  );
+  assert.deepEqual(sent, [
+    "Build a counter application.",
+    quickstart.config.rounds[0]!.prompt,
+  ]);
+  assert.doesNotMatch(quickstart.config.rounds[0]!.prompt, /Build a counter application/);
 });
 
 test("quickstart accepts only exact Foundry provider values and rejects removed configuration", () => {

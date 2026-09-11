@@ -63,7 +63,9 @@ side-by-side comparison report.
   local evidence and may contain sensitive content.
 - **Optional LLM-judge code review** — reads each candidate's *final source files* (line-numbered),
   scores seven dimensions, and returns findings that must cite `file:line`. The harness re-verifies
-  every citation and badges the ones it cannot anchor. Never overrides the deterministic result.
+  every citation and badges the ones it cannot anchor. Its full free-text output remains local
+  evidence; the publication-oriented HTML shows only structured score data. It never overrides the
+  deterministic result.
 
 ## How it works
 
@@ -349,13 +351,12 @@ Produces a single self-contained `comparison-report.html` (no external assets) w
    shell rather than an edit tool legitimately shows *Unavailable* for the edit-derived rows.
 6. **Comparability & lineage** — task ID, baseline commit, container fingerprint, reasoning effort,
    and wire adaptation per run.
-7. **LLM-judge code review** (closing section) — when an `llm-evaluation-*.json` artifact is present,
-   the latest one is joined by run ID and rendered as the judge's comparative read, a
-   dimension × candidate score matrix, cross-candidate divergences, a severity-ordered **code
-   findings** table with `file:line` citations (unresolvable citations badged `unverified`), and a
-   per-candidate card carrying review coverage, the full rationale, and risks & caveats. Evaluations
-   produced by an earlier prompt version are banner-flagged as having seen only a truncated diff.
-   Otherwise this section explains how to produce an evaluation.
+7. **LLM-judge quality evaluation** (closing section) — when an `llm-evaluation-*.json` artifact is
+   present, the latest one is joined by run ID and rendered as a dimension × candidate score matrix
+   with per-candidate score availability and count-based review coverage. Narrative summaries,
+   findings/evidence, insights, risks, and limitations remain only in the sensitive local evaluation
+   artifact. Evaluations produced by an earlier prompt version are banner-flagged as having seen
+   only a truncated diff.
 
 Unavailable metrics stay labeled, failures are kept in, and contract drift is flagged as *not
 strictly comparable*. Override the inputs with `--output <file.html>` and `--evaluation <file.json>`.
@@ -564,11 +565,12 @@ remains explicitly scenario-labelled.
 Do not rank away caveats: contract drift is marked **not strictly comparable**,
 failures and repeats stay in the cohort, and unsupported or missing metrics stay
 **Unavailable** rather than becoming zero. Only the self-contained HTML report
-is designed for publication: it embeds allowlisted replay and conformance
-metadata and makes no external requests. Raw run artifacts, per-run
-`report.md`, `model-selection-report.md`, `run.json`, event logs,
-validation/probe output, and workspace artifacts remain sensitive local
-evidence and must be reviewed before any separate sharing.
+is designed for publication: it embeds allowlisted replay/conformance metadata
+and structured numeric judge scores, and makes no external requests. Raw run
+artifacts, per-run `report.md`, `model-selection-report.md`, `run.json`, event
+logs, validation/probe output, the full `llm-evaluation-*.json`, and workspace
+artifacts remain sensitive local evidence and must be reviewed before any
+separate sharing.
 
 For an end-to-end controlled cohort and task-quality guidance, see the
 [task authoring guide](docs/TASK_AUTHORING_GUIDE.md).

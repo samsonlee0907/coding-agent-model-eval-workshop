@@ -188,30 +188,40 @@ export interface FoundryProviderIdentity {
   requestAdaptation: "openai-null-refusal-sanitizer" | "strip-temperature";
 }
 
+export interface BenchmarkRound {
+  prompt: string;
+  mode?: "enqueue" | "immediate";
+}
+
 export interface RunContract {
-  contractVersion: 1;
+  /** Version 1 run artifacts did not persist rounds and are not safely comparable to version 2. */
+  contractVersion: 1 | 2;
   task: TaskContract;
   candidate: CandidateContract;
   execution: ExecutionPolicy;
   runtime: RuntimeIdentity;
   foundryProvider?: FoundryProviderIdentity;
+  /** Version 2 persists the follow-up work requests used for this attempt. */
+  rounds?: BenchmarkRound[];
 }
 
 export interface ComparisonContract {
-  contractVersion: 1;
+  contractVersion: 1 | 2;
   comparisonId: string;
   sharedTask: TaskContract;
   sharedExecution: ExecutionPolicy;
+  /** Present only when all source run contracts persisted their round plans. */
+  sharedRounds?: BenchmarkRound[];
   /** Two or more candidates evaluated against the same shared task/execution. */
   candidates: CandidateContract[];
 }
 
 export interface BenchmarkConfig {
-  contract: Omit<RunContract, "contractVersion" | "runtime" | "foundryProvider"> & {
+  contract: Omit<RunContract, "contractVersion" | "runtime" | "foundryProvider" | "rounds"> & {
     runtime?: Partial<RuntimeIdentity>;
     foundryProvider: FoundryProviderConfig;
   };
-  rounds: Array<{ prompt: string; mode?: "enqueue" | "immediate" }>;
+  rounds: BenchmarkRound[];
   workspacePath: string;
   artifactsDirectory?: string;
 }

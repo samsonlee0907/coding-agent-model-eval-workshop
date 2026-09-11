@@ -20,6 +20,7 @@ export function compareRunContracts(left: RunContract, right: RunContract): Cont
   const drift = [
     ...diff("task", left.task, right.task),
     ...diff("execution", left.execution, right.execution),
+    ...roundsDrift(left, right),
     ...diff("runtime.sdkVersion", left.runtime.sdkVersion, right.runtime.sdkVersion),
     ...diff("runtime.cliVersion", left.runtime.cliVersion, right.runtime.cliVersion),
     ...diff(
@@ -61,13 +62,26 @@ export function createComparisonContract(
     throw new RangeError("A comparison contract requires at least two candidates.");
   }
   const [shared] = contracts;
+  const roundsRecorded = contracts.every((contract) => contract.rounds !== undefined);
   return {
-    contractVersion: 1,
+    contractVersion: roundsRecorded ? 2 : 1,
     comparisonId,
     sharedTask: shared.task,
     sharedExecution: shared.execution,
+    ...(roundsRecorded ? { sharedRounds: shared.rounds } : {}),
     candidates: contracts.map((contract) => contract.candidate),
   };
+}
+
+function roundsDrift(left: RunContract, right: RunContract): ContractDrift[] {
+  if (left.rounds === undefined || right.rounds === undefined) {
+    return [{
+      path: "rounds",
+      left: left.rounds ?? "not recorded by contract version 1",
+      right: right.rounds ?? "not recorded by contract version 1",
+    }];
+  }
+  return diff("rounds", left.rounds, right.rounds);
 }
 
 function diff(path: string, left: unknown, right: unknown): ContractDrift[] {

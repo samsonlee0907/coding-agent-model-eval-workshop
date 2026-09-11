@@ -8,7 +8,7 @@ import type { BenchmarkRun, RunContract } from "../src/types.js";
 import { streamingEvents } from "./fixtures/events.js";
 
 const contract: RunContract = {
-  contractVersion: 1,
+  contractVersion: 2,
   task: {
     id: "task-1",
     prompt: "Fix it.",
@@ -27,6 +27,7 @@ const contract: RunContract = {
     cachePolicy: "default",
     reasoningEffort: "high",
   },
+  rounds: [{ prompt: "Review and repair." }],
   runtime: { sdkVersion: "1.0.10", cliVersion: "1", nodeVersion: "v22" },
 };
 

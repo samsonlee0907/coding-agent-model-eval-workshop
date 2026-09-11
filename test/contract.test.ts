@@ -5,7 +5,7 @@ import type { RunContract } from "../src/types.js";
 
 function contract(): RunContract {
   return {
-    contractVersion: 1,
+    contractVersion: 2,
     task: {
       id: "task-1",
       prompt: "Fix the parser.",
@@ -24,6 +24,10 @@ function contract(): RunContract {
       cachePolicy: "default",
       reasoningEffort: "high",
     },
+    rounds: [
+      { prompt: "Implement the task." },
+      { prompt: "Review and repair.", mode: "immediate" },
+    ],
     runtime: { sdkVersion: "1.0.10", cliVersion: "1.2.3", nodeVersion: "v22" },
   };
 }
@@ -81,6 +85,35 @@ test("configuring identical MCP servers stays strictly comparable and stable", (
 
   assert.equal(compareRunContracts(left, right).strictlyComparable, true);
   assert.equal(immutableContractHash(left), immutableContractHash(right));
+});
+
+test("round prompt, count, and mode are immutable comparability inputs", () => {
+  const left = contract();
+  const right = contract();
+  right.rounds![0]!.prompt = "Implement only the API.";
+  assert.equal(compareRunContracts(left, right).strictlyComparable, false);
+  assert.equal(compareRunContracts(left, right).drift[0]?.path, "rounds[0].prompt");
+  assert.notEqual(immutableContractHash(left), immutableContractHash(right));
+
+  const addedRound = contract();
+  addedRound.rounds!.push({ prompt: "One more review." });
+  assert.equal(compareRunContracts(left, addedRound).drift[0]?.path, "rounds");
+
+  const changedMode = contract();
+  changedMode.rounds![1]!.mode = "enqueue";
+  assert.equal(compareRunContracts(left, changedMode).drift[0]?.path, "rounds[1].mode");
+});
+
+test("version-1 contracts remain readable but are conservatively not comparable", () => {
+  const historical = { ...contract(), contractVersion: 1 as const, rounds: undefined };
+  const current = contract();
+  const comparison = compareRunContracts(historical, current);
+  assert.equal(comparison.strictlyComparable, false);
+  assert.equal(comparison.drift[0]?.path, "rounds");
+
+  const comparisonContract = createComparisonContract("legacy-cmp", [historical, current]);
+  assert.equal(comparisonContract.contractVersion, 1);
+  assert.equal(comparisonContract.sharedRounds, undefined);
 });
 
 test("compares more than two candidates against a shared baseline", () => {
