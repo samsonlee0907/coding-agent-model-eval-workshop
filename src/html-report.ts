@@ -285,7 +285,7 @@ function verdictCell(probe: ConformanceProbeResult | null): string {
     return "<span class=\"muted-cell\">Not probed</span>";
   }
   if (probe.conformant === null) {
-    return `<span class="badge muted" title="${escapeHtml(probe.reason ?? "The probe did not execute.")}">Inconclusive</span>`;
+    return `<span class="badge muted" title="The probe could not complete conclusively; no check result is available. Recorded duration: ${formatInteger(probe.durationMs)} ms.">Inconclusive</span>`;
   }
   const totals = probe.totals;
   const detail = `${totals.passed} passed, ${totals.failed} failed, ${totals.weak} weak, ${totals.errored} errored`;

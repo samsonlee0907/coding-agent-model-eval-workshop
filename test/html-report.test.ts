@@ -584,3 +584,18 @@ test("runs recorded before probes existed read as not probed rather than as pass
   );
   assert.match(html, /Not probed/);
 });
+
+test("inconclusive conformance omits an arbitrary probe reason", () => {
+  const probe = {
+    ...probeResult([{ id: "entry-resolves", status: "error" }]),
+    conformant: null,
+    reason: "PROBE-REASON-SECRET",
+  };
+  const html = renderHtmlComparisonReport(
+    [probed(run("run-a", "openai", "model-a", resolved), probe)],
+    null,
+  );
+  assert.match(html, /Inconclusive/);
+  assert.match(html, /The probe could not complete conclusively; no check result is available\. Recorded duration: 9,000 ms\./);
+  assert.doesNotMatch(html, /PROBE-REASON-SECRET/);
+});
