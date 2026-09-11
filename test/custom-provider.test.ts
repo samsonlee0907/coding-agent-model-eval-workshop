@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import { deriveFoundryInferenceBase } from "../src/foundry-endpoint.js";
 import {
@@ -70,6 +71,13 @@ test("rejects legacy custom-provider benchmark configuration at load time", () =
   const path = join(mkdtempSync(join(tmpdir(), "benchmark-config-")), "legacy.json");
   writeFileSync(path, JSON.stringify({ contract: { customProvider: { type: "openai" } } }));
   assert.throws(() => loadBenchmarkConfig(path), /Legacy\/custom provider configuration is unsupported/);
+});
+
+test("loads the Foundry-only benchmark template with a matching candidate provider", () => {
+  const config = loadBenchmarkConfig(fileURLToPath(new URL("../benchmark.example.json", import.meta.url)));
+  assert.equal(config.contract.foundryProvider.type, "openai");
+  assert.equal(config.contract.candidate.provider, config.contract.foundryProvider.type);
+  assert.equal(config.contract.execution.reasoningEffort, "high");
 });
 
 test("fingerprints the derived endpoint and discloses the selected compatibility adaptation", () => {

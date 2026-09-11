@@ -87,7 +87,7 @@ Each run moves through four stages, each owned by a focused part of the codebase
 | **GitHub Copilot SDK** | `@github/copilot-sdk` — pulled in automatically by `npm install`; it **bundles the Copilot CLI runtime**, so no separate install is required | [github/copilot-sdk](https://github.com/github/copilot-sdk) · [npm](https://www.npmjs.com/package/@github/copilot-sdk) |
 | **Copilot CLI** *(optional)* | Only if you want to run against a newer standalone runtime than the one bundled with the SDK; point the toolkit at it via `BENCHMARK_COPILOT_CLI_PATH` or have `copilot` on your `PATH` | [GitHub Copilot CLI docs](https://docs.github.com/copilot/how-tos/set-up/install-copilot-cli) |
 | **Microsoft Foundry project + deployment** | A Foundry project with at least one OpenAI- or Anthropic-compatible model deployment you can call. This toolkit does **not** provision Foundry for you. | [Create a Foundry project](https://learn.microsoft.com/azure/ai-foundry/how-to/create-projects) · [Deploy a model](https://learn.microsoft.com/azure/ai-foundry/how-to/deploy-models-managed) |
-| **Foundry endpoint + API key** | The project endpoint URL and a key, supplied as environment variables (see [Configuration](#configuration)) | Foundry portal → your project → **Overview / Keys and Endpoint** |
+| **Foundry endpoint + API key** | The Foundry resource root and a key, supplied as environment variables (see [Configuration](#configuration)) | Foundry portal → resource **Overview / Keys and Endpoint** |
 
 Notes:
 
@@ -127,19 +127,19 @@ any session starts.
 
 **PowerShell (Windows)**
 ```powershell
-$env:FOUNDRY_ENDPOINT = "https://<your-foundry-resource>.services.ai.azure.com/api/projects/<project>"
+$env:FOUNDRY_ENDPOINT = "https://<resource>.services.ai.azure.com"
 $env:FOUNDRY_API_KEY  = "<your-foundry-api-key>"
 ```
 
 **bash / zsh (Linux/macOS)**
 ```bash
-export FOUNDRY_ENDPOINT="https://<your-foundry-resource>.services.ai.azure.com/api/projects/<project>"
+export FOUNDRY_ENDPOINT="https://<resource>.services.ai.azure.com"
 export FOUNDRY_API_KEY="<your-foundry-api-key>"
 ```
 
 | Variable | Required | Purpose |
 |---|---|---|
-| `FOUNDRY_ENDPOINT` | Yes | Your Foundry project endpoint; OpenAI/Anthropic-compatible routes are derived from it. |
+| `FOUNDRY_ENDPOINT` | Yes | Your Foundry resource root (`https://<resource>.services.ai.azure.com`); OpenAI/Anthropic-compatible routes are derived from it. Do not include a project path. |
 | `FOUNDRY_API_KEY` | Yes | Key used to authenticate model calls to your deployment. |
 | `BENCHMARK_COPILOT_CLI_PATH` | No | Path to a standalone Copilot CLI runtime to use instead of the SDK's bundled one. |
 
@@ -334,8 +334,9 @@ Produces a single self-contained `comparison-report.html` (no external assets) w
    (files changed / insertions / deletions from each run's `changes.patch`), with outcome badges and
    relative bars.
 3. **Conformance probe** — a check × candidate matrix with a verdict row, a divergence banner when
-   validation and conformance disagree, and the captured failure output for every non-passing check.
-   Candidates whose run declared no probe read *Not probed* rather than passing by default.
+   validation and conformance disagree, and safe check status, exit-code, timeout, and duration
+   metadata for every non-passing check. Candidates whose run declared no probe read *Not probed*
+   rather than passing by default.
 4. **Code artifact inspection** — source/test file and line counts, export count, and the three
    integrity checks above, each red flag spelled out in prose beneath the table.
 5. **Agent efficiency profile** — transposed (metrics as rows, candidates as columns) because you
@@ -380,7 +381,8 @@ The report shows provider/model/deployment identities, output tokens, recorded
 agent turns and model-usage records, wall time, SDK cache share
 (`cacheReadTokens / inputTokens`), and a clearly labelled minimum published
 list-price comparison. Missing evidence remains unavailable. The evidence
-replay excludes private reasoning and redacts secret-named fields.
+replay contains event-specific allowlisted metadata only: no raw prompts,
+assistant messages, tool arguments/results, or validation output.
 
 ## Authoring tasks, instructions, and tools
 
