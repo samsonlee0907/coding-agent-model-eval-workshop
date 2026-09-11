@@ -4,14 +4,15 @@ import { loadBenchmarkRuns } from "./portfolio.js";
 import { loadLatestEvaluation, writeHtmlComparisonReport } from "./html-report.js";
 import { readFileSync } from "node:fs";
 import type { LlmEvaluationResult } from "./types.js";
+import { loadPricingSnapshot, parsePricingSnapshot } from "./pricing.js";
 
 if (process.argv.includes("--help")) {
-  console.log("Usage: npm run report:html -- [--runs <run-directory>] [--output <report.html>] [--evaluation <llm-evaluation.json>]");
+  console.log("Usage: npm run report:html -- [--runs <run-directory>] [--output <report.html>] [--evaluation <llm-evaluation.json>] [--pricing <pricing-snapshot.json>]");
 } else {
   try {
     const runsDirectory = resolve(argumentValue("--runs") ?? ".benchmark-runs");
     const outputPath = resolve(argumentValue("--output") ?? resolve(runsDirectory, "comparison-report.html"));
-    const runs = loadBenchmarkRuns(runsDirectory);
+    const runs = loadBenchmarkRuns(runsDirectory, { relocateArtifacts: true });
     if (runs.length === 0) {
       throw new RangeError(`No completed run.json artifacts found under ${runsDirectory}.`);
     }
@@ -19,10 +20,13 @@ if (process.argv.includes("--help")) {
     const evaluation: LlmEvaluationResult | null = evaluationPath
       ? (JSON.parse(readFileSync(resolve(evaluationPath), "utf8")) as LlmEvaluationResult)
       : loadLatestEvaluation(runsDirectory);
-    writeHtmlComparisonReport(runs, outputPath, evaluation);
+    const pricingPath = argumentValue("--pricing");
+    const pricing = pricingPath ? parsePricingSnapshot(readFileSync(resolve(pricingPath), "utf8")) : loadPricingSnapshot(runsDirectory);
+    writeHtmlComparisonReport(runs, outputPath, evaluation, pricing);
     console.log(JSON.stringify({
       runs: runs.length,
       evaluation: evaluation ? `${evaluation.judge.model} (${evaluation.scores.length} scored)` : "none",
+      pricing: pricing ? pricing.refreshedAt : "none",
       report: outputPath,
     }, null, 2));
   } catch (error) {

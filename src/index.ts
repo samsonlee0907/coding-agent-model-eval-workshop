@@ -9,6 +9,7 @@ export * from "./html-report.js";
 export * from "./metrics.js";
 export * from "./outcome.js";
 export * from "./portfolio.js";
+export * from "./pricing.js";
 export * from "./report.js";
 export * from "./progress.js";
 export * from "./runner.js";

@@ -1,13 +1,26 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import type { BenchmarkRun, Metric } from "./types.js";
 
 const minimumComparableRepeats = 3;
 
-export function loadBenchmarkRuns(directory: string): BenchmarkRun[] {
+export function loadBenchmarkRuns(directory: string, options: { relocateArtifacts?: boolean } = {}): BenchmarkRun[] {
   return walk(directory)
-    .filter((path) => path.endsWith("run.json"))
-    .map((path) => JSON.parse(readFileSync(path, "utf8")) as BenchmarkRun);
+    .filter((path) => basename(path) === "run.json")
+    .map((path) => {
+      const run = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as BenchmarkRun;
+      if (!options.relocateArtifacts) return run;
+      const artifactDirectory = resolve(dirname(path));
+      const local = (recorded: string) => join(artifactDirectory, basename(recorded.replaceAll("\\", "/")));
+      return { ...run, artifacts: {
+        ...run.artifacts, directory: artifactDirectory, workspace: undefined,
+        rawEvents: local(run.artifacts.rawEvents), normalizedEvents: local(run.artifacts.normalizedEvents),
+        diagnostics: local(run.artifacts.diagnostics), report: local(run.artifacts.report),
+        ...(run.artifacts.changes ? { changes: local(run.artifacts.changes) } : {}),
+        ...(run.artifacts.inspection ? { inspection: local(run.artifacts.inspection) } : {}),
+        ...(run.artifacts.conformance ? { conformance: local(run.artifacts.conformance) } : {}),
+      } };
+    });
 }
 
 export function writeModelSelectionReport(runs: readonly BenchmarkRun[], outputPath: string): void {

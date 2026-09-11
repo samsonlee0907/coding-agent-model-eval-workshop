@@ -4,6 +4,7 @@ import { compareRunContractSet } from "./contract.js";
 import { loadArtifactInspection } from "./artifact-inspection.js";
 import { divergesFromValidation, loadConformanceProbe } from "./conformance.js";
 import { isEditTool } from "./metrics.js";
+import { candidateKey, estimateRunPriceUsd, sdkReportedCacheShare, type PricingSnapshot } from "./pricing.js";
 import type {
   ArtifactInspection,
   BenchmarkRun,
@@ -36,8 +37,9 @@ export function writeHtmlComparisonReport(
   runs: readonly BenchmarkRun[],
   outputPath: string,
   evaluation: LlmEvaluationResult | null = null,
+  pricing: PricingSnapshot | null = null,
 ): void {
-  writeFileSync(outputPath, renderHtmlComparisonReport(runs, evaluation), "utf8");
+  writeFileSync(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing), "utf8");
 }
 
 /**
@@ -49,6 +51,7 @@ export function writeHtmlComparisonReport(
 export function renderHtmlComparisonReport(
   runs: readonly BenchmarkRun[],
   evaluation: LlmEvaluationResult | null = null,
+  pricing: PricingSnapshot | null = null,
 ): string {
   if (runs.length === 0) {
     throw new RangeError("An HTML comparison report requires at least one completed run.");
@@ -116,6 +119,7 @@ export function renderHtmlComparisonReport(
     artifactInspectionSection(runs, inspections),
 
     efficiencyProfileSection(runs),
+    publicationEvidenceSection(runs, pricing),
 
     "<section>",
     "<h2>Comparability &amp; lineage</h2>",
@@ -363,6 +367,16 @@ function efficiencyProfileSection(runs: readonly BenchmarkRun[]): string {
       cells: runs.map((run) => formatCount(run.metrics.cacheReadTokens)),
     },
     {
+      label: "SDK-reported cache share",
+      note: "cacheReadTokens / inputTokens. This is an SDK-counter ratio, not provider-wire normalization or billing.",
+      cells: runs.map((run) => {
+        const share = sdkReportedCacheShare(run);
+        return share.ratio === null
+          ? `<span class="muted-cell" title="${escapeHtml(share.reason ?? "not captured")}">Unavailable</span>`
+          : `${(share.ratio * 100).toFixed(2)}%`;
+      }),
+    },
+    {
       label: "Cache write tokens",
       note: "Prompt tokens written into the provider's cache.",
       cells: runs.map((run) => formatCount(run.metrics.cacheWriteTokens)),
@@ -405,6 +419,93 @@ function efficiencyProfileSection(runs: readonly BenchmarkRun[]): string {
     "</div>",
     "</section>",
   ].filter(Boolean).join("\n");
+}
+
+function publicationEvidenceSection(runs: readonly BenchmarkRun[], pricing: PricingSnapshot | null): string {
+  const grouped = [...new Map(runs.map((run) => [candidateKey(run), run])).keys()].map((candidate) => ({
+    candidate, attempts: runs.filter((run) => candidateKey(run) === candidate),
+  }));
+  const minimum = (attempts: readonly BenchmarkRun[]): { value: number | null; reason: string } => {
+    const candidate = pricing?.candidates.find((entry) => entry.candidate === candidateKey(attempts[0]!));
+    if (!candidate?.scenarios.length) return { value: null, reason: candidate?.unavailableReason ?? "No saved official pricing scenario." };
+    if (attempts[0]!.contract.candidate.provider === "anthropic") return { value: null, reason: "Claude cost is shown under explicit accounting assumptions, never minimized across them." };
+    const totals = candidate.scenarios.map((scenario) => {
+      const values = attempts.map((run) => estimateRunPriceUsd(run, pricing, scenario.id).totalUsd);
+      return values.every((value) => value !== null) ? values.reduce((sum, value) => sum + value!, 0) : null;
+    }).filter((value): value is number => value !== null);
+    return totals.length ? { value: Math.min(...totals), reason: "Minimum complete captured official list-price scenario; not actual billing." }
+      : { value: null, reason: "No one pricing scenario covers every attempt with complete telemetry." };
+  };
+  const values = grouped.map(({ candidate, attempts }) => ({
+    candidate, attempts, wall: completeMean(attempts, (run) => metricNumber(run.metrics.e2eMs)),
+    output: completeMean(attempts, (run) => metricNumber(run.metrics.outputTokens)),
+    calls: completeMean(attempts, (run) => run.modelCalls.length),
+    turns: completeMean(attempts, agentTurns),
+    cache: completeCacheShare(attempts), minimum: minimum(attempts),
+  }));
+  const rank = (label: string, rows: Array<{ candidate: string; value: number | null; note: string }>, percent = false): string => {
+    const known = rows.map((row) => row.value).filter((value): value is number => value !== null);
+    const max = known.length ? Math.max(...known) : 0;
+    return `<h3>${escapeHtml(label)}</h3><div class="table-wrap"><table><thead><tr><th>Recorded provider/model/deployment</th><th>Value</th><th>Rank / provenance</th></tr></thead><tbody>${
+      rows.map((row) => {
+        const rank = row.value === null || known.length < 2 ? "Unranked" : `${1 + known.filter((value) => value < row.value!).length}`;
+        const amount = row.value === null ? "Unavailable" : percent ? `${(row.value * 100).toFixed(2)}%` : formatInteger(row.value);
+        const width = row.value === null || max === 0 ? 0 : row.value / max * 100;
+        return `<tr><th scope="row">${escapeHtml(row.candidate)}</th><td class="num">${amount}<span class="minibar" style="width:${width}%"></span></td><td>${rank}<span class="row-note">${escapeHtml(row.note)}</span></td></tr>`;
+      }).join("")
+    }</tbody></table></div>`;
+  };
+  const replay = runs.map((run) => {
+    const events = replayEvents(run);
+    return `<details><summary>${escapeHtml(run.runId)} — ${escapeHtml(candidateKey(run))} (${events.length ? `${events.length} visible archived events` : "replay unavailable"})</summary>${
+      events.length ? `<ol class="replay">${events.map((event) => `<li><strong>${escapeHtml(event.type)}</strong><pre>${escapeHtml(event.text)}</pre></li>`).join("")}</ol>`
+        : `<p class="note">The normalized event archive is missing; no transcript is reconstructed from summary counters.</p>`}</details>`;
+  }).join("");
+  const pricingHtml = pricing
+    ? `<p class="note">Pricing snapshot saved ${escapeHtml(pricing.refreshedAt)}. Sources: ${pricing.sources.map((source) => `<a href="${escapeHtml(source.pricingUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(source.provider)} official prices</a>`).join(", ")}. Report generation and playback make no external requests.</p>${
+      pricing.candidates.map((candidate) => `<details><summary>${escapeHtml(candidate.candidate)} — ${candidate.scenarios.length} captured official alternatives</summary><div class="table-wrap"><table><thead><tr><th>Official label</th><th>Region</th><th>Cache scenario</th><th>Input</th><th>Cached read</th><th>Cache write</th><th>Output</th></tr></thead><tbody>${
+        candidate.scenarios.map((scenario) => `<tr><td>${escapeHtml(scenario.officialModel)}</td><td>${escapeHtml(scenario.region ?? "global public API")}</td><td>${escapeHtml(scenario.cacheTtl ?? "not applicable")}</td>${[scenario.input, scenario.cachedInput, scenario.cacheWrite, scenario.output].map((meter) => `<td class="num">${meter ? `$${meter.retailPrice}/1M` : "Unavailable"}</td>`).join("")}</tr>`).join("")
+      }</tbody></table></div><p class="note">${escapeHtml(candidate.unavailableReason ?? "Alternatives are retained without selecting a billing default.")}</p></details>`).join("")
+    }`
+    : '<p class="note">No pricing snapshot is embedded. Run <code>npm run prices:refresh -- --runs &lt;runs&gt;</code>; it fetches only official pricing pages for detected OpenAI and/or Anthropic candidates.</p>';
+  return [
+    "<section>", "<h2>Publication evidence: identities, efficiency, pricing, and replay</h2>",
+    "<p class=\"note\">All rankings are descriptive and retain failures/repeats. Missing data remains unavailable; no metric is zero-filled. Candidate identity is provider, recorded model ID, and deployment ID.</p>",
+    rank("Mean wall time per attempt", values.map((row) => ({ candidate: row.candidate, value: row.wall, note: "Complete captured wall-time evidence required." }))),
+    rank("Mean output tokens per attempt", values.map((row) => ({ candidate: row.candidate, value: row.output, note: "Output includes reported reasoning; it is not added twice." }))),
+    rank("Mean agent turns and model-usage records", values.map((row) => ({ candidate: row.candidate, value: row.turns, note: `Agent turns; model-usage records: ${row.calls === null ? "Unavailable" : row.calls.toFixed(2)}. These are not user rounds or verified HTTP requests.` }))),
+    rank("SDK-reported cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / SDK inputTokens; not billing or native normalization." })), true),
+    rank("Minimum published list-price estimate", values.map((row) => ({ candidate: row.candidate, value: row.minimum.value, note: row.minimum.reason }))),
+    "<h3>Scenario-aware pricing provenance</h3>", pricingHtml,
+    "<h3>Sanitized evidence replay</h3><p class=\"note\">This replay is generated solely from archived normalized events. Private reasoning and obvious secret fields are excluded; the report contains no network calls.</p>", replay,
+    "</section>",
+  ].join("\n");
+}
+
+function completeMean(runs: readonly BenchmarkRun[], select: (run: BenchmarkRun) => number | null): number | null {
+  const values = runs.map(select);
+  return values.every((value) => value !== null) ? values.reduce((sum, value) => sum + value!, 0) / values.length : null;
+}
+function completeCacheShare(runs: readonly BenchmarkRun[]): number | null {
+  const values = runs.map((run) => ({ input: metricNumber(run.metrics.inputTokens), reads: metricNumber(run.metrics.cacheReadTokens) }));
+  if (values.some((value) => value.input === null || value.reads === null)) return null;
+  const input = values.reduce((sum, value) => sum + value.input!, 0), reads = values.reduce((sum, value) => sum + value.reads!, 0);
+  return input > 0 && reads <= input ? reads / input : null;
+}
+function agentTurns(run: BenchmarkRun): number | null {
+  if (!existsSync(run.artifacts.normalizedEvents)) return null;
+  return readFileSync(run.artifacts.normalizedEvents, "utf8").split(/\r?\n/).filter(Boolean)
+    .map((line) => JSON.parse(line) as { eventType?: string }).filter((event) => event.eventType === "assistant.turn_start").length;
+}
+function replayEvents(run: BenchmarkRun): Array<{ type: string; text: string }> {
+  if (!existsSync(run.artifacts.normalizedEvents)) return [];
+  return readFileSync(run.artifacts.normalizedEvents, "utf8").split(/\r?\n/).filter(Boolean).flatMap((line) => {
+    const event = JSON.parse(line) as { eventType?: string; data?: Record<string, unknown> };
+    if (!event.eventType || !event.data || (event.eventType === "assistant.message" && ["analysis", "reasoning", "thinking"].includes(String(event.data.phase)))) return [];
+    const clean = JSON.stringify(event.data, (key, value) => /key|secret|token|authorization|cookie|password/i.test(key) ? "[REDACTED]" : value)
+      .replace(/[A-Za-z]:[\\/](?:Users|home)[\\/][^\s"']+/gi, "[USER_HOME]");
+    return [{ type: event.eventType, text: clean }];
+  });
 }
 
 function cacheHitShare(run: BenchmarkRun): number | null {

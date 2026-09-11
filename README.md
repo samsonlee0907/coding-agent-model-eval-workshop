@@ -31,6 +31,7 @@ side-by-side comparison report.
 - [Configuration](#configuration)
 - [Usage](#usage)
 - [Authoring tasks, instructions, and tools](#authoring-tasks-instructions-and-tools)
+- [Task authoring guide](docs/TASK_AUTHORING_GUIDE.md)
 - [Project structure](#project-structure)
 - [Scope and limitations](#scope-and-limitations)
 - [Development](#development)
@@ -359,7 +360,32 @@ strictly comparable*. Override the inputs with `--output <file.html>` and `--eva
 The quality read reflects whatever the joined evaluation contains, so re-run `npm run evaluate` after
 new runs to refresh the judge's scores before regenerating the report.
 
+### Refresh a publication-safe pricing snapshot
+
+```powershell
+$runs = '.benchmark-runs'
+npm run prices:refresh -- --runs $runs
+npm run report:html -- --runs $runs
+```
+
+`prices:refresh` detects OpenAI and/or Anthropic candidates in completed
+artifacts and fetches only the required official public pricing page. It writes
+`pricing-snapshot.json`; the HTML report loads it automatically and makes no
+external requests. Azure model/tier/region matches remain labelled alternatives
+with no inferred billing default. Claude captures both 5-minute and 1-hour
+cache-write scenarios; the report labels both input-accounting choices as
+estimates, not invoice amounts.
+
+The report shows provider/model/deployment identities, output tokens, recorded
+agent turns and model-usage records, wall time, SDK cache share
+(`cacheReadTokens / inputTokens`), and a clearly labelled minimum published
+list-price comparison. Missing evidence remains unavailable. The evidence
+replay excludes private reasoning and redacts secret-named fields.
+
 ## Authoring tasks, instructions, and tools
+
+See [the task authoring guide](docs/TASK_AUTHORING_GUIDE.md) for three
+quickstart examples and three controlled benchmark archetypes.
 
 **You bring the coding task.** This toolkit is the harness, not the task set — nothing is
 benchmarked until you supply a task for the agent to attempt. The `--task` flag above is enough
