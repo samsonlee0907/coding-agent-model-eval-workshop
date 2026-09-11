@@ -120,7 +120,7 @@ placeholder. Its fields divide responsibility deliberately:
 | Field | Purpose |
 |---|---|
 | `contract.task.id` | Stable task identity for joining repeated attempts. |
-| `contract.task.prompt` | The public problem statement: required behavior, boundaries, and acceptance cases. |
+| `contract.task.prompt` | The public problem statement: required behavior, boundaries, and acceptance cases. The runner submits it as the initial user work request before any round. |
 | `contract.task.repository` | Pinned starting commit and environment fingerprint used for comparability. |
 | `contract.task.validationCommand` | The candidate workspace's deterministic acceptance gate after agent work. |
 | `contract.task.conformanceProbe` | Optional task-owned independent checks after validation; see [quality evidence](#quality-evidence). |
@@ -130,13 +130,14 @@ placeholder. Its fields divide responsibility deliberately:
 | `contract.runtime` | Optional expected SDK/CLI/Node identity overrides; otherwise the runner records its installed runtime. |
 | `workspacePath` | The disposable, mutable candidate copy. |
 | `artifactsDirectory` | The common cohort parent; the runner creates a unique run-id subdirectory. |
-| `rounds[]` | Ordered follow-up messages sent through the same agent session. |
+| `rounds[]` | Ordered follow-up messages sent through the same agent session after the initial task. |
 
 `task.prompt`, `execution.instructions`, and `rounds[].prompt` are different.
-The task prompt defines the public job. Instructions set stable agent behavior,
-tool boundaries, and acceptance discipline across the cohort. Rounds model
-additional user turns after initial work; they should not change the task or
-silently add requirements.
+The runner sends the task prompt once as the first work request; it defines the
+public job. Instructions set stable agent behavior, tool boundaries, and
+acceptance discipline across the cohort. Rounds model additional user turns
+after initial work; they should not repeat or change the task or silently add
+requirements.
 
 For example, a two-round repair task can first say **"Implement the task and
 its focused tests."** and then **"Review the changes against the task, run
@@ -247,8 +248,9 @@ cohort. It detects OpenAI and/or Anthropic candidates and fetches only the
 needed official public pricing pages. Use `--region` and `--pricing-model` to
 select the applicable official model/tier/region scenario. Azure alternatives
 are labelled rather than guessed; Claude includes explicit 5-minute and
-1-hour cache-write scenarios. Treat the report's minimum published list-price
-as a scenario-specific estimate, never an invoice or inferred billing default.
+1-hour cache-write scenarios. The minimum published list-price ranking is
+withheld when contracts drift; otherwise treat it as a scenario-specific
+estimate, never an invoice or inferred billing default.
 
 See the README's [Reading a generated report](../README.md#reading-a-generated-report)
 section for how the portfolio, pricing snapshot, and HTML report support a

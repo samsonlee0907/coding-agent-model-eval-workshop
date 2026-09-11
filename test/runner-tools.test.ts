@@ -4,11 +4,43 @@ import { tmpdir } from "node:os";
 import { isAbsolute, relative } from "node:path";
 import test from "node:test";
 import {
+  benchmarkWorkRequests,
   createIsolatedCopilotRuntimeDirectory,
+  dispatchBenchmarkWorkRequests,
   resolveCopilotCliPath,
   resolveMcpServersForLaunch,
   resolveSdkToolAllowlist,
 } from "../src/runner.js";
+
+test("sends the task prompt before ordered follow-up rounds", async () => {
+  const requests = benchmarkWorkRequests("implement the task", [
+    { prompt: "review the implementation" },
+    { prompt: "repair final failures", mode: "immediate" },
+  ]);
+  const sent: Array<{ prompt: string; mode: string }> = [];
+  const events: Array<{ type: string; data: Record<string, unknown> }> = [];
+
+  await dispatchBenchmarkWorkRequests(
+    requests,
+    async (request) => { sent.push({ prompt: request.prompt, mode: request.mode }); },
+    0,
+    (type, data) => { events.push({ type, data }); },
+  );
+
+  assert.deepEqual(sent, [
+    { prompt: "implement the task", mode: "immediate" },
+    { prompt: "review the implementation", mode: "enqueue" },
+    { prompt: "repair final failures", mode: "immediate" },
+  ]);
+  assert.deepEqual(events, [
+    { type: "runner.task_started", data: {} },
+    { type: "runner.task_finished", data: {} },
+    { type: "runner.round_started", data: { round: 1 } },
+    { type: "runner.round_finished", data: { round: 1 } },
+    { type: "runner.round_started", data: { round: 2 } },
+    { type: "runner.round_finished", data: { round: 2 } },
+  ]);
+});
 
 test("maps benchmark tool capabilities to source-qualified SDK built-ins", () => {
   const expectedShell = process.platform === "win32" ? "powershell" : "bash";

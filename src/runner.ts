@@ -49,6 +49,32 @@ export interface BenchmarkRunOptions {
   onEvent?: (event: NormalizedEvent) => void;
 }
 
+export interface BenchmarkWorkRequest {
+  kind: "task" | "round";
+  prompt: string;
+  mode: "enqueue" | "immediate";
+  round: number | null;
+}
+
+/**
+ * The immutable task is always the first user work request. Rounds are
+ * follow-up turns, not an alternate place to repeat the task specification.
+ */
+export function benchmarkWorkRequests(
+  taskPrompt: string,
+  rounds: readonly { prompt: string; mode?: "enqueue" | "immediate" }[],
+): BenchmarkWorkRequest[] {
+  return [
+    { kind: "task", prompt: taskPrompt, mode: "immediate", round: null },
+    ...rounds.map((round, index) => ({
+      kind: "round" as const,
+      prompt: round.prompt,
+      mode: round.mode ?? "enqueue",
+      round: index + 1,
+    })),
+  ];
+}
+
 export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
@@ -111,9 +137,10 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
       provider: sessionProvider,
       ...(mcpServers ? { mcpServers } : {}),
     });
-    sessionId = session.sessionId;
+    const activeSession = session;
+    sessionId = activeSession.sessionId;
     collector.captureRunnerEvent("runner.session_created", { sessionId });
-    for (const event of await session.getEvents()) {
+    for (const event of await activeSession.getEvents()) {
       collector.captureSdkEvent(event);
     }
     const reportedCliVersion = collector.events()
@@ -127,23 +154,21 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     });
     const unsubscribe = session.on((event) => collector.captureSdkEvent(event));
     try {
-      for (const [index, round] of config.rounds.entries()) {
-        collector.captureRunnerEvent("runner.round_started", { round: index + 1 });
-        await sendRoundWithRetries(
-          session,
-          round.prompt,
-          round.mode ?? "enqueue",
-          contract.execution.sessionTimeoutMs,
-          contract.execution.retries,
-          index + 1,
-          collector,
-        );
-        collector.captureRunnerEvent("runner.round_finished", { round: index + 1 });
-      }
+      await dispatchBenchmarkWorkRequests(
+        benchmarkWorkRequests(contract.task.prompt, config.rounds),
+        async (request) => {
+          await activeSession.sendAndWait(
+            { prompt: request.prompt, mode: request.mode },
+            contract.execution.sessionTimeoutMs,
+          );
+        },
+        contract.execution.retries,
+        (eventType, data) => collector.captureRunnerEvent(eventType, data),
+      );
     } finally {
       unsubscribe();
     }
-    const usage = await readUsageMetrics(session);
+    const usage = await readUsageMetrics(activeSession);
     collector.captureRunnerEvent("runner.usage_metrics", {
       available: usage !== null,
       metrics: usage ?? {},
@@ -666,29 +691,36 @@ export function requiredEnvironmentValue(
   return value;
 }
 
-async function sendRoundWithRetries(
-  session: CopilotSession,
-  prompt: string,
-  mode: "enqueue" | "immediate",
-  timeoutMs: number,
+export async function dispatchBenchmarkWorkRequests(
+  requests: readonly BenchmarkWorkRequest[],
+  send: (request: BenchmarkWorkRequest) => Promise<void>,
   retries: number,
-  round: number,
-  collector: EventCollector,
+  captureRunnerEvent: (eventType: string, data: JsonRecord) => void,
 ): Promise<void> {
-  for (let attempt = 0; attempt <= retries; attempt += 1) {
-    try {
-      await session.sendAndWait({ prompt, mode }, timeoutMs);
-      return;
-    } catch (error) {
-      if (attempt === retries) {
-        throw error;
+  for (const request of requests) {
+    captureRunnerEvent(
+      request.kind === "task" ? "runner.task_started" : "runner.round_started",
+      request.round === null ? {} : { round: request.round },
+    );
+    for (let attempt = 0; attempt <= retries; attempt += 1) {
+      try {
+        await send(request);
+        break;
+      } catch (error) {
+        if (attempt === retries) {
+          throw error;
+        }
+        captureRunnerEvent(request.kind === "task" ? "runner.task_retry" : "runner.round_retry", {
+          ...(request.round === null ? {} : { round: request.round }),
+          attempt: attempt + 1,
+          message: error instanceof Error ? error.message : String(error),
+        });
       }
-      collector.captureRunnerEvent("runner.round_retry", {
-        round,
-        attempt: attempt + 1,
-        message: error instanceof Error ? error.message : String(error),
-      });
     }
+    captureRunnerEvent(
+      request.kind === "task" ? "runner.task_finished" : "runner.round_finished",
+      request.round === null ? {} : { round: request.round },
+    );
   }
 }
 

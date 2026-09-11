@@ -26,7 +26,7 @@ Record the starting repository SHA, Node version, and container/environment
 fingerprint in the run contract. Run every candidate from an identical fresh
 baseline.
 
-## Round 1 prompt
+## Initial task prompt
 
 ```text
 Build an in-memory order management core in this repository. Work
@@ -60,7 +60,7 @@ Requirements:
 Do not ask for clarification. Use sensible defaults and complete the feature.
 ```
 
-## Round 2 prompt
+## Follow-up review prompt
 
 ```text
 Act as the implementation reviewer. Exercise the OrderStore against these
@@ -82,7 +82,7 @@ Add focused tests for every repaired behavior. Run the configured validation
 command and leave the workspace passing.
 ```
 
-## Round 3 prompt
+## Final handoff prompt
 
 ```text
 Perform a final benchmark handoff: inspect the diff, run all configured tests
@@ -140,7 +140,7 @@ node <repo>/scenarios/in-memory-ordering-system/conformance/probe.mjs total-merg
 
 ## Fair-comparison controls
 
-- Hold the initial SHA, Node version, prompt text, rounds, tools, permissions,
+- Hold the initial SHA, Node version, task prompt, follow-up rounds, tools, permissions,
   timeout, retries, concurrency, cache policy, and validation command constant
   across candidates.
 - Enable streaming and retain all raw event envelopes so TTFT/TPOT availability
@@ -159,7 +159,7 @@ run configurations. There are two ways to run it:
 
 **A. Quick single-workspace run (fastest to try).** Let the quickstart command
 scaffold a throwaway workspace and local git baseline for you, using this
-scenario's Round 1 prompt as the task:
+scenario's initial task prompt as the task:
 
 ```bash
 # from the repository root, with FOUNDRY_ENDPOINT and FOUNDRY_API_KEY exported
@@ -172,7 +172,8 @@ npm run quickstart -- \
 **B. Full multi-round contract run (rigorous / reproducible).** Copy
 `benchmark.template.json`, fill in the placeholder fields (`model`,
 `workspacePath`, `artifactsDirectory`, and the pinned `repository` values), then
-run it. The prompts are already inlined, so no manual copy from `task.md` is
+run it. The initial task is in `contract.task.prompt`; `rounds[]` contains only
+follow-up review and final-handoff turns, so no manual copy from `task.md` is
 needed:
 
 ```bash

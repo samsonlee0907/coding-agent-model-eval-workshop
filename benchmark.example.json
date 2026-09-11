@@ -31,7 +31,7 @@
   },
   "rounds": [
     {
-      "prompt": "Implement the task and its focused tests."
+      "prompt": "Review the task specification, implement its requirements, and add focused tests."
     },
     {
       "prompt": "Review the changes against the task, run validation, and repair remaining failures."

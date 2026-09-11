@@ -32,6 +32,8 @@ function progressLine(
       return "Starting run; waiting for the agent session.";
     case "session.start":
       return `Session ready${typeof event.data.selectedModel === "string" ? ` for ${event.data.selectedModel}` : ""}.`;
+    case "runner.task_started":
+      return "Task submitted; awaiting agent activity.";
     case "runner.round_started":
       return `Round ${typeof event.data.round === "number" ? event.data.round : "?"} sent; awaiting agent activity.`;
     case "assistant.turn_start": {
@@ -62,6 +64,8 @@ function progressLine(
       return event.data.success === false ? "A tool reported failure; the agent may repair it." : null;
     case "runner.round_finished":
       return `Round ${typeof event.data.round === "number" ? event.data.round : "?"} finished.`;
+    case "runner.task_finished":
+      return "Initial task request finished.";
     case "runner.validation_finished":
       return `Validation ${event.data.exitCode === 0 ? "passed" : "finished with a non-zero exit code"}.`;
     case "runner.error":

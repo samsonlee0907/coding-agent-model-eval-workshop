@@ -58,8 +58,9 @@ side-by-side comparison report.
 - **Contract-aware comparisons** — two or more candidates are compared only when their run
   contracts line up; drift is flagged as "not strictly comparable" (and attributed to the
   diverging candidate) rather than hidden.
-- **Self-contained reports** — sanitized HTML/Markdown output that puts efficiency and quality next
-  to each other. Raw event artifacts remain local evidence and may contain sensitive content.
+- **Self-contained HTML reports** — the HTML comparison puts efficiency and quality next to each
+  other with allowlisted replay metadata. Raw event artifacts and per-run Markdown reports remain
+  local evidence and may contain sensitive content.
 - **Optional LLM-judge code review** — reads each candidate's *final source files* (line-numbered),
   scores seven dimensions, and returns findings that must cite `file:line`. The harness re-verifies
   every citation and badges the ones it cannot anchor. Never overrides the deterministic result.
@@ -404,8 +405,8 @@ The fields that shape what the agent does:
 
 | Field | Purpose |
 |---|---|
-| `contract.task.prompt` | The task statement the agent works from. |
-| `rounds[]` | One or more follow-up prompts, replayed in order, so you can model natural multi-round work (start → review/repair → …). |
+| `contract.task.prompt` | The initial task work request sent to the agent. |
+| `rounds[]` | One or more follow-up prompts sent after the task in order, so you can model review/repair without repeating the full task. |
 | `contract.task.validationCommand` | The deterministic quality gate run after the session (e.g. `npm test && npm run build`). |
 | `contract.task.repository.commitSha` | Pins the starting repo state so a comparison is reproducible. |
 | `contract.execution.instructions` | The **system prompt / agent instructions** — passed straight to the SDK as the session's system message. Use this to set behaviour, constraints, and acceptance expectations. |
@@ -553,18 +554,21 @@ overrides deterministic evidence. The publication-evidence section shows
 scenario-aware official pricing and a metadata-only replay.
 
 Use the captured official scenario that matches the provider, model, tier, and
-region being evaluated. The **minimum published list-price** rank is only the
-lowest complete applicable official list-price scenario across comparable
-attempts; it is not an invoice, a billing default, or a substitute for provider
-cost telemetry. Claude cache accounting remains explicitly scenario-labelled.
+region being evaluated. The **minimum published list-price** rank is only shown
+when contracts are strictly comparable; its values remain descriptive but
+unranked when drift is present. For comparable attempts it is the lowest
+complete applicable official list-price scenario, not an invoice, billing
+default, or substitute for provider cost telemetry. Claude cache accounting
+remains explicitly scenario-labelled.
 
 Do not rank away caveats: contract drift is marked **not strictly comparable**,
 failures and repeats stay in the cohort, and unsupported or missing metrics stay
-**Unavailable** rather than becoming zero. The HTML report is designed for
-publication: it embeds only allowlisted replay and conformance metadata and
-makes no external requests. Raw `run.json`, event logs, validation/probe output,
-and workspace artifacts remain local evidence and must be reviewed for secrets
-or sensitive task data before any separate sharing.
+**Unavailable** rather than becoming zero. Only the self-contained HTML report
+is designed for publication: it embeds allowlisted replay and conformance
+metadata and makes no external requests. Raw run artifacts, per-run
+`report.md`, `model-selection-report.md`, `run.json`, event logs,
+validation/probe output, and workspace artifacts remain sensitive local
+evidence and must be reviewed before any separate sharing.
 
 For an end-to-end controlled cohort and task-quality guidance, see the
 [task authoring guide](docs/TASK_AUTHORING_GUIDE.md).

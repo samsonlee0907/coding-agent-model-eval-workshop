@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { immutableContractHash } from "../src/contract.js";
 import { renderHtmlComparisonReport } from "../src/html-report.js";
+import type { PricingSnapshot } from "../src/pricing.js";
 import type { BenchmarkRun, ConformanceProbeResult, DerivedMetrics, LlmEvaluationResult, Metric, RunContract } from "../src/types.js";
 
 function available(value: number): Metric<number> {
@@ -223,9 +224,40 @@ test("html report flags orphan scores and runs without a score", () => {
 test("html report surfaces contract drift as not strictly comparable", () => {
   const drifted = run("run-b", "anthropic", "model-b", resolved);
   drifted.contract.execution.reasoningEffort = "low";
-  const html = renderHtmlComparisonReport([run("run-a", "openai", "model-a", resolved), drifted], null);
+  const pricing: PricingSnapshot = {
+    schemaVersion: 1,
+    refreshedAt: "2026-08-20T03:41:00.000Z",
+    sources: [],
+    candidates: [
+      {
+        candidate: "openai/model-a/local-byok",
+        recorded: { provider: "openai", model: "model-a", deployment: "local-byok" },
+        scenarios: [{
+          id: "model-a-global",
+          officialModel: "Model A",
+          region: "global",
+          cacheTtl: null,
+          input: { retailPrice: 1, unit: "1M tokens" },
+          cachedInput: null,
+          cacheWrite: null,
+          output: { retailPrice: 2, unit: "1M tokens" },
+        }],
+        unavailableReason: null,
+      },
+      {
+        candidate: "anthropic/model-b/local-byok",
+        recorded: { provider: "anthropic", model: "model-b", deployment: "local-byok" },
+        scenarios: [],
+        unavailableReason: "No official match.",
+      },
+    ],
+  };
+  const html = renderHtmlComparisonReport([run("run-a", "openai", "model-a", resolved), drifted], null, pricing);
   assert.match(html, /Contract drift detected/);
   assert.match(html, /Not strictly comparable/);
+  assert.match(html, /ranking is withheld because the run contracts are not strictly comparable/);
+  assert.match(html, /Minimum published list-price estimate/);
+  assert.doesNotMatch(html, /<td>1<span class="row-note">Minimum complete captured official list-price scenario/);
 });
 
 test("html report renders a decision summary and per-candidate quality cards", () => {

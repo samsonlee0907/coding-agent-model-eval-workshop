@@ -119,7 +119,7 @@ export function renderHtmlComparisonReport(
     artifactInspectionSection(runs, inspections),
 
     efficiencyProfileSection(runs),
-    publicationEvidenceSection(runs, pricing),
+    publicationEvidenceSection(runs, pricing, strict),
 
     "<section>",
     "<h2>Comparability &amp; lineage</h2>",
@@ -412,7 +412,11 @@ function efficiencyProfileSection(runs: readonly BenchmarkRun[]): string {
   ].filter(Boolean).join("\n");
 }
 
-function publicationEvidenceSection(runs: readonly BenchmarkRun[], pricing: PricingSnapshot | null): string {
+function publicationEvidenceSection(
+  runs: readonly BenchmarkRun[],
+  pricing: PricingSnapshot | null,
+  strictlyComparable: boolean,
+): string {
   const grouped = [...new Map(runs.map((run) => [candidateKey(run), run])).keys()].map((candidate) => ({
     candidate, attempts: runs.filter((run) => candidateKey(run) === candidate),
   }));
@@ -434,12 +438,19 @@ function publicationEvidenceSection(runs: readonly BenchmarkRun[], pricing: Pric
     turns: completeMean(attempts, agentTurns),
     cache: completeCacheShare(attempts), minimum: minimum(attempts),
   }));
-  const rank = (label: string, rows: Array<{ candidate: string; value: number | null; note: string }>, percent = false): string => {
+  const rank = (
+    label: string,
+    rows: Array<{ candidate: string; value: number | null; note: string }>,
+    percent = false,
+    allowRanking = true,
+  ): string => {
     const known = rows.map((row) => row.value).filter((value): value is number => value !== null);
     const max = known.length ? Math.max(...known) : 0;
     return `<h3>${escapeHtml(label)}</h3><div class="table-wrap"><table><thead><tr><th>Recorded provider/model/deployment</th><th>Value</th><th>Rank / provenance</th></tr></thead><tbody>${
       rows.map((row) => {
-        const rank = row.value === null || known.length < 2 ? "Unranked" : `${1 + known.filter((value) => value < row.value!).length}`;
+        const rank = !allowRanking || row.value === null || known.length < 2
+          ? "Unranked"
+          : `${1 + known.filter((value) => value < row.value!).length}`;
         const amount = row.value === null ? "Unavailable" : percent ? `${(row.value * 100).toFixed(2)}%` : formatInteger(row.value);
         const width = row.value === null || max === 0 ? 0 : row.value / max * 100;
         return `<tr><th scope="row">${escapeHtml(row.candidate)}</th><td class="num">${amount}<span class="minibar" style="width:${width}%"></span></td><td>${rank}<span class="row-note">${escapeHtml(row.note)}</span></td></tr>`;
@@ -466,7 +477,15 @@ function publicationEvidenceSection(runs: readonly BenchmarkRun[], pricing: Pric
     rank("Mean output tokens per attempt", values.map((row) => ({ candidate: row.candidate, value: row.output, note: "Output includes reported reasoning; it is not added twice." }))),
     rank("Mean agent turns and model-usage records", values.map((row) => ({ candidate: row.candidate, value: row.turns, note: `Agent turns; model-usage records: ${row.calls === null ? "Unavailable" : row.calls.toFixed(2)}. These are not user rounds or verified HTTP requests.` }))),
     rank("SDK-reported cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / SDK inputTokens; not billing or native normalization." })), true),
-    rank("Minimum published list-price estimate", values.map((row) => ({ candidate: row.candidate, value: row.minimum.value, note: row.minimum.reason }))),
+    strictlyComparable
+      ? ""
+      : "<p class=\"note warn-text\">Minimum published list-price values remain descriptive, but their ranking is withheld because the run contracts are not strictly comparable.</p>",
+    rank(
+      "Minimum published list-price estimate",
+      values.map((row) => ({ candidate: row.candidate, value: row.minimum.value, note: row.minimum.reason })),
+      false,
+      strictlyComparable,
+    ),
     "<h3>Scenario-aware pricing provenance</h3>", pricingHtml,
     "<h3>Sanitized evidence replay</h3><p class=\"note\">This replay is generated solely from archived normalized events and preserves only event-specific allowlisted metadata. The report contains no network calls.</p>", replay,
     "</section>",
