@@ -168,6 +168,26 @@ test("html report labels unavailable metrics instead of inventing them", () => {
   assert.match(html, /no streaming deltas/);
 });
 
+test("html replay keeps metadata but never embeds output-bearing event payloads", () => {
+  const directory = mkdtempSync(join(tmpdir(), "html-replay-redaction-"));
+  try {
+    const record = run("run-replay", "openai", "model-a", resolved);
+    record.artifacts.normalizedEvents = join(directory, "normalized-events.ndjson");
+    writeFileSync(record.artifacts.normalizedEvents, [
+      JSON.stringify({ eventType: "assistant.usage", data: { model: "model-a", inputTokens: 3, cacheReadTokens: 1, cacheWriteTokens: 0, outputTokens: 2, authorization: "LEAK-ME" } }),
+      JSON.stringify({ eventType: "tool.execution_complete", data: { toolCallId: "tool-1", success: true, result: { content: "LEAK-ME" }, stderr: "LEAK-ME" } }),
+      JSON.stringify({ eventType: "runner.validation_finished", data: { exitCode: 0, timedOut: false, durationMs: 1, stdout: "LEAK-ME", stderr: "LEAK-ME" } }),
+      JSON.stringify({ eventType: "assistant.message", data: { content: "LEAK-ME" } }),
+    ].join("\n"));
+    const html = renderHtmlComparisonReport([record]);
+    assert.match(html, /tool-1/);
+    assert.match(html, /inputTokens/);
+    assert.doesNotMatch(html, /LEAK-ME/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("html report escapes untrusted judge text", () => {
   const runs = [
     run("run-a", "openai", "model-a", resolved),
@@ -526,4 +546,3 @@ test("runs recorded before probes existed read as not probed rather than as pass
   );
   assert.match(html, /Not probed/);
 });
-

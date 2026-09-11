@@ -501,12 +501,29 @@ function replayEvents(run: BenchmarkRun): Array<{ type: string; text: string }> 
   if (!existsSync(run.artifacts.normalizedEvents)) return [];
   return readFileSync(run.artifacts.normalizedEvents, "utf8").split(/\r?\n/).filter(Boolean).flatMap((line) => {
     const event = JSON.parse(line) as { eventType?: string; data?: Record<string, unknown> };
-    if (!event.eventType || !event.data || (event.eventType === "assistant.message" && ["analysis", "reasoning", "thinking"].includes(String(event.data.phase)))) return [];
-    const clean = JSON.stringify(event.data, (key, value) => /key|secret|token|authorization|cookie|password/i.test(key) ? "[REDACTED]" : value)
-      .replace(/[A-Za-z]:[\\/](?:Users|home)[\\/][^\s"']+/gi, "[USER_HOME]");
-    return [{ type: event.eventType, text: clean }];
+    if (!event.eventType || !event.data) return [];
+    const data = event.data;
+    // Never embed artifact output: validators, tools, prompts, and model messages
+    // may contain credentials unrelated to the Foundry environment.
+    const metadata = event.eventType === "assistant.usage" ? {
+      model: stringValue(data.model), inputTokens: numberValue(data.inputTokens),
+      cacheReadTokens: numberValue(data.cacheReadTokens), cacheWriteTokens: numberValue(data.cacheWriteTokens),
+      outputTokens: numberValue(data.outputTokens), durationMs: numberValue(data.duration),
+    } : event.eventType === "tool.execution_start" ? {
+      toolName: stringValue(data.toolName ?? data.name), toolCallId: stringValue(data.toolCallId),
+    } : event.eventType === "tool.execution_complete" ? {
+      toolCallId: stringValue(data.toolCallId), success: booleanValue(data.success),
+    } : event.eventType === "runner.validation_finished" ? {
+      exitCode: numberValue(data.exitCode), timedOut: booleanValue(data.timedOut), durationMs: numberValue(data.durationMs),
+    } : event.eventType === "runner.run_started" || event.eventType === "runner.run_finished"
+      || event.eventType === "assistant.turn_start" || event.eventType === "session.idle"
+      ? { event: event.eventType } : null;
+    return metadata === null ? [] : [{ type: event.eventType, text: JSON.stringify(metadata) }];
   });
 }
+function stringValue(value: unknown): string | null { return typeof value === "string" ? value : null; }
+function numberValue(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) ? value : null; }
+function booleanValue(value: unknown): boolean | null { return typeof value === "boolean" ? value : null; }
 
 function cacheHitShare(run: BenchmarkRun): number | null {
   const cached = metricNumber(run.metrics.cacheReadTokens);

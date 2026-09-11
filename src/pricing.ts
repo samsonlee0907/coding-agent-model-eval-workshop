@@ -128,9 +128,10 @@ function claudeRows(html: string): Row[] {
   return [...html.matchAll(/<div\b[^>]*class=(['"])[^'"]*modelCard[^'"]*\1[^>]*>/gi)].map((match) => {
     const card = divBlock(html, match.index!);
     const label = strip(/<h3\b[^>]*>([\s\S]*?)<\/h3>/i.exec(card)?.[1] ?? "");
+    const text = strip(card);
     const rates = emptyRates();
     for (const [labelText, field] of [["Input", "input"], ["Output", "output"], ["Read", "cachedInput"], ["Write", "cacheWrite"]] as const) {
-      const price = new RegExp(`${labelText}[\\s\\S]{0,180}?\\$\\s*([\\d,.]+)\\s*\\/\\s*M(?:Tok|Tokens?)`, "i").exec(card)?.[1];
+      const price = new RegExp(`${labelText}\\s+\\$\\s*([\\d,.]+)\\s*\\/\\s*M(?:Tok|Tokens?)`, "i").exec(text)?.[1];
       if (price) rates[field].global = Number(price.replace(/,/g, ""));
     }
     return { label, rates };
