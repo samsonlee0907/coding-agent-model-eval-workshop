@@ -18,6 +18,7 @@ export function immutableContractHash(contract: RunContract): string {
 
 export function compareRunContracts(left: RunContract, right: RunContract): ContractComparison {
   const drift = [
+    ...diff("contractVersion", left.contractVersion, right.contractVersion),
     ...diff("task", left.task, right.task),
     ...diff("execution", left.execution, right.execution),
     ...roundsDrift(left, right),
@@ -52,6 +53,30 @@ export function compareRunContractSet(contracts: readonly RunContract[]): Contra
     })),
   );
   return { strictlyComparable: drift.length === 0, drift };
+}
+
+/**
+ * Canonical candidate-independent comparison inputs used by portfolio grouping.
+ * Version-1 artifacts never recorded their rounds, so no trustworthy signature
+ * can be derived for them.
+ */
+export function comparableBaselineSignature(contract: RunContract): string | null {
+  if (contract.contractVersion !== 2 || contract.rounds === undefined) {
+    return null;
+  }
+  return stableStringify({
+    contractVersion: contract.contractVersion,
+    task: contract.task,
+    execution: contract.execution,
+    rounds: contract.rounds,
+    runtime: {
+      sdkVersion: contract.runtime.sdkVersion,
+      cliVersion: contract.runtime.cliVersion,
+    },
+    foundryProvider: {
+      requestAdaptation: contract.foundryProvider?.requestAdaptation ?? "none",
+    },
+  });
 }
 
 export function createComparisonContract(

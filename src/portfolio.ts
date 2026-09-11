@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
+import { comparableBaselineSignature } from "./contract.js";
 import type { BenchmarkRun, Metric } from "./types.js";
 
 const minimumComparableRepeats = 3;
@@ -32,8 +33,12 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     throw new RangeError("A model selection report requires at least one completed run.");
   }
   const candidates = [...groupByCandidate(runs).values()];
-  const comparableBaselines = new Set(runs.map(baselineSignature));
-  const hasStrictBaseline = comparableBaselines.size === 1;
+  const baselineSignatures = runs.map((run) => comparableBaselineSignature(run.contract));
+  const comparableBaselines = new Set(baselineSignatures.filter((signature): signature is string => signature !== null));
+  const hasStrictBaseline = baselineSignatures.every((signature) => signature !== null) && comparableBaselines.size === 1;
+  const baselineEvidence = baselineSignatures.some((signature) => signature === null)
+    ? "Unknown: one or more runs did not record a version-2 round plan."
+    : `${comparableBaselines.size} baseline/task/environment variants are present.`;
   const allCandidatesHaveResolvedRun = candidates.every((candidate) => candidate.runs.some((run) => run.outcome.class === "resolved"));
   const enoughComparableRepeats = hasStrictBaseline && candidates.every(
     (candidate) => candidate.runs.filter((run) => run.outcome.class === "resolved").length >= minimumComparableRepeats,
@@ -53,7 +58,7 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     "| Gate | Status | Evidence |",
     "|---|---|---|",
     `| Deterministic correctness | ${allCandidatesHaveResolvedRun ? "Pass, provisionally" : "Fail"} | Every candidate has at least one resolved run only when the gate passes. |`,
-    `| Strictly comparable baseline | ${hasStrictBaseline ? "Pass" : "Fail"} | ${comparableBaselines.size} baseline/task/environment variants are present. |`,
+    `| Strictly comparable baseline | ${hasStrictBaseline ? "Pass" : "Fail"} | ${baselineEvidence} |`,
     `| Repeatability | ${enoughComparableRepeats ? "Pass" : "Fail"} | Require at least ${minimumComparableRepeats} resolved repetitions per candidate from one pinned baseline. |`,
     `| Monetary cost evidence | ${costAvailableForEveryCandidate ? "Present" : "Missing"} | Every resolved sample for every candidate must report a non-zero provider cost before cost-per-resolved-task is valid. |`,
     "| Code-quality breadth | Missing | Deterministic build/test is captured; coverage, lint, security, accessibility, and human-review evidence are not. |",
@@ -97,7 +102,7 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     "",
     "## Comparability and artifact lineage",
     "",
-    `Baseline/task/environment variants observed: ${comparableBaselines.size}.`,
+    `Baseline/task/environment variants observed: ${baselineEvidence}`,
     "",
     "| Candidate | Task ID | Baseline commit | Environment fingerprint | Reasoning effort | Wire adaptation |",
     "|---|---|---|---|---|---|",
@@ -170,21 +175,6 @@ function countTurns(run: BenchmarkRun): number | null {
   } catch {
     return null;
   }
-}
-
-function baselineSignature(run: BenchmarkRun): string {
-  return JSON.stringify({
-    task: run.contract.task,
-    instructions: run.contract.execution.instructions,
-    tools: run.contract.execution.tools,
-    permissionMode: run.contract.execution.permissionMode,
-    retries: run.contract.execution.retries,
-    timeout: run.contract.execution.sessionTimeoutMs,
-    cachePolicy: run.contract.execution.cachePolicy,
-    reasoningEffort: run.contract.execution.reasoningEffort ?? null,
-    adaptation: run.contract.foundryProvider?.requestAdaptation ?? "legacy/unknown",
-    runtime: run.contract.runtime,
-  });
 }
 
 function candidateLabel(run: BenchmarkRun): string {

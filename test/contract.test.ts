@@ -109,7 +109,8 @@ test("version-1 contracts remain readable but are conservatively not comparable"
   const current = contract();
   const comparison = compareRunContracts(historical, current);
   assert.equal(comparison.strictlyComparable, false);
-  assert.equal(comparison.drift[0]?.path, "rounds");
+  assert.equal(comparison.drift[0]?.path, "contractVersion");
+  assert.equal(comparison.drift.some((entry) => entry.path === "rounds"), true);
 
   const comparisonContract = createComparisonContract("legacy-cmp", [historical, current]);
   assert.equal(comparisonContract.contractVersion, 1);
