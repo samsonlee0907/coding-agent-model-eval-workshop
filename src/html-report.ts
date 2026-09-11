@@ -270,11 +270,13 @@ function checkCell(probe: ConformanceProbeResult | null, id: string): string {
 }
 
 function conformanceBadge(check: ConformanceCheckResult): string {
-  const title = check.status === "error"
-    ? check.errorMessage ?? "The check could not be executed."
-    : `${check.command} \u2192 ${check.timedOut ? "timed out" : `exit ${check.exitCode ?? "unknown"}`}`;
   const label = { pass: "Pass", weak: "Weak", fail: "Fail", error: "Error" }[check.status];
   const tone = { pass: "good", weak: "warn", fail: "bad", error: "muted" }[check.status];
+  const title = [
+    check.status === "error" ? "Could not execute" : "Completed",
+    check.timedOut ? "timed out" : `exit ${check.exitCode ?? "unknown"}`,
+    `${formatInteger(check.durationMs)} ms`,
+  ].join("; ");
   return `<span class="badge ${tone}" title="${escapeHtml(title)}">${label}</span>`;
 }
 
@@ -309,17 +311,11 @@ function failureDetails(
     }
     const items = notable.map((check) => {
       const outcome = check.status === "error"
-        ? escapeHtml(check.errorMessage ?? "could not be executed")
+        ? "could not be executed"
         : check.timedOut
           ? "timed out"
           : `exited ${check.exitCode ?? "unknown"}`;
-      const evidence = firstMeaningfulLine(check.stderr) ?? firstMeaningfulLine(check.stdout);
-      // The check id and its description already head the row in the matrix
-      // above, so repeat neither here: the reader wants the failure, not the
-      // restated expectation.
-      const detail = evidence === null
-        ? `The check ${outcome}.`
-        : `<span class="finding-evidence">${escapeHtml(evidence)}</span>`;
+      const detail = `The check ${outcome} after ${formatInteger(check.durationMs)} ms.`;
       return `<li><strong>${escapeHtml(check.id)}</strong> ${conformanceBadge(check)} ${detail}</li>`;
     });
     blocks.push(`<div class="integrity"><strong>${escapeHtml(candidateLabel(run))}</strong><ul>${items.join("")}</ul></div>`);
@@ -327,11 +323,6 @@ function failureDetails(
   return blocks.length === 0
     ? ["<p class=\"note\">Every probed candidate passed every required expectation.</p>"]
     : blocks;
-}
-
-function firstMeaningfulLine(output: string): string | null {
-  const line = output.split(/\r?\n/).map((value) => value.trim()).find((value) => value.length > 0);
-  return line === undefined ? null : line.slice(0, 240);
 }
 
 /**
@@ -477,7 +468,7 @@ function publicationEvidenceSection(runs: readonly BenchmarkRun[], pricing: Pric
     rank("SDK-reported cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / SDK inputTokens; not billing or native normalization." })), true),
     rank("Minimum published list-price estimate", values.map((row) => ({ candidate: row.candidate, value: row.minimum.value, note: row.minimum.reason }))),
     "<h3>Scenario-aware pricing provenance</h3>", pricingHtml,
-    "<h3>Sanitized evidence replay</h3><p class=\"note\">This replay is generated solely from archived normalized events. Private reasoning and obvious secret fields are excluded; the report contains no network calls.</p>", replay,
+    "<h3>Sanitized evidence replay</h3><p class=\"note\">This replay is generated solely from archived normalized events and preserves only event-specific allowlisted metadata. The report contains no network calls.</p>", replay,
     "</section>",
   ].join("\n");
 }

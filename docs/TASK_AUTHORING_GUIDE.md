@@ -145,7 +145,11 @@ case, and exit nonzero on failure:
 
 ```js
 import assert from "node:assert/strict";
-import { parseDuration } from process.cwd() + "/dist/index.js";
+import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+
+const entry = pathToFileURL(join(process.cwd(), "dist", "index.js")).href;
+const { parseDuration } = await import(entry);
 assert.equal(parseDuration("2s"), 2000);
 ```
 
@@ -160,4 +164,5 @@ include both 5-minute and 1-hour cache-write scenarios.
 The self-contained HTML report makes no external requests. Its replay contains
 only event-specific allowlisted metadata (safe IDs, tool names, statuses, and
 numeric usage/timing counters); it never embeds raw prompts, assistant
-messages, tool arguments/results, or validation output.
+messages, tool arguments/results, validation output, or conformance probe
+stdout, stderr, commands, and execution-error details.

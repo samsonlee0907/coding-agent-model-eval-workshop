@@ -382,7 +382,8 @@ agent turns and model-usage records, wall time, SDK cache share
 (`cacheReadTokens / inputTokens`), and a clearly labelled minimum published
 list-price comparison. Missing evidence remains unavailable. The evidence
 replay contains event-specific allowlisted metadata only: no raw prompts,
-assistant messages, tool arguments/results, or validation output.
+assistant messages, tool arguments/results, validation output, or conformance
+probe stdout, stderr, commands, and execution-error details.
 
 ## Authoring tasks, instructions, and tools
 

@@ -433,7 +433,14 @@ test("efficiency metrics the stream never supported stay marked unavailable", ()
 
 
 function probeResult(
-  checks: ReadonlyArray<{ id: string; status: "pass" | "weak" | "fail" | "error"; severity?: "required" | "advisory"; stderr?: string }>,
+  checks: ReadonlyArray<{
+    id: string;
+    status: "pass" | "weak" | "fail" | "error";
+    severity?: "required" | "advisory";
+    stdout?: string;
+    stderr?: string;
+    errorMessage?: string;
+  }>,
 ): ConformanceProbeResult {
   const results = checks.map((check) => ({
     id: check.id,
@@ -444,9 +451,9 @@ function probeResult(
     exitCode: check.status === "pass" ? 0 : check.status === "error" ? null : 1,
     timedOut: false,
     durationMs: 12,
-    stdout: "",
+    stdout: check.stdout ?? "",
     stderr: check.stderr ?? "",
-    errorMessage: check.status === "error" ? "spawn failed" : null,
+    errorMessage: check.errorMessage ?? (check.status === "error" ? "spawn failed" : null),
   }));
   const required = results.filter((check) => check.severity === "required");
   const conclusive = required.length > 0 && required.every((check) => check.status !== "error");
@@ -532,8 +539,39 @@ test("an advisory failure records a weakness without withholding the conformance
   );
   assert.match(html, /Weak/);
   assert.doesNotMatch(html, /Non-conformant/);
-  // The weakness is still surfaced with its evidence rather than swallowed.
-  assert.match(html, /returned object aliases internal state/);
+  assert.match(html, /The check exited 1 after 12 ms/);
+});
+
+test("conformance HTML keeps safe status metadata but excludes probe output and execution details", () => {
+  const html = renderHtmlComparisonReport(
+    [
+      probed(run("run-a", "openai", "model-a", resolved), probeResult([
+        {
+          id: "entry-resolves",
+          status: "fail",
+          stdout: "PROBE-STDOUT-SECRET",
+          stderr: "PROBE-STDERR-SECRET",
+          errorMessage: "PROBE-ERROR-SECRET",
+        },
+        {
+          id: "cannot-spawn",
+          status: "error",
+          stderr: "PROBE-ERROR-STDERR-SECRET",
+          errorMessage: "PROBE-EXECUTION-DETAIL-SECRET",
+        },
+      ])),
+    ],
+    null,
+  );
+  assert.match(html, /entry-resolves/);
+  assert.match(html, /expectation entry-resolves/);
+  assert.match(html, /Fail/);
+  assert.match(html, /exit 1/);
+  assert.match(html, /12 ms/);
+  assert.match(html, /cannot-spawn/);
+  assert.match(html, /Could not execute/);
+  assert.doesNotMatch(html, /node probe\.mjs/);
+  assert.doesNotMatch(html, /PROBE-[A-Z-]+-SECRET/);
 });
 
 test("runs recorded before probes existed read as not probed rather than as passing", () => {
