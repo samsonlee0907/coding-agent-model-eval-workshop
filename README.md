@@ -35,7 +35,7 @@ side-by-side comparison report.
 - [Project structure](#project-structure)
 - [Scope and limitations](#scope-and-limitations)
 - [Development](#development)
-- [Example run outcome](#example-run-outcome)
+- [Reading a generated report](#reading-a-generated-report)
 
 ## Features
 
@@ -58,8 +58,8 @@ side-by-side comparison report.
 - **Contract-aware comparisons** — two or more candidates are compared only when their run
   contracts line up; drift is flagged as "not strictly comparable" (and attributed to the
   diverging candidate) rather than hidden.
-- **Self-contained reports** — HTML/Markdown output that puts efficiency and quality next to each
-  other, with full raw-event artifacts for traceability.
+- **Self-contained reports** — sanitized HTML/Markdown output that puts efficiency and quality next
+  to each other. Raw event artifacts remain local evidence and may contain sensitive content.
 - **Optional LLM-judge code review** — reads each candidate's *final source files* (line-numbered),
   scores seven dimensions, and returns findings that must cite `file:line`. The harness re-verifies
   every citation and badges the ones it cannot anchor. Never overrides the deterministic result.
@@ -523,23 +523,48 @@ This is a first working milestone, not a finished benchmark suite:
 For hands-on exercises, run-contract guidance, reproducibility/fair-comparison checklists, and
 responsible cost controls, see [`docs/SETUP_GUIDE.md`](docs/SETUP_GUIDE.md).
 
-## Example run outcome
+## Reading a generated report
 
-Real output from three local runs — the same task and execution policy against three Foundry
-deployments — shown to illustrate what a report captures. This is illustrative text from local
-run artifacts, not a committed run, and contains no credentials.
+Generate the decision artifacts from one parent directory of completed runs:
 
-Task: *"Build a html web app that shows the time now and the movement of time in a circular shape."*
-Policy: streaming, high reasoning effort, concurrency 1, 900s timeout, validation `npm test && npm run build`.
+```powershell
+$runs = 'C:\benchmark-artifacts\cohort-a'
+npm run portfolio -- --runs $runs
+npm run prices:refresh -- --runs $runs
+npm run report:html -- --runs $runs
+```
 
-| Candidate | Outcome | E2E | Model / Tool calls | Input / Output tokens | Cache-read | TTFT | TPOT | Validation |
-|---|---|---|---|---|---|---|---|---|
-| FW-Kimi-K3 (openai) | resolved | 374.5 s | 38 / 36 | 562,207 / 14,036 | 537,843 (95.7%) | 2.077 s | 11.934 ms | exit 0, 18 tests passing |
-| GPT-5.6 Terra (openai) | resolved | 194.96 s | 12 / 14 | 200,439 / 16,920 | 128,512 (64.1%) | 2.904 s | 13.711 ms | exit 0, 4 tests passing |
-| Claude Sonnet 5 (anthropic) | resolved | 420.29 s | 31 / 28 | 580,834 / 13,914 | 555,048 (95.6%) | 3.938 s | 17.651 ms | exit 0, 19 tests passing |
+By default, these write `$runs\model-selection-report.md`,
+`$runs\pricing-snapshot.json`, and `$runs\comparison-report.html`,
+respectively. Run `portfolio` first for conservative cohort-level gates, then
+refresh official pricing for the identities actually recorded, and finally
+render the self-contained HTML comparison. `prices:refresh` supports
+`--region <pricing-page-region>` and
+`--pricing-model <recorded-model>=<official-label>` when selecting the
+applicable published scenario.
 
-**Conclusion:** all three resolved, so this is a fair efficiency comparison. GPT-5.6 Terra was
-roughly 2× faster and used far fewer tokens, but wrote the fewest tests — the classic
-efficiency-vs-thoroughness trade-off this toolkit exists to make visible. Which model is "best"
-depends on your quality bar, not the token count alone. (Cost is absent because these deployments
-emitted no priced telemetry — a labeled gap, not a claim of $0.)
+Read the report as evidence, not as a fabricated verdict. Its decision summary
+and run comparison retain provider/model/deployment identity, outcome, and
+validation state. The efficiency profile visualizes wall time, output tokens,
+agent turns/model-usage records, tool activity, and SDK-reported cache share
+(`cacheReadTokens / inputTokens`). Conformance, artifact inspection, and the
+optional fixed-rubric LLM judge add separate quality signals; the judge never
+overrides deterministic evidence. The publication-evidence section shows
+scenario-aware official pricing and a metadata-only replay.
+
+Use the captured official scenario that matches the provider, model, tier, and
+region being evaluated. The **minimum published list-price** rank is only the
+lowest complete applicable official list-price scenario across comparable
+attempts; it is not an invoice, a billing default, or a substitute for provider
+cost telemetry. Claude cache accounting remains explicitly scenario-labelled.
+
+Do not rank away caveats: contract drift is marked **not strictly comparable**,
+failures and repeats stay in the cohort, and unsupported or missing metrics stay
+**Unavailable** rather than becoming zero. The HTML report is designed for
+publication: it embeds only allowlisted replay and conformance metadata and
+makes no external requests. Raw `run.json`, event logs, validation/probe output,
+and workspace artifacts remain local evidence and must be reviewed for secrets
+or sensitive task data before any separate sharing.
+
+For an end-to-end controlled cohort and task-quality guidance, see the
+[task authoring guide](docs/TASK_AUTHORING_GUIDE.md).
