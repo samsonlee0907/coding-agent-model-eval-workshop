@@ -16,10 +16,6 @@ from impressions.
 - OpenAI’s [evaluation guidance](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
   and [evaluation flywheel cookbook](https://github.com/openai/openai-cookbook/blob/main/examples/evaluation/Building_resilient_prompts_using_an_evaluation_flywheel.md)
   emphasize measuring concrete failure modes before iterating.
-- The [SWE-bench repository](https://github.com/SWE-bench/SWE-bench), its
-  [documentation](https://swebench.com/SWE-bench/), and OpenAI’s
-  [SWE-bench Verified announcement](https://openai.com/index/introducing-swe-bench-verified/)
-  illustrate patch-level tests and review of whether tests represent the issue.
 - Microsoft Foundry’s [evaluation guidance](https://learn.microsoft.com/azure/foundry/how-to/evaluate-generative-ai-app)
   likewise distinguishes model, agent, and dataset evaluation and supports
   automated and custom evaluators.
