@@ -1,266 +1,262 @@
 # Task authoring guide
 
-This guide turns a coding task into comparable, publication-safe benchmark
-evidence. It applies to your own repositories and task sets; it does not depend
-on a particular benchmark dataset.
+This guide helps you develop coding evaluation use cases that produce useful,
+comparable evidence. It is about task design, not a benchmark dataset: prepare
+a compatible starter yourself when a blueprint names one.
 
-## Choose the right path
+## Principles and research
 
-| Choose | When it fits | What it produces |
+Use cases should represent real engineering work while remaining small enough
+to diagnose. Make success observable at the artifact boundary, test the known
+failure modes, and improve the task/probe from retained failures rather than
+from impressions.
+
+- Anthropic’s [evaluation cookbook](https://github.com/anthropics/anthropic-cookbook/tree/main/evals)
+  collects practical evaluation patterns.
+- OpenAI’s [evaluation guidance](https://developers.openai.com/api/docs/guides/evaluation-best-practices)
+  and [evaluation flywheel cookbook](https://github.com/openai/openai-cookbook/blob/main/examples/evaluation/Building_resilient_prompts_using_an_evaluation_flywheel.md)
+  emphasize measuring concrete failure modes before iterating.
+- The [SWE-bench repository](https://github.com/SWE-bench/SWE-bench), its
+  [documentation](https://swebench.com/SWE-bench/), and OpenAI’s
+  [SWE-bench Verified announcement](https://openai.com/index/introducing-swe-bench-verified/)
+  illustrate patch-level tests and review of whether tests represent the issue.
+- Microsoft Foundry’s [evaluation guidance](https://learn.microsoft.com/azure/foundry/how-to/evaluate-generative-ai-app)
+  likewise distinguishes model, agent, and dataset evaluation and supports
+  automated and custom evaluators.
+
+These are design references, not runtime dependencies or claims that this
+tool implements another harness.
+
+## Choose a supported format
+
+| Format | Use it for | Result |
 |---|---|---|
-| `quickstart` | You want a single exploratory run or to test a task prompt against a deployment. | A copied local workspace and one run under `.benchmark-runs\quickstart-<id>\artifacts\<run-id>`. |
-| Controlled `bench` | You need a repeatable comparison between candidates or attempts. | One run under `<artifactsDirectory>\<run-id>` for every clean attempt, suitable for cohort reports. |
+| **Simple quickstart prompt** | Exploring whether a task is clear and bounded. | One disposable local run. |
+| **Detailed task file + controlled config** | Comparing candidates or repeats after requirements are fixed. | Comparable artifacts under a cohort parent. |
 
-Quickstart is not a substitute for a controlled comparison. It is useful for
-shaping a task, validator, and acceptance cases before pinning them. Each
-quickstart example requires a configured Foundry environment, an existing
-deployment, and a matching `--provider` (`openai` or `anthropic`). The examples
-below use OpenAI. When `--source` is supplied, quickstart copies the clean
-starter into a new workspace and **does not modify the original**.
+All quickstart examples need configured Foundry credentials, an existing
+deployment, and the matching `--provider` value. Add `--source
+'C:\path\to\starter'` when an existing starter is needed; it copies input and
+does not alter the original. Promote a prompt to controlled mode only after its
+acceptance criteria, baseline, and evaluator are stable.
 
-### Quickstart: a standalone task
+## Simple quickstart prompts
 
-```powershell
-$model = Read-Host 'Existing OpenAI-compatible Foundry deployment name'
-npm run quickstart -- --provider openai --model $model --task 'Build a TypeScript CLI named reverse-text. Accept exactly one positional string and print its Unicode code points in reverse order followed by a newline; an empty string is valid. Missing or extra arguments print usage to stderr and exit 2. Do not add a web UI, external service, or runtime dependency. Add npm tests for normal, empty, non-ASCII, and invalid arguments. Done means npm test and npm run build pass and the built CLI has the stated stdout, stderr, and exit codes.'
-```
+These one-paragraph prompts are intentionally exploratory prototypes. Each is
+copyable after replacing `$model` with an OpenAI-compatible Foundry deployment;
+for an Anthropic-compatible deployment, use `--provider anthropic`.
 
-### Quickstart: a repair from a copied starter
+### CSV parser regression
 
 ```powershell
-$model = Read-Host 'Existing OpenAI-compatible Foundry deployment name'
-$source = Read-Host 'Clean URL-utility starter with npm test and npm run build'
-npm run quickstart -- --provider openai --model $model --source $source --task 'Fix joinUrlPath(base, segment) in the supplied TypeScript URL utility so it preserves https:// while removing only duplicate slashes at the join boundary. Preserve relative-path behavior and the public API. Do not change dependencies or unrelated utilities. Add regressions for HTTPS, boundary slashes, and relative bases. Done means npm test and npm run build pass with a focused patch.'
+$model = '<deployment-name>'
+npm run quickstart -- --provider openai --model $model --task 'Create or repair a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Preserve the existing public API if present, add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
 ```
 
-### Quickstart: a repository feature
+### TTL get-or-load cache
 
 ```powershell
-$model = Read-Host 'Existing OpenAI-compatible Foundry deployment name'
-$source = Read-Host 'Clean Node TypeScript API starter with npm test and npm run build'
-npm run quickstart -- --provider openai --model $model --source $source --task 'Add GET /healthz to the supplied Node TypeScript API. Return HTTP 200 with application/json and body {"status":"ok"}. The handler must not mutate state or contact external services. Preserve every existing route and authentication behavior, reuse the current router, and add in-process tests for the endpoint and an unchanged route. Done means npm test and npm run build pass.'
+$model = '<deployment-name>'
+npm run quickstart -- --provider openai --model $model --task 'Create or repair a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Preserve existing exports, add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
 ```
 
-## Task readiness checklist
-
-Before a controlled run, confirm all of the following:
-
-- The prompt names observable behavior, bounded scope, compatibility
-  constraints, invalid/edge cases, and a definition of done.
-- A single pristine source baseline is pinned by immutable commit SHA and a
-  recorded environment/container fingerprint.
-- Dependencies and any non-secret setup are present in that baseline or are
-  described as deterministic setup commands.
-- `validationCommand` is deterministic, noninteractive, offline unless the
-  task explicitly requires otherwise, and exits nonzero on failure.
-- Allowed tools, permitted network access, timeout, retries, and agent
-  instructions are explicit and stay the same across candidates.
-- Acceptance cases cover the required public behavior; use task-owned
-  conformance checks for cases the candidate's own tests could miss.
-- Neither the prompt, config, source baseline, validation command, nor artifacts
-  contain credentials, tokens, private URLs, or sensitive customer data.
-
-## Run a controlled multi-candidate cohort
-
-`workspacePath` is a candidate's working copy: `bench` modifies it. Never
-point it at the source baseline and never reuse a changed workspace. Give every
-candidate **and every attempt** its own clean workspace and config, while
-pointing every config at the same cohort `artifactsDirectory` parent.
+### Retry-policy repair
 
 ```powershell
-Copy-Item -LiteralPath '.\benchmark.example.json' -Destination '.\candidate-a-attempt-1.json'
-Copy-Item -LiteralPath '.\benchmark.example.json' -Destination '.\candidate-b-attempt-1.json'
-
-$baseline = '<pinned-commit-sha>'
-$source = 'C:\benchmark-sources\prepared-starter.git'
-$workspaceA = 'C:\benchmark-workspaces\candidate-a-attempt-1'
-$workspaceB = 'C:\benchmark-workspaces\candidate-b-attempt-1'
-$runs = 'C:\benchmark-artifacts\cohort-a'
-
-git clone $source $workspaceA
-git -C $workspaceA checkout --detach $baseline
-git clone $source $workspaceB
-git -C $workspaceB checkout --detach $baseline
-git -C $workspaceA status --porcelain
-git -C $workspaceB status --porcelain
+$model = '<deployment-name>'
+npm run quickstart -- --provider openai --model $model --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
 ```
 
-In each copied config, replace every `REPLACE_...` value. Set the same task,
-baseline, environment fingerprint, **ordered round prompts and modes**,
-execution policy, validator, and cohort `artifactsDirectory` (`$runs`); change
-only the recorded candidate provider/model/deployment and that attempt's
-`workspacePath`. Before **every** run, reset or check out the pinned baseline
-in its dedicated workspace and confirm `git status --porcelain` is empty.
+## Build a detailed task file
 
-```powershell
-git -C $workspaceA checkout --detach $baseline
-git -C $workspaceA clean -fd
-npm run bench -- --config '.\candidate-a-attempt-1.json'
+A strong `task.md` has these sections:
 
-git -C $workspaceB checkout --detach $baseline
-git -C $workspaceB clean -fd
-npm run bench -- --config '.\candidate-b-attempt-1.json'
+1. **Context and baseline** — compatible starter, immutable revision, and
+   what already works.
+2. **Public requirements** — observable API or CLI behavior and compatibility
+   constraints.
+3. **Invalid and edge cases** — explicit error and boundary behavior.
+4. **Non-goals** — tempting work that must not expand scope.
+5. **Visible validation** — deterministic, noninteractive command and what it
+   proves.
+6. **Private conformance mapping** — each hidden check maps to a public
+   requirement; never turn an unstated preference into a required failure.
+7. **Round plan** — initial task, then fixed review/repair follow-ups.
 
-npm run portfolio -- --runs $runs
-npm run prices:refresh -- --runs $runs
-npm run report:html -- --runs $runs
-```
+The task prompt is the first work request. `execution.instructions` set the
+stable operating policy. `rounds[]` contain follow-up messages only; prompt
+text, order, count, and `enqueue`/`immediate` mode are immutable comparison
+inputs.
 
-Repeat with new workspace/config names for later attempts. `bench` writes each
-run to `<artifactsDirectory>\<run-id>`; the three aggregate commands discover
-all `run.json` files below the one cohort parent. They write
-`model-selection-report.md`, `pricing-snapshot.json`, and
-`comparison-report.html` into that parent by default.
+### Blueprint: CSV parser regression
 
-## Author the contract and rounds
+**Context and baseline:** use a prepared TypeScript parser starter whose
+`parseCsv` already handles simple comma-separated LF rows; pin its commit.
 
-Copy [`benchmark.example.json`](../benchmark.example.json) and replace every
-placeholder. Its fields divide responsibility deliberately:
+**Public requirements:** preserve `parseCsv(text)` and support BOM, LF/CRLF,
+quoted commas, and escaped quotes.
 
-| Field | Purpose |
-|---|---|
-| `contract.task.id` | Stable task identity for joining repeated attempts. |
-| `contract.task.prompt` | The public problem statement: required behavior, boundaries, and acceptance cases. The runner submits it as the initial user work request before any round. |
-| `contract.task.repository` | Pinned starting commit and environment fingerprint used for comparability. |
-| `contract.task.validationCommand` | The candidate workspace's deterministic acceptance gate after agent work. |
-| `contract.task.conformanceProbe` | Optional task-owned independent checks after validation; see [quality evidence](#quality-evidence). |
-| `contract.candidate` | Recorded provider, model, and deployment identity. |
-| `contract.foundryProvider.type` | Required Foundry wire shape, exactly `openai` or `anthropic`; it must match the candidate provider. |
-| `contract.execution` | Instructions, allowed tools, approval mode, concurrency, retries, timeout, streaming, cache policy, and reasoning effort. Keep it identical for comparable runs. |
-| `contract.runtime` | Optional expected SDK/CLI/Node identity overrides; otherwise the runner records its installed runtime. |
-| `workspacePath` | The disposable, mutable candidate copy. |
-| `artifactsDirectory` | The common cohort parent; the runner creates a unique run-id subdirectory. |
-| `rounds[]` | Ordered follow-up messages sent through the same agent session after the initial task. |
+**Invalid and edge cases:** unmatched quotes throw an Error; an empty record
+has the documented shape.
 
-`task.prompt`, `execution.instructions`, and `rounds[].prompt` are different.
-The runner sends the task prompt once as the first work request; it defines the
-public job. Instructions set stable agent behavior, tool boundaries, and
-acceptance discipline across the cohort. Rounds model additional user turns
-after initial work; they should not repeat or change the task or silently add
-requirements.
+**Non-goals:** delimiter auto-detection, streaming, and new dependencies.
 
-Round plans are immutable comparison inputs: prompt text, order, count, and
-`enqueue`/`immediate` mode must match for a strict comparison. New run
-contracts persist them as version 2. Older version-1 artifacts remain readable,
-but their unrecorded round plans make comparisons conservatively **not strictly
-comparable**.
+**Visible validation:** `npm test && npm run build`, including public tests for
+ordinary records and existing API compatibility.
 
-For example, a two-round repair task can first say **"Implement the task and
-its focused tests."** and then **"Review the changes against the task, run
-validation, and repair remaining failures."** This measures the same
-review-and-repair opportunity for every candidate without changing acceptance
-criteria.
+**Private conformance mapping:** BOM, CRLF, quoted-comma, escaped-quote, and
+unmatched-quote checks each exercise one public requirement.
 
-## Quality evidence
+**Round plan:** implement with focused tests, then review edge cases and repair
+without changing the specification.
 
-Use complementary signals rather than collapsing them into an unsupported
-score:
+### Blueprint: stateful TTL cache
 
-| Signal | What it establishes | Effect |
-|---|---|---|
-| `validationCommand` | The candidate's configured tests/build passed. | Anchors the recorded deterministic outcome. |
-| Required conformance check | A task-owned expected behavior held against the delivered artifact. | A nonzero exit makes the conformance verdict non-conformant. |
-| Advisory conformance check | A useful but non-decisive signal. | A nonzero exit records **Weak**, not failure. |
-| Artifact inspection | Inventory/export facts and npm artifact-integrity checks. | Independent evidence; unavailable checks do not become passes. |
-| Optional fixed-rubric LLM judge | Qualitative review of final source with verifiable citations. | Supplementary only; never overrides deterministic outcome. Its full free-text output stays local-sensitive. |
+**Context and baseline:** use a prepared TypeScript cache starter with an
+injectable clock.
 
-There are no built-in numeric weights, and JSON does not support custom judge
-dimensions or weights today. Keep deterministic acceptance in validation and
-required probe checks; use the judge to explain trade-offs, not to make hidden
-requirements decisive.
+**Public requirements:** `getOrLoad` deduplicates a simultaneous miss, expires
+values at TTL, and does not cache rejected loaders.
 
-### Task-owned conformance checks
+**Invalid and edge cases:** zero TTL and loader rejection produce deterministic
+behavior.
 
-A conformance probe runs in the candidate workspace after validation. Keep the
-probe source **outside** that `workspacePath`, and do not reveal its path,
-command, or hidden inputs/prompt to the candidate. It may exercise independent
-cases but must not impose behavior missing from the public task.
+**Non-goals:** persistence, eviction policy, and background refresh.
+
+**Visible validation:** `npm test && npm run build` using fake time.
+
+**Private conformance mapping:** concurrent callers share one loader, expiry
+reloads, and rejection reloads each map to stated behavior.
+
+**Round plan:** implement with tests, then review races and repair without
+adding requirements.
+
+### Blueprint: configuration migration
+
+**Context and baseline:** use a prepared CLI/config-loader starter with an old,
+documented configuration shape.
+
+**Public requirements:** migrate a named legacy key to its replacement,
+preserve valid current configuration, warn on deprecated input, and write
+deterministic output.
+
+**Invalid and edge cases:** conflicting old/new values and malformed JSON
+produce a nonzero exit with a clear message.
+
+**Non-goals:** schema-framework replacement, cloud calls, and formatting
+unrelated files.
+
+**Visible validation:** `npm test && npm run build`.
+
+**Private conformance mapping:** legacy-only, current-only, conflict, and
+malformed-input checks map directly to the public requirements.
+
+**Round plan:** implement migration/tests, then review backward compatibility
+and repair.
+
+Each blueprint needs your prepared compatible starter; it is not a turnkey
+repository. The bundled [in-memory ordering scenario](../scenarios/in-memory-ordering-system/task.md)
+is the runnable, full multi-round example of the same pattern.
+
+## Connect the task file to a controlled config
+
+Copy [`benchmark.example.json`](../benchmark.example.json), fill every
+`REPLACE_...` value, and translate the public task into
+`contract.task.prompt`. The following compact fragment shows the relationship;
+merge it with the required execution fields in the full template.
 
 ```json
 {
-  "id": "duration-parser-v1",
-  "prompt": "Implement parseDuration(text) and a CLI that accepts nonnegative integer ms, s, and m values, rejects invalid values, preserves exports, and adds focused tests.",
-  "repository": {
-    "commitSha": "REPLACE_WITH_PINNED_COMMIT",
-    "containerFingerprint": "REPLACE_WITH_ACTUAL_ENVIRONMENT_FINGERPRINT"
-  },
-  "validationCommand": "npm test && npm run build",
-  "conformanceProbe": {
-    "description": "Independent public-artifact behavior checks.",
-    "setupCommand": "npm run build",
-    "timeoutMs": 60000,
-    "checks": [
-      {
-        "id": "valid",
-        "description": "The built public API accepts documented valid units.",
-        "command": "node \"C:\\benchmark-author\\probes\\duration-probe.mjs\" valid",
-        "severity": "required"
+  "contract": {
+    "task": {
+      "id": "ttl-cache-v1",
+      "prompt": "Implement the public requirements from the pinned TTL-cache task file.",
+      "repository": {
+        "commitSha": "PINNED_BASELINE_SHA",
+        "containerFingerprint": "RECORDED_ENVIRONMENT_FINGERPRINT"
       },
-      {
-        "id": "error-message",
-        "description": "Invalid input has a clear error message.",
-        "command": "node \"C:\\benchmark-author\\probes\\duration-probe.mjs\" error-message",
-        "severity": "advisory"
-      }
-    ]
-  }
+      "validationCommand": "npm test && npm run build"
+    },
+    "candidate": {
+      "provider": "openai",
+      "model": "FOUNDRY_DEPLOYMENT_NAME",
+      "deployment": "RECORDED_DEPLOYMENT_ID"
+    },
+    "foundryProvider": { "type": "openai" }
+  },
+  "rounds": [
+    {
+      "prompt": "Review the implementation against the stated TTL, single-flight, and rejection requirements. Run validation and repair remaining failures."
+    }
+  ]
 }
 ```
 
-`C:\benchmark-author\probes\duration-probe.mjs` is an external ESM probe. The
-runner executes it with the candidate workspace as its current directory, so
-the dynamic import resolves the delivered `dist\index.js`:
+`candidate.provider` and `foundryProvider.type` must be the same supported
+wire shape (`openai` or `anthropic`). A round should give every candidate the
+same repair opportunity, not restate the task or introduce a new requirement.
 
-```js
-import assert from "node:assert/strict";
-import { join } from "node:path";
-import { pathToFileURL } from "node:url";
+## Fairness checklist
 
-const entry = pathToFileURL(join(process.cwd(), "dist", "index.js")).href;
-const { parseDuration } = await import(entry);
+- Use a real but bounded task with observable artifact-level acceptance cases.
+- Pin one pristine baseline, compatible dependency setup, and environment
+  fingerprint.
+- Use a deterministic, noninteractive validator; avoid network calls and
+  sleeps unless the task evaluates them deliberately.
+- Keep the task prompt, instructions, ordered rounds/modes, tools, allowed
+  network access, timeouts, retry policy, cache policy, and runtime fixed.
+- Run every candidate and repeat in an isolated clean workspace from that
+  baseline. Retain failures, rate limits, and timeouts alongside passes.
+- Define whether web access or outside knowledge is permitted. If not, remove
+  it consistently; if it is, make it the same for every candidate and record
+  it in the contract.
+- Exclude credentials, private URLs, customer data, and confidential source
+  material from tasks, config, and artifacts.
 
-switch (process.argv[2]) {
-  case "valid":
-    assert.equal(parseDuration("2s"), 2000);
-    break;
-  case "error-message":
-    assert.throws(() => parseDuration("2x"), /invalid|unit/i);
-    break;
-  default:
-    throw new Error(`Unknown probe check: ${process.argv[2] ?? "(missing)"}`);
-}
-```
+## Quality evidence and scorecards
 
-Hand-run the same check from a prepared candidate workspace before using it in
-a cohort:
+Use a scorecard with independent evidence rather than an unsupported weighted
+total:
 
-```powershell
-Set-Location 'C:\benchmark-workspaces\candidate-a-attempt-1'
-node 'C:\benchmark-author\probes\duration-probe.mjs' valid
-node 'C:\benchmark-author\probes\duration-probe.mjs' error-message
-```
+| Signal | Purpose | Decision use |
+|---|---|---|
+| `validationCommand` | Runs the candidate workspace’s configured deterministic gate. | Primary recorded pass/fail outcome. |
+| Required conformance check | Independently exercises a public requirement. | Nonzero exit makes the conformance verdict non-conformant. |
+| Advisory conformance check | Captures a useful but non-decisive preference. | Nonzero exit is **Weak**, not failure. |
+| Artifact inspection | Reports inventory, exports, and applicable npm integrity checks. | Independent evidence, never an invented pass. |
+| Optional fixed-rubric LLM judge | Reviews final source and provides citations. | Supplementary qualitative evidence only. |
 
-## Privacy, retention, and pricing
+The JSON format does not support custom numeric weights or custom judge
+dimensions. Create a transparent task-owned scorecard by listing required
+behaviors, independent dimensions such as maintainability or test adequacy,
+and the evidence source for each. Do not let a judge override deterministic
+checks.
 
-Keep raw run artifacts local and sensitive. `run.json`, raw and normalized
-event logs, validation/probe output, diagnostics, patches, and copied
-workspaces can contain task content, paths, or other information unsuitable for
-publication. The sanitized HTML report is not proof that every raw artifact is
-safe to share: it is a separate export that retains only allowlisted replay and
-conformance metadata plus structured numeric judge scores, and it makes no
-external requests. The full `llm-evaluation-*.json` judge artifact remains
-sensitive local evidence.
+Keep probe source outside the candidate `workspacePath`; do not disclose its
+path, command, or hidden input/prompt to the candidate. The runner invokes
+probe commands with the candidate workspace as its current directory. Run each
+probe manually there before the cohort. For evaluator validation, prove the
+baseline fails an intended repair check (and passes preserved behavior), prove
+a reference implementation passes all checks, and ensure every hidden check
+maps to a public requirement. Use fake time/transport and no network or real
+sleeps.
 
-Run `npm run prices:refresh -- --runs <cohort-parent>` after collecting a
-cohort. It detects OpenAI and/or Anthropic candidates and fetches only the
-needed official public pricing pages. Use `--region` and `--pricing-model` to
-select the applicable official model/tier/region scenario. Azure alternatives
-are labelled rather than guessed; Claude includes explicit 5-minute and
-1-hour cache-write scenarios. The minimum published list-price ranking is
-withheld when contracts drift; otherwise treat it as a scenario-specific
-estimate, never an invoice or inferred billing default.
+## Privacy, pricing, and retention
 
-See the README's [Reading a generated report](../README.md#reading-a-generated-report)
-section for how the portfolio, pricing snapshot, and HTML report support a
-decision without masking failures, repeats, comparability drift, or missing
-values.
+Raw run artifacts are local-sensitive: they can contain task text, paths,
+events, validator/probe output, patches, and full judge content. The
+self-contained HTML report is a separate publication-oriented export with
+allowlisted replay/conformance metadata and structured numeric judge data; it
+makes no external requests, but is not proof that raw artifacts are shareable.
+
+After a cohort, run `npm run portfolio -- --runs <cohort-parent>`, then
+`npm run prices:refresh -- --runs <cohort-parent>`, then `npm run report:html
+-- --runs <cohort-parent>`. Pricing fetches official pages only for detected
+providers. Select the applicable labelled region/model scenario; Azure
+alternatives are not guessed, Claude cache writes retain 5-minute and 1-hour
+scenarios, and minimum published list price is an estimate rather than an
+invoice. The report withholds cost ranking when contracts drift.
+
+See the README’s [Start here](../README.md#start-here) flow and [report
+guidance](../README.md#reading-a-generated-report) for the canonical commands
+and interpretation.
