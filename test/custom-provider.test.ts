@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import {
   loadBenchmarkConfig,
   requiredEnvironmentValue,
   resolveFoundryProvider,
+  runBenchmark,
 } from "../src/runner.js";
 
 const environment = {
@@ -78,6 +79,31 @@ test("loads the Foundry-only benchmark template with a matching candidate provid
   assert.equal(config.contract.foundryProvider.type, "openai");
   assert.equal(config.contract.candidate.provider, config.contract.foundryProvider.type);
   assert.equal(config.contract.execution.reasoningEffort, "high");
+});
+
+test("rejects mismatched candidate provider and Foundry wire shape before a run starts", async () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-config-"));
+  const path = join(root, "mismatched-provider.json");
+  writeFileSync(path, JSON.stringify({
+    contract: {
+      candidate: { provider: "anthropic" },
+      foundryProvider: { type: "openai" },
+    },
+  }));
+  assert.throws(
+    () => loadBenchmarkConfig(path),
+    /candidate\.provider \(anthropic\) to match contract\.foundryProvider\.type \(openai\)/,
+  );
+
+  const matchingConfig = loadBenchmarkConfig(fileURLToPath(new URL("../benchmark.example.json", import.meta.url)));
+  matchingConfig.contract.candidate.provider = "anthropic";
+  matchingConfig.workspacePath = join(root, "workspace");
+  matchingConfig.artifactsDirectory = join(root, "artifacts");
+  await assert.rejects(
+    () => runBenchmark(matchingConfig),
+    /candidate\.provider \(anthropic\) to match contract\.foundryProvider\.type \(openai\)/,
+  );
+  assert.equal(existsSync(matchingConfig.artifactsDirectory), false);
 });
 
 test("fingerprints the derived endpoint and discloses the selected compatibility adaptation", () => {

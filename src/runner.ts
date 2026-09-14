@@ -76,6 +76,7 @@ export function benchmarkWorkRequests(
 }
 
 export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
+  const contract = materializeContract(config);
   const runId = randomUUID();
   const startedAt = new Date().toISOString();
   const artifactsDirectory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
@@ -91,7 +92,6 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     inspection: join(artifactsDirectory, "artifact-inspection.json"),
     conformance: join(artifactsDirectory, "conformance-probe.json"),
   };
-  const contract = materializeContract(config);
   assertSupportedPolicy(contract);
   const collector = new EventCollector(artifacts.rawEvents, artifacts.normalizedEvents, options.onEvent);
   collector.captureRunnerEvent("runner.run_started", { runId });
@@ -296,6 +296,18 @@ function assertFoundryOnlyConfig(config: unknown): asserts config is BenchmarkCo
   if (!isRecord(provider) || (provider.type !== "openai" && provider.type !== "anthropic")) {
     throw new TypeError(
       "Benchmark configuration requires contract.foundryProvider.type set to exactly openai or anthropic.",
+    );
+  }
+  const candidate = config.contract.candidate;
+  if (!isRecord(candidate) || (candidate.provider !== "openai" && candidate.provider !== "anthropic")) {
+    throw new TypeError(
+      "Benchmark configuration requires contract.candidate.provider set to exactly openai or anthropic.",
+    );
+  }
+  if (candidate.provider !== provider.type) {
+    throw new TypeError(
+      `Benchmark configuration requires contract.candidate.provider (${candidate.provider}) to match ` +
+        `contract.foundryProvider.type (${provider.type}).`,
     );
   }
 }
@@ -617,6 +629,7 @@ function closeServer(server: Server): Promise<void> {
 }
 
 function materializeContract(config: BenchmarkConfig): RunContract {
+  assertFoundryOnlyConfig(config);
   return {
     contractVersion: 2,
     task: config.contract.task,
