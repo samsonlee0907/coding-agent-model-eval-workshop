@@ -46,21 +46,22 @@ for an Anthropic-compatible deployment, use `--provider anthropic`.
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model --task 'Create or repair a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Preserve the existing public API if present, add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
+npm run quickstart -- --provider openai --model $model --task 'Build a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
 ```
 
 ### TTL get-or-load cache
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model --task 'Create or repair a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Preserve existing exports, add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
+npm run quickstart -- --provider openai --model $model --task 'Build a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
 ```
 
 ### Retry-policy repair
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
+$source = Read-Host 'Clean TypeScript retry-policy starter path'
+npm run quickstart -- --provider openai --model $model --source $source --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
 ```
 
 ## Build a detailed task file
