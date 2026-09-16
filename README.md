@@ -9,17 +9,28 @@ checks, and produces comparison artifacts.
 
 ### 1. Install
 
-Prerequisites: Node.js 20.19 or later, npm, Git, and an existing Microsoft
-Foundry deployment that supports either the OpenAI or Anthropic wire shape.
-The toolkit does not provision cloud resources. `npm install` includes the
-Copilot SDK runtime; a separate CLI is optional and can be pinned with
-`BENCHMARK_COPILOT_CLI_PATH`.
+| Prerequisite | Required for | Notes |
+|---|---|---|
+| Node.js 20.19+ (including npm) | Installation and all commands | npm ships with Node.js. |
+| Git | Cloning and controlled baseline preparation | Make it available on `PATH`. |
+| Network access | `npm install`, live Foundry runs, and `prices:refresh` | Pricing refresh contacts only official pages for detected providers. |
+| Microsoft Foundry resource and deployment | Live runs | Use an existing OpenAI- or Anthropic-compatible deployment; this toolkit does not provision cloud resources. |
+| `FOUNDRY_ENDPOINT` and `FOUNDRY_API_KEY` | Live runs and optional judge calls | Set both only in the current shell; see [Configure Foundry](#2-configure-foundry). |
+| GitHub Copilot SDK | All runs | `npm install` installs `@github/copilot-sdk`, including its bundled Copilot CLI runtime. |
+| Standalone Copilot CLI | Optional | Not required. Use only to intentionally override or pin the runtime with `BENCHMARK_COPILOT_CLI_PATH` or a `copilot` executable on `PATH`. |
+
+No GitHub Copilot subscription or standalone Copilot CLI installation is
+required for Foundry-backed runs.
 
 ```powershell
 git clone https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
 Set-Location coding-agent-model-eval-workshop
+node --version
+npm --version
+git --version
 npm install
 npm run build
+npm test
 ```
 
 ### 2. Configure Foundry
