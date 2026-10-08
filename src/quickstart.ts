@@ -6,7 +6,9 @@ import type {
   BenchmarkConfig,
   FoundryProviderType,
   ReasoningEffort,
+  FoundryAuth,
 } from "./types.js";
+import { parseAuthFlags, providerSchema } from "./auth.js";
 
 const ignoredArtifactEntries = new Set([".git", "node_modules", "dist", ".benchmark-artifacts", ".benchmark-runs"]);
 
@@ -18,6 +20,8 @@ export interface QuickstartOptions {
   provider: FoundryProviderType;
   deployment?: string;
   reasoningEffort?: ReasoningEffort;
+  auth?: FoundryAuth;
+  wireApi?: "completions" | "responses";
 }
 
 export interface QuickstartWorkspace {
@@ -67,6 +71,8 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
       },
       foundryProvider: {
         type: options.provider,
+        ...(options.auth ? { auth: options.auth } : {}),
+        ...(options.wireApi ? { wireApi: options.wireApi } : {}),
       },
       execution: {
         instructions: [
@@ -115,6 +121,9 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
   }
   const model = argumentValue(argv, "--model");
   const provider = parseFoundryProvider(argumentValue(argv, "--provider"));
+  const foundry = providerSchema.parse({
+    type: provider, auth: parseAuthFlags((flag) => argumentValue(argv, flag)), wireApi: argumentValue(argv, "--wire-api"),
+  });
   if (!model) {
     throw new TypeError("--model is required.");
   }
@@ -126,6 +135,8 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
     provider,
     deployment: argumentValue(argv, "--deployment"),
     reasoningEffort: parseReasoningEffort(argumentValue(argv, "--reasoning-effort")),
+    ...(foundry.auth ? { auth: foundry.auth } : {}),
+    ...(foundry.wireApi ? { wireApi: foundry.wireApi } : {}),
   };
 }
 
@@ -139,6 +150,7 @@ function assertSupportedOptions(argv: readonly string[]): void {
     "--reasoning-effort",
     "--source",
     "--output",
+    "--auth", "--credential", "--tenant-id", "--client-id", "--wire-api",
   ]);
   for (const token of argv) {
     if (token.startsWith("--") && !optionsWithValues.has(token)) {

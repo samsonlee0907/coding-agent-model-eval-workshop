@@ -1,9 +1,10 @@
 # Coding Agent Model Evaluation Workshop
 
-A TypeScript/npm toolkit for comparing coding-agent runs on the same task and
-execution policy. It drives persistent GitHub Copilot SDK sessions through
-existing Microsoft Foundry deployments, records evidence, runs deterministic
-checks, and produces comparison artifacts.
+A TypeScript/npm toolkit for user-defined, single- or multi-task coding-agent
+benchmarks. It drives persistent GitHub Copilot SDK sessions through existing
+Microsoft Foundry deployments, pins task and evaluator evidence, supports
+resumable campaigns, and publishes portable offline reports. Task types and
+categories are optional user metadata, not a bundled benchmark dataset.
 
 ## Start here
 
@@ -15,9 +16,10 @@ checks, and produces comparison artifacts.
 | Git | Cloning and controlled baseline preparation | Make it available on `PATH`. |
 | Network access | `npm install`, live Foundry runs, and `prices:refresh` | Pricing refresh contacts only official pages for detected providers. |
 | Microsoft Foundry resource and deployment | Live runs | Use an existing OpenAI- or Anthropic-compatible deployment; this toolkit does not provision cloud resources. |
-| `FOUNDRY_ENDPOINT` and `FOUNDRY_API_KEY` | Live runs and optional judge calls | Set both only in the current shell; see [Configure Foundry](#2-configure-foundry). |
+| `FOUNDRY_ENDPOINT` and selected authentication | Live runs and optional judge calls | Key mode requires `FOUNDRY_API_KEY`; Entra uses an explicitly selected Azure Identity credential. |
 | GitHub Copilot SDK | All runs | `npm install` installs `@github/copilot-sdk`, including its bundled Copilot CLI runtime. |
 | Standalone Copilot CLI | Optional | Not required. Use only to intentionally override or pin the runtime with `BENCHMARK_COPILOT_CLI_PATH` or a `copilot` executable on `PATH`. |
+| Docker Linux daemon and a prepared digest-pinned image | Isolated execution only | No automatic image pull or trusted-host fallback; see [campaign and publication guide](docs/CAMPAIGNS_AND_PUBLICATION.md). |
 
 No GitHub Copilot subscription or standalone Copilot CLI installation is
 required for Foundry-backed runs.
@@ -56,6 +58,39 @@ Use the provider that matches the deployment and record its deployment name in
 See Microsoft’s [model endpoint documentation](https://learn.microsoft.com/azure/foundry/foundry-models/concepts/endpoints)
 for deployment prerequisites.
 
+Omitted `auth` preserves **key mode**; omitted `wireApi` preserves OpenAI
+**completions**. Select Responses explicitly when supported by your deployment.
+For Entra, no API key is required:
+
+```powershell
+az login --tenant '<intended-tenant-id>'
+# Keep this explicitly signed-in CLI account stable throughout a campaign.
+npm run quickstart -- --provider openai --model '<deployment>' --wire-api responses --auth entra --credential azure-cli --tenant-id '<intended-tenant-id>' --task 'Create a small string-reversal CLI and deterministic tests.'
+```
+
+For `bench` and campaign candidates, configure
+`contract.foundryProvider.auth` as
+`{"mode":"entra","credential":"azure-cli","tenantId":"<tenant-uuid>"}`.
+`managed-identity` optionally takes a user-assigned `clientId`;
+`workload-identity` requires `tenantId`, `clientId`, and the host's
+`AZURE_FEDERATED_TOKEN_FILE`. The toolkit never changes identities or falls
+back to a key after an auth failure. Azure Identity owns token caching and
+refresh through the pinned SDK's experimental bearer callback, following its
+[exact-version guide](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/setup/azure-managed-identity.md).
+
+Inference permissions are endpoint-specific: Azure OpenAI documents
+**Cognitive Services OpenAI User**; direct Foundry model inference documents
+**Cognitive Services User**. Project/agent roles are not substitutes for a
+resource's inference role. Management Contributor or `az login` is not proof
+of data-plane permission. No roles, deployments, resources, or key policies
+are changed by this toolkit.
+
+```powershell
+npm run doctor -- --config '.\candidate-a.json'
+# Optional token-only check; contacts identity services, never model inference.
+npm run doctor -- --config '.\candidate-a.json' --acquire-auth
+```
+
 ### 3. Try one exploratory task
 
 `quickstart` creates a disposable workspace and local Git baseline. With
@@ -71,7 +106,7 @@ task prompts here; use controlled runs once acceptance criteria and a baseline
 are fixed. The [task authoring guide](docs/TASK_AUTHORING_GUIDE.md) provides
 copyable prompts and task-file blueprints.
 
-### 4. Run a controlled cohort
+### 4. Run a controlled cohort (trusted local by default)
 
 Copy [`benchmark.example.json`](benchmark.example.json) once per candidate and
 attempt. `workspacePath` is a mutable candidate copy: never point it at the
@@ -98,6 +133,11 @@ ordered follow-up/review turns. Keep task prompt, baseline, instructions,
 round prompts and modes, tools, network policy, runtime, validation command,
 and execution settings identical for a strictly comparable cohort.
 
+Without `isolation`, tools and validators can access host files, credentials,
+Azure CLI caches, and network resources. Scrubbing the two Foundry environment
+variables is **not credential isolation**. Use the container profile for
+credential-isolated candidate execution, with its documented prerequisites.
+
 ### 5. Generate decision artifacts
 
 ```powershell
@@ -108,15 +148,67 @@ npm run report:html -- --runs $runs
 ```
 
 These write `$runs\model-selection-report.md`, `$runs\pricing-snapshot.json`,
-and `$runs\comparison-report.html`. `prices:refresh` detects OpenAI and/or
+and `$runs\benchmark-report\index.html` plus consistent JSON/CSV exports.
+The **default HTML destination changed to a portable folder**. Existing
+single-file calls remain compatible:
+
+```powershell
+npm run report:html -- --runs $runs --output "$runs\comparison-report.html"
+npm run report:html -- --runs $runs --bundle "$runs\report-v2" --zip
+```
+
+Portable publication refuses an existing folder/ZIP; choose a new versioned
+destination. Explicit single-file output is atomically replaced only after
+rendering succeeds. `prices:refresh` detects OpenAI and/or
 Anthropic candidates and fetches only their official public pricing pages. Use
 `--region <pricing-page-region>` and
 `--pricing-model <recorded-model>=<official-label>` to choose the applicable
 published scenario.
 
+## Resumable user-defined campaigns
+
+The compact [custom campaign](examples/custom-campaign/campaign.json) has two
+independently authored tasks and arbitrary deployment placeholders. Replace
+the deployments and review all bounds before live work. Preparation, status,
+and reporting need no cloud credentials and do not call a model:
+
+```powershell
+$state = '.benchmark-runs\custom-campaign'
+npm run campaign -- prepare --spec '.\examples\custom-campaign\campaign.json' --directory $state
+npm run campaign -- status --directory $state
+npm run campaign -- report --directory $state --output '.\reports\prepared-preview' --zip
+
+# Explicitly paid operations, only after credentials/deployments/bounds are reviewed:
+npm run campaign -- run --directory $state --allow-paid
+npm run campaign -- resume --directory $state --allow-paid
+npm run campaign -- report --directory $state --output '.\reports\completed-v1' --zip
+```
+
+Preparation snapshots immutable inputs, prompts, rounds, runtime, evaluator
+policy, optional private grader assets and optional pricing. Run/resume uses
+owned durable journals, per-deployment pacing, memory admission and finite
+request/token/USD reservations. It skips clean content FAILs as well as PASSes,
+finalizes retained outputs without inference, and denies ambiguous request
+replay. Follow the [campaign and publication guide](docs/CAMPAIGNS_AND_PUBLICATION.md)
+for recovery, isolation, calibration, publication manifests and limits.
+
 ## Reading a generated report
 
-Read a cohort as an evidence scorecard, not as a single winner. The HTML report
+The default report is titled **Coding Agent Model Benchmark**. Read it as an
+evidence scorecard, not as a single winner. Methodology precedes an interactive
+task-by-model matrix. The default selected attempt is the **latest clean
+completion, including content FAILs, not the latest PASS**. Missing,
+interrupted, evaluator-error and ungraded cells remain visible. A newer
+interruption does not erase an earlier completion. Candidate-owned validation
+and independent required acceptance are separate; validation alone is not PASS.
+
+Matched task-type charts use equal graded coverage and recorded comparability
+signatures. Sparse results are descriptive, not production-routing claims.
+Inspectors show contract/prompt/round/grade/workspace bindings, approved
+previews and metadata replay. Supplementary legacy details retain all-attempt
+evidence, pricing and judge information.
+
+The HTML report
 shows provider/model/deployment identity, outcome and validation state,
 conformance and artifact-inspection evidence, wall time, output tokens,
 agent-turn/model-call activity, and SDK-reported cache share
@@ -145,8 +237,11 @@ are strictly comparable, the **minimum published list-price** rank is the
 lowest complete matching official list-price scenario; it is not a billing
 default or replacement for provider telemetry.
 
-Only `comparison-report.html` is the self-contained, publication-oriented
-export and it makes no external requests. Raw event logs, `run.json`,
+The portable report folder/ZIP and explicit single HTML are publication-oriented
+exports and make no external requests when opened. Default publication includes
+metadata only; review task labels too. Source/output contents and active
+original downloads require an explicit hash-bound publication manifest.
+Raw event logs, `run.json`,
 per-run `report.md`, `model-selection-report.md`, validation/probe output,
 `llm-evaluation-*.json`, patches, and workspaces are sensitive local evidence
 that require separate review before sharing.
@@ -173,3 +268,6 @@ process environment, so do not put credentials in config files.
 - Cost, TTFT, TPOT, cache, and other telemetry are reported only when captured;
   missing data is labelled unavailable rather than estimated.
 - Automated tests use fixtures and mocks; they do not make live provider calls.
+- Local acceptance includes the pinned SDK/CLI with a fake localhost Responses
+  provider and offline Edge checks. Real deployment/RBAC/key/Entra behavior and
+  real container enforcement require separately authorized live acceptance.

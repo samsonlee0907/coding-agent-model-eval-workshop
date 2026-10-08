@@ -1,0 +1,21 @@
+{
+  "workspacePath": "json-input",
+  "contract": {
+    "task": {
+      "id": "json-result", "version": "1", "title": "User-defined structured artifact",
+      "taskType": "structured-data",
+      "prompt": "Read the supplied numbers.json and write answer.json with a numeric sum equal to the sum of its original numbers array. Whitespace and additional fields are permitted.",
+      "repository": { "commitSha": "content-addressed-inputs", "containerFingerprint": "trusted-local-example" },
+      "validationCommand": "node -e \"const fs=require('node:fs');if(JSON.parse(fs.readFileSync('answer.json','utf8')).sum!==16)process.exit(1)\""
+    },
+    "candidate": { "provider": "openai", "model": "REPLACED_BY_CAMPAIGN" },
+    "foundryProvider": { "type": "openai", "wireApi": "responses" },
+    "execution": {
+      "instructions": "Follow the public task requirements. Work only inside the supplied workspace.",
+      "tools": ["read", "edit", "shell"], "permissionMode": "approve-all", "concurrency": 1,
+      "retries": 2, "sessionTimeoutMs": 120000, "streaming": true,
+      "cachePolicy": "default", "reasoningEffort": "high"
+    }
+  },
+  "rounds": [{ "prompt": "Review the delivered artifact against the original public requirements and repair any errors." }]
+}

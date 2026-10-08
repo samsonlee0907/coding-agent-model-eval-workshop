@@ -29,12 +29,65 @@ tool implements another harness.
 |---|---|---|
 | **Simple quickstart prompt** | Exploring whether a task is clear and bounded. | One disposable local run. |
 | **Detailed task file + controlled config** | Comparing candidates or repeats after requirements are fixed. | Comparable artifacts under a cohort parent. |
+| **Prepared campaign with task-owned evaluators** | One or many custom tasks, candidates, types/categories and repeats. | Immutable inputs, durable recovery, declared missing cells and portable reports. |
 
 All quickstart examples need configured Foundry credentials, an existing
 deployment, and the matching `--provider` value. Add `--source
 'C:\path\to\starter'` when an existing starter is needed; it copies input and
 does not alter the original. Promote a prompt to controlled mode only after its
 acceptance criteria, baseline, and evaluator are stable.
+
+For a campaign, add each task configuration to a `schemaVersion: 1` manifest;
+candidate deployments are supplied separately and override the config's
+placeholder candidate. The [compact custom example](../examples/custom-campaign/campaign.json)
+and [campaign guide](CAMPAIGNS_AND_PUBLICATION.md) show preparation, bounded
+execution, resume, optional private grader assets and reviewed publication.
+No fixed category vocabulary, private suite, canned model advice or required
+task count exists.
+
+## Versioned evidence and evaluator design
+
+Optional task `version`, `title`, `taskType` and `tags` organize reporting.
+Choose stable task IDs and meaningful types yourself. The campaign pins input
+bytes, instructions, full task/round prompts, execution/runtime/image and
+evaluator policy. Changing any immutable comparison input means a new cohort.
+Neither a recovery prompt for only one candidate nor a model-specific grading
+exception is a fair shared policy.
+
+Candidate-owned validation answers whether its visible checks ran green.
+Independent required acceptance is a separate dimension. Without complete
+required evidence, a clean run is **UNGRADED**, not PASS. Required content
+failures stay selected; an advisory WEAK result is visible but not a required
+failure. Evaluator ERROR is not silently treated as incorrect content or zero.
+The default report selects the latest **clean completed** attempt rather than
+the latest passing attempt; planned repeats and infrastructure attempts have
+different denominators.
+
+A generic evaluator JSON declares schema/version, timeout/optional overall
+deadline and check ID, public requirement ID, category, expected type,
+required/advisory severity and command. Exit 0 passes; `failureExitCodes`
+defaults to `[1]`; other exits mean evaluator error. Checks run sequentially
+and retain every check status. Use stable public criteria, not wording or
+formatting preferences that were never requested.
+
+Calibrate required checks using reference positives, deliberate negatives and
+equivalent-valid representations. Examples include whitespace/key-order
+differences for JSON, alternate valid field access for code, or semantically
+equivalent wording where the public contract permits it. Do not normalize away
+a genuinely required source ID, numeric type, set membership or ordering rule.
+`calibrateEvaluator`/`verifyCalibration` bind the reference observations to the
+exact policy hash. A calibration flag alone is not evidence.
+
+Saved grades bind the run, contract, workspace byte hash, policy and version.
+To fix a grader, version the policy and apply it uniformly to all relevant
+saved outputs in a separately declared report cohort. Resume never regrades
+one failed candidate until it passes or silently changes immutable grades.
+
+Publication is separate from grading. Keep confidential inputs/oracles outside
+candidate inputs and default exports. Only a reviewed manifest may approve
+source/output previews and optionally active original downloads. The campaign
+guide explains content hashes, private `/grader` files, unsupported PDF/OCR
+and workbook recalculation, and honest missingness.
 
 ## Simple quickstart prompts
 

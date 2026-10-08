@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { comparableBaselineSignature } from "./contract.js";
 import type { BenchmarkRun, Metric } from "./types.js";
+import { assertBenchmarkRun } from "./evidence.js";
 
 const minimumComparableRepeats = 3;
 
@@ -9,7 +10,8 @@ export function loadBenchmarkRuns(directory: string, options: { relocateArtifact
   return walk(directory)
     .filter((path) => basename(path) === "run.json")
     .map((path) => {
-      const run = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as BenchmarkRun;
+      const run: unknown = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+      assertBenchmarkRun(run);
       if (!options.relocateArtifacts) return run;
       const artifactDirectory = resolve(dirname(path));
       const local = (recorded: string) => join(artifactDirectory, basename(recorded.replaceAll("\\", "/")));

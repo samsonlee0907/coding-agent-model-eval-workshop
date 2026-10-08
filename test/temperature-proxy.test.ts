@@ -15,7 +15,7 @@ test("Foundry compatibility proxy removes only temperature and preserves the tar
     incoming.on("end", () => {
       receivedBody = JSON.parse(Buffer.concat(chunks).toString("utf8")) as Record<string, unknown>;
       outgoing.writeHead(200, { "content-type": "application/json" });
-      outgoing.end(JSON.stringify({ ok: true }));
+      outgoing.end(JSON.stringify({ id: "fixture", type: "message", stop_reason: "end_turn", content: [] }));
     });
   });
   await listen(upstream);

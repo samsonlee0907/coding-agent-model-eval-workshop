@@ -1,0 +1,21 @@
+{
+  "workspacePath": "text-input",
+  "contract": {
+    "task": {
+      "id": "text-result", "version": "1", "title": "User-defined text artifact",
+      "taskType": "text-artifact", "tags": ["custom", "small"],
+      "prompt": "Read input.txt and create result.txt containing exactly OK, with an optional trailing newline.",
+      "repository": { "commitSha": "content-addressed-inputs", "containerFingerprint": "trusted-local-example" },
+      "validationCommand": "node -e \"const fs=require('node:fs');if(fs.readFileSync('result.txt','utf8').trim()!=='OK')process.exit(1)\""
+    },
+    "candidate": { "provider": "openai", "model": "REPLACED_BY_CAMPAIGN" },
+    "foundryProvider": { "type": "openai", "wireApi": "responses" },
+    "execution": {
+      "instructions": "Follow the public task requirements. Work only inside the supplied workspace.",
+      "tools": ["read", "edit", "shell"], "permissionMode": "approve-all", "concurrency": 1,
+      "retries": 2, "sessionTimeoutMs": 120000, "streaming": true,
+      "cachePolicy": "default", "reasoningEffort": "high"
+    }
+  },
+  "rounds": [{ "prompt": "Review the delivered artifact against the original public requirements and repair any errors." }]
+}

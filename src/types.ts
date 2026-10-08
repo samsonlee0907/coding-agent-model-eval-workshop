@@ -10,6 +10,12 @@ export interface RepositoryContract {
 
 export interface TaskContract {
   id: string;
+  version?: string;
+  title?: string;
+  taskType?: string;
+  tags?: string[];
+  inputsHash?: string;
+  graderInputsHash?: string;
   prompt: string;
   repository: RepositoryContract;
   validationCommand: string;
@@ -166,18 +172,31 @@ export interface RuntimeIdentity {
   sdkVersion: string;
   cliVersion: string;
   nodeVersion: string;
+  cliSha256?: string;
 }
 
 export type FoundryProviderType = "openai" | "anthropic";
 
 /**
  * Foundry-only provider selection. The runner always reads the canonical
- * resource root and credential from FOUNDRY_ENDPOINT and FOUNDRY_API_KEY.
+ * resource root from FOUNDRY_ENDPOINT; key mode reads FOUNDRY_API_KEY,
+ * while Entra mode uses the explicitly selected Azure Identity credential.
  */
 export interface FoundryProviderConfig {
   type: FoundryProviderType;
+  wireApi?: "completions" | "responses";
+  auth?: FoundryAuth;
 }
 
+export type FoundryAuth =
+  | { mode: "key" }
+  | {
+      mode: "entra";
+      credential: "azure-cli" | "managed-identity" | "workload-identity";
+      tenantId?: string;
+      clientId?: string;
+      timeoutMs?: number;
+    };
 /**
  * Safe Foundry provider identity persisted in a run contract. The endpoint is
  * fingerprinted so traces never disclose its raw URL or credential.
@@ -186,6 +205,8 @@ export interface FoundryProviderIdentity {
   type: FoundryProviderType;
   endpointFingerprint: string;
   requestAdaptation: "openai-null-refusal-sanitizer" | "strip-temperature";
+  wireApi?: "completions" | "responses";
+  auth?: FoundryAuth;
 }
 
 export interface BenchmarkRound {
@@ -203,6 +224,11 @@ export interface RunContract {
   foundryProvider?: FoundryProviderIdentity;
   /** Version 2 persists the follow-up work requests used for this attempt. */
   rounds?: BenchmarkRound[];
+  executionProfile?: {
+    mode: "trusted-local" | "container";
+    image?: string;
+    requestBoundsHash?: string;
+  };
 }
 
 export interface ComparisonContract {
@@ -224,6 +250,24 @@ export interface BenchmarkConfig {
   rounds: BenchmarkRound[];
   workspacePath: string;
   artifactsDirectory?: string;
+  isolation?: {
+    mode: "container";
+    image: string;
+    memoryMb: number;
+    cpus: number;
+    maxFiles: number;
+    maxBytes: number;
+    commandTimeoutMs: number;
+  };
+  requestBounds?: {
+    maxRequests: number;
+    maxRequestBytes: number;
+    maxTokens: number;
+    maxOutputTokens: number;
+    deadlineMs: number;
+    requestsPerMinute: number;
+    tokensPerMinute: number;
+  };
 }
 
 export interface RawEventRecord {
@@ -368,6 +412,23 @@ export interface BenchmarkRun {
   metrics: DerivedMetrics;
   outcome: Outcome;
   runnerError: string | null;
+  executionStatus?: "completed" | "interrupted";
+  workspaceHash?: string;
+  requestAccounting?: {
+    physicalRequests: number;
+    reservedTokens: number;
+    ambiguousRequests: number;
+    rejectedRequests: number;
+  };
+  recordedPricing?: {
+    snapshotHash: string;
+    refreshedAt: string;
+    currency: "USD";
+    scenarioId: string;
+    estimatedUsd: number | null;
+    accountingAssumption: string | null;
+    unavailableReason: string | null;
+  };
 }
 
 export interface LlmJudgeConfig {
@@ -523,6 +584,7 @@ export interface LlmEvaluationResult {
 export interface RunDiagnostics {
   schemaVersion: 1;
   runtime: RuntimeIdentity;
+  reportedBackendVersion?: string;
   selectedModel: string | null;
   configuredToolFilters: string[];
   configurationMessages: string[];
@@ -532,6 +594,7 @@ export interface RunDiagnostics {
       | "anthropic_temperature_deprecated"
       | "provider_resource_not_found"
       | "azure_key_auth_disabled"
+      | "permanent_quota"
       | "other"
       | null;
     message: string | null;

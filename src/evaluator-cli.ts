@@ -14,7 +14,7 @@ if (process.argv.includes("--help")) {
       throw new RangeError(`No completed run.json artifacts found under ${options.runsDirectory}.`);
     }
     const evaluation = await evaluateBenchmarkRuns(runs, {
-      provider: { type: options.provider },
+      provider: { type: options.provider, auth: options.auth, wireApi: options.wireApi },
       model: options.model,
       reasoningEffort: options.reasoningEffort,
       timeoutMs: options.timeoutMs,

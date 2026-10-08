@@ -28,6 +28,7 @@ export async function runConformanceProbe(
   spec: ConformanceProbeSpec,
   workspacePath: string,
   fallbackTimeoutMs: number,
+  execute: typeof runValidation = runValidation,
 ): Promise<ConformanceProbeResult> {
   const startedAt = new Date().toISOString();
   const started = Date.now();
@@ -43,7 +44,7 @@ export async function runConformanceProbe(
   }
 
   const setup = spec.setupCommand
-    ? await runValidation(spec.setupCommand, workspacePath, timeoutMs)
+    ? await execute(spec.setupCommand, workspacePath, timeoutMs)
     : null;
 
   // A failed setup makes every check result meaningless. Recording them as
@@ -67,7 +68,7 @@ export async function runConformanceProbe(
 
   const checks: ConformanceCheckResult[] = [];
   for (const check of spec.checks) {
-    const result = await runValidation(check.command, workspacePath, timeoutMs);
+    const result = await execute(check.command, workspacePath, timeoutMs);
     checks.push(toCheckResult(check, result));
   }
 

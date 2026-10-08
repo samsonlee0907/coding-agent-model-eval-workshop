@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1, "version": "json-acceptance-v1", "timeoutMs": 10000, "deadlineMs": 20000,
+  "checks": [{
+    "id": "public-sum", "requirementId": "R1", "category": "semantic",
+    "expectedType": "json-number", "severity": "required",
+    "command": "node -e \"const fs=require('node:fs');let x;try{x=JSON.parse(fs.readFileSync('answer.json','utf8'))}catch(e){if(e.code==='ENOENT'||e instanceof SyntaxError)process.exit(1);throw e}if(x===null||typeof x!=='object'||x.sum!==16)process.exit(1)\""
+  }]
+}

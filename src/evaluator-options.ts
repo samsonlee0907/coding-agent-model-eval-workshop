@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
-import type { FoundryProviderType, ReasoningEffort } from "./types.js";
+import type { FoundryAuth, FoundryProviderType, ReasoningEffort } from "./types.js";
+import { parseAuthFlags, providerSchema } from "./auth.js";
 
 export interface EvaluationCliOptions {
   runsDirectory: string;
@@ -8,10 +9,12 @@ export interface EvaluationCliOptions {
   reasoningEffort: ReasoningEffort;
   timeoutMs: number;
   outputPath?: string;
+  auth?: FoundryAuth;
+  wireApi?: "completions" | "responses";
 }
 
 export function parseEvaluationOptions(argv: readonly string[]): EvaluationCliOptions {
-  const supported = new Set(["--runs", "--provider", "--model", "--reasoning-effort", "--timeout-ms", "--output"]);
+  const supported = new Set(["--runs", "--provider", "--model", "--reasoning-effort", "--timeout-ms", "--output", "--auth", "--credential", "--tenant-id", "--client-id", "--wire-api"]);
   for (const token of argv) {
     if (token.startsWith("--") && !supported.has(token)) {
       throw new TypeError(`Unsupported option ${token}. See npm run evaluate -- --help.`);
@@ -25,6 +28,9 @@ export function parseEvaluationOptions(argv: readonly string[]): EvaluationCliOp
     throw new TypeError("--timeout-ms must be an integer from 1000 through 900000.");
   }
   const output = argumentValue(argv, "--output");
+  const foundry = providerSchema.parse({
+    type: provider, auth: parseAuthFlags((flag) => argumentValue(argv, flag)), wireApi: argumentValue(argv, "--wire-api"),
+  });
   return {
     runsDirectory: resolve(argumentValue(argv, "--runs") ?? ".benchmark-runs"),
     provider,
@@ -32,6 +38,8 @@ export function parseEvaluationOptions(argv: readonly string[]): EvaluationCliOp
     reasoningEffort: reasoningEffort(argumentValue(argv, "--reasoning-effort")),
     timeoutMs,
     outputPath: output ? resolve(output) : undefined,
+    auth: foundry.auth,
+    wireApi: foundry.wireApi,
   };
 }
 

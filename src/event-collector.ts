@@ -1,7 +1,8 @@
-import { appendFileSync, mkdirSync } from "node:fs";
+import { mkdirSync } from "node:fs";
 import { dirname } from "node:path";
 import { asRecord, optionalString, toJsonValue } from "./json.js";
 import type { JsonRecord, JsonValue, NormalizedEvent, RawEventRecord } from "./types.js";
+import { appendJournal, atomicWrite, readJournal } from "./durable.js";
 
 export class EventCollector {
   private sequence = 0;
@@ -14,6 +15,18 @@ export class EventCollector {
   ) {
     mkdirSync(dirname(rawEventsPath), { recursive: true });
     mkdirSync(dirname(normalizedEventsPath), { recursive: true });
+    const raw = readJournal(rawEventsPath, (value) => {
+      const record = value as RawEventRecord;
+      if (record.schemaVersion !== 1 || !Number.isSafeInteger(record.sequence) || record.sequence < 1
+          || (record.source !== "sdk" && record.source !== "runner")) throw new TypeError("Invalid event journal record.");
+      return record;
+    });
+    for (const record of raw) {
+      if (record.sequence !== this.sequence + 1) throw new Error("Non-contiguous event journal sequence.");
+      this.normalized.push(normalize(record));
+      this.sequence = record.sequence;
+    }
+    atomicWrite(normalizedEventsPath, this.normalized.map((event) => `${JSON.stringify(event)}\n`).join(""));
   }
 
   public captureSdkEvent(event: unknown): NormalizedEvent {
@@ -44,8 +57,8 @@ export class EventCollector {
       envelope: jsonEnvelope,
     };
     const normalized = normalize(raw);
-    appendFileSync(this.rawEventsPath, `${JSON.stringify(raw)}\n`, "utf8");
-    appendFileSync(this.normalizedEventsPath, `${JSON.stringify(normalized)}\n`, "utf8");
+    appendJournal(this.rawEventsPath, raw);
+    appendJournal(this.normalizedEventsPath, normalized);
     this.normalized.push(normalized);
     this.onEvent?.(normalized);
     return normalized;
