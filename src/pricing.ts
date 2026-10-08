@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BenchmarkRun, Metric } from "./types.js";
+import { z } from "zod";
+import { createHash } from "node:crypto";
 
 export const azureOpenAiPricingUrl = "https://azure.microsoft.com/en-us/pricing/details/azure-openai/";
 export const anthropicClaudePricingUrl = "https://claude.com/pricing#api";
@@ -20,7 +22,7 @@ export interface CandidatePricing {
 }
 export interface PricingSnapshot {
   schemaVersion: 1; refreshedAt: string; regionFilter: string | null; currency: "USD";
-  sources: Array<{ provider: Provider; pricingUrl: string; documentationUrl: string | null; extendedCachePricingUrl: string | null }>;
+  sources: Array<{ provider: Provider; pricingUrl: string; documentationUrl: string | null; extendedCachePricingUrl: string | null; contentHash?: string }>;
   candidates: CandidatePricing[];
 }
 export interface PricingFetchResponse { ok: boolean; status: number; statusText: string; text(): Promise<string>; }
@@ -51,8 +53,8 @@ export async function refreshPricingSnapshot(runs: readonly BenchmarkRun[], opti
   return {
     schemaVersion: 1, refreshedAt: (options.now ?? (() => new Date()))().toISOString(), regionFilter, currency: "USD",
     sources: [
-      ...(providers.has("openai") ? [{ provider: "openai" as const, pricingUrl: azureOpenAiPricingUrl, documentationUrl: null, extendedCachePricingUrl: null }] : []),
-      ...(providers.has("anthropic") ? [{ provider: "anthropic" as const, pricingUrl: anthropicClaudePricingUrl, documentationUrl: foundryClaudeBillingUrl, extendedCachePricingUrl: anthropicExtendedCachePricingUrl }] : []),
+      ...(providers.has("openai") ? [{ provider: "openai" as const, pricingUrl: azureOpenAiPricingUrl, documentationUrl: null, extendedCachePricingUrl: null, contentHash: createHash("sha256").update(pages[0]).digest("hex") }] : []),
+      ...(providers.has("anthropic") ? [{ provider: "anthropic" as const, pricingUrl: anthropicClaudePricingUrl, documentationUrl: foundryClaudeBillingUrl, extendedCachePricingUrl: anthropicExtendedCachePricingUrl, contentHash: createHash("sha256").update(pages[1]).digest("hex") }] : []),
     ],
     candidates: records.map((run) => candidatePricing(run, run.contract.candidate.provider === "openai" ? azure : claude, regionFilter, options.modelOverrides ?? {})),
   };
@@ -182,5 +184,35 @@ function divBlock(html: string, start: number): string {
 }
 function isCode(error: unknown, code: string): error is { code: string } { return typeof error === "object" && error !== null && "code" in error && error.code === code; }
 function assertSnapshot(value: unknown): asserts value is PricingSnapshot {
-  if (!value || typeof value !== "object" || (value as Partial<PricingSnapshot>).schemaVersion !== 1 || !Array.isArray((value as Partial<PricingSnapshot>).candidates)) throw new TypeError("Invalid pricing snapshot.");
+  const provider = z.enum(["openai", "anthropic"]);
+  const text = z.string().min(1), region = z.string().nullable(), ttl = z.enum(["5m", "1h"]).nullable();
+  const price = z.object({ kind: z.enum(["input", "cached-input", "cache-write", "output"]), retailPrice: z.number().finite().nonnegative(), region, cacheTtl: ttl }).strict();
+  const snapshot = z.object({
+    schemaVersion: z.literal(1), refreshedAt: z.string().datetime({ offset: true }), regionFilter: region, currency: z.literal("USD"),
+    sources: z.array(z.object({
+      provider, pricingUrl: z.enum([azureOpenAiPricingUrl, anthropicClaudePricingUrl]),
+      documentationUrl: z.literal(foundryClaudeBillingUrl).nullable(),
+      extendedCachePricingUrl: z.literal(anthropicExtendedCachePricingUrl).nullable(),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    }).strict()),
+    candidates: z.array(z.object({
+      candidate: text, recorded: z.object({ provider: text, model: text, deployment: z.string().nullable() }).strict(),
+      sourceUrl: z.enum([azureOpenAiPricingUrl, anthropicClaudePricingUrl]).nullable(),
+      unavailableReason: z.string().nullable(),
+      scenarios: z.array(z.object({
+        id: text, provider, officialModel: text, region, cacheTtl: ttl,
+        input: price.nullable(), cachedInput: price.nullable(), cacheWrite: price.nullable(), output: price.nullable(), unavailableReason: z.string().nullable(),
+      }).strict()),
+    }).strict()),
+  }).strict().parse(value);
+  if (new Set(snapshot.candidates.map((c) => c.candidate)).size !== snapshot.candidates.length) throw new TypeError("Duplicate pricing candidates.");
+  for (const candidate of snapshot.candidates) {
+    if (new Set(candidate.scenarios.map((s) => s.id)).size !== candidate.scenarios.length) throw new TypeError("Duplicate pricing scenarios.");
+    for (const scenario of candidate.scenarios) {
+      if (scenario.provider !== candidate.recorded.provider) throw new TypeError("Pricing provider binding mismatch.");
+      for (const [field, kind] of [["input", "input"], ["cachedInput", "cached-input"], ["cacheWrite", "cache-write"], ["output", "output"]] as const) {
+        if (scenario[field] && scenario[field]!.kind !== kind) throw new TypeError("Pricing token-meter kind mismatch.");
+      }
+    }
+  }
 }

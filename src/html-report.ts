@@ -14,6 +14,9 @@ import type {
   LlmJudgeScore,
   Metric,
 } from "./types.js";
+import { evidenceFromRuns } from "./evidence.js";
+import { renderEvidenceReport } from "./report-ui.js";
+import { atomicWrite } from "./durable.js";
 
 /**
  * Loads the most recent `llm-evaluation-*.json` artifact from a runs directory,
@@ -38,7 +41,7 @@ export function writeHtmlComparisonReport(
   evaluation: LlmEvaluationResult | null = null,
   pricing: PricingSnapshot | null = null,
 ): void {
-  writeFileSync(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing), "utf8");
+  atomicWrite(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing));
 }
 
 /**
@@ -51,6 +54,13 @@ export function renderHtmlComparisonReport(
   runs: readonly BenchmarkRun[],
   evaluation: LlmEvaluationResult | null = null,
   pricing: PricingSnapshot | null = null,
+): string {
+  const details = renderLegacyComparisonDetails(runs, evaluation, pricing);
+  return renderEvidenceReport(evidenceFromRuns(runs), [], details);
+}
+
+export function renderLegacyComparisonDetails(
+  runs: readonly BenchmarkRun[], evaluation: LlmEvaluationResult | null = null, pricing: PricingSnapshot | null = null,
 ): string {
   if (runs.length === 0) {
     throw new RangeError("An HTML comparison report requires at least one completed run.");
@@ -68,9 +78,10 @@ export function renderHtmlComparisonReport(
   const maxTokens = maxAvailable(runs, (run) => totalTokens(run));
 
   const generatedAt = new Date().toISOString();
-  const strict = comparison.strictlyComparable;
+  const cleanExecutions = runs.every((run) => run.executionStatus !== "interrupted" && run.runnerError === null);
+  const strict = comparison.strictlyComparable && cleanExecutions;
 
-  return [
+  const legacy = [
     "<!doctype html>",
     "<html lang=\"en\">",
     "<head>",
@@ -88,7 +99,7 @@ export function renderHtmlComparisonReport(
     pill(`${runs.length} run${runs.length === 1 ? "" : "s"}`, "neutral"),
     pill(`${countCandidates(runs)} candidate${countCandidates(runs) === 1 ? "" : "s"}`, "neutral"),
     pill(
-      strict ? "Strictly comparable" : "Not strictly comparable — contract drift",
+      strict ? "Strictly comparable" : cleanExecutions ? "Not strictly comparable — contract drift" : "Interrupted execution — no strict ranking",
       strict ? "good" : "warn",
     ),
     pill(evaluation ? "LLM judge attached" : "No LLM judge", evaluation ? "info" : "muted"),
@@ -154,6 +165,7 @@ export function renderHtmlComparisonReport(
     "</html>",
     "",
   ].join("\n");
+  return legacy.slice(legacy.indexOf("<main>") + 6, legacy.indexOf("</main>"));
 }
 
 function runRow(

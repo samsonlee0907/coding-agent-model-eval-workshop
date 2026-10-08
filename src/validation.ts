@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ValidationResult } from "./types.js";
@@ -14,11 +14,13 @@ export async function runValidation(command: string, cwd: string, timeoutMs: num
       shell: true,
       stdio: ["ignore", "pipe", "pipe"],
       env: scrubFoundryEnvironment(process.env),
+      detached: process.platform !== "win32",
     });
     const stdout = new OutputCapture();
     const stderr = new OutputCapture();
     let settled = false;
     let timedOut = false;
+    let terminating = false;
     const finish = (exitCode: number | null, errorMessage: string | null): void => {
       if (settled) {
         return;
@@ -42,10 +44,22 @@ export async function runValidation(command: string, cwd: string, timeoutMs: num
     child.stderr?.on("data", (chunk: Buffer) => stderr.append(chunk));
     const timer = setTimeout(() => {
       timedOut = true;
-      child.kill();
+      terminating = true;
+      const terminated = (error: Error | null = null) => {
+        child.stdout?.destroy(); child.stderr?.destroy();
+        finish(null, error ? `Validator deadline reached; owned process-tree cleanup failed: ${error.message}` : null);
+      };
+      if (!child.pid || child.exitCode !== null || child.signalCode !== null) {
+        terminated(new Error("The parent already exited; escaped background descendants cannot be safely identified in trusted-local mode."));
+      } else if (process.platform === "win32") {
+        execFile("taskkill.exe", ["/PID", String(child.pid), "/T", "/F"], { timeout: 5000, windowsHide: true }, (error) => terminated(error));
+      } else {
+        try { process.kill(-child.pid, "SIGKILL"); terminated(); }
+        catch (error) { terminated(error instanceof Error ? error : new Error(String(error))); }
+      }
     }, timeoutMs);
     child.once("error", (error) => finish(null, error.message));
-    child.once("close", (code) => finish(code, null));
+    child.once("close", (code) => { if (!terminating) finish(code, null); });
   });
 }
 

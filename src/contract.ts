@@ -21,14 +21,21 @@ export function compareRunContracts(left: RunContract, right: RunContract): Cont
     ...diff("contractVersion", left.contractVersion, right.contractVersion),
     ...diff("task", left.task, right.task),
     ...diff("execution", left.execution, right.execution),
+    ...diff("executionProfile", left.executionProfile ?? null, right.executionProfile ?? null),
     ...roundsDrift(left, right),
     ...diff("runtime.sdkVersion", left.runtime.sdkVersion, right.runtime.sdkVersion),
     ...diff("runtime.cliVersion", left.runtime.cliVersion, right.runtime.cliVersion),
+    ...diff("runtime.nodeVersion", left.runtime.nodeVersion, right.runtime.nodeVersion),
+    ...diff("runtime.cliSha256", left.runtime.cliSha256, right.runtime.cliSha256),
+    ...diff("foundryProvider.wireApi", left.foundryProvider?.wireApi ?? "completions", right.foundryProvider?.wireApi ?? "completions"),
     ...diff(
       "foundryProvider.requestAdaptation",
       left.foundryProvider?.requestAdaptation ?? "none",
       right.foundryProvider?.requestAdaptation ?? "none",
     ),
+    ...diff("foundryProvider.type", left.foundryProvider?.type ?? null, right.foundryProvider?.type ?? null),
+    ...diff("foundryProvider.endpointFingerprint", left.foundryProvider?.endpointFingerprint ?? null, right.foundryProvider?.endpointFingerprint ?? null),
+    ...diff("foundryProvider.auth", left.foundryProvider?.auth ?? { mode: "key" }, right.foundryProvider?.auth ?? { mode: "key" }),
   ];
   return { strictlyComparable: drift.length === 0, drift };
 }
@@ -68,13 +75,20 @@ export function comparableBaselineSignature(contract: RunContract): string | nul
     contractVersion: contract.contractVersion,
     task: contract.task,
     execution: contract.execution,
+    executionProfile: contract.executionProfile ?? null,
     rounds: contract.rounds,
     runtime: {
       sdkVersion: contract.runtime.sdkVersion,
       cliVersion: contract.runtime.cliVersion,
+      nodeVersion: contract.runtime.nodeVersion,
+      ...(contract.runtime.cliSha256 ? { cliSha256: contract.runtime.cliSha256 } : {}),
     },
     foundryProvider: {
+      type: contract.foundryProvider?.type ?? null,
+      endpointFingerprint: contract.foundryProvider?.endpointFingerprint ?? null,
+      auth: contract.foundryProvider?.auth ?? { mode: "key" },
       requestAdaptation: contract.foundryProvider?.requestAdaptation ?? "none",
+      wireApi: contract.foundryProvider?.wireApi ?? "completions",
     },
   });
 }

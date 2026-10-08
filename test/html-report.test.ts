@@ -240,6 +240,7 @@ test("html report flags orphan scores and runs without a score", () => {
 test("html report surfaces contract drift as not strictly comparable", () => {
   const drifted = run("run-b", "anthropic", "model-b", resolved);
   drifted.contract.execution.reasoningEffort = "low";
+  drifted.contractHash = immutableContractHash(drifted.contract);
   const pricing: PricingSnapshot = {
     schemaVersion: 1,
     refreshedAt: "2026-08-20T03:41:00.000Z",

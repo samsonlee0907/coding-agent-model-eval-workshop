@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
@@ -44,11 +44,32 @@ import type {
 import { resolveValidationCommand, runValidation, scrubFoundryEnvironment } from "./validation.js";
 import { inspectArtifact } from "./artifact-inspection.js";
 import { runConformanceProbe } from "./conformance.js";
+import { providerAuthentication, providerSchema } from "./auth.js";
+import { atomicJson } from "./durable.js";
+import { DispatchError, RequestGuard, DeploymentAdmission, retryDelay, canRetryRequest } from "./request-policy.js";
+import { ControlledWorker, collectSnapshot, snapshotHash } from "./controlled-worker.js";
+import type { EventCollector as Collector } from "./event-collector.js";
+import { readRuntimeIdentity } from "./runtime-identity.js";
+import { evidenceHash } from "./evidence.js";
 
 export interface BenchmarkRunOptions {
   onEvent?: (event: NormalizedEvent) => void;
+  runId?: string;
+  admission?: DeploymentAdmission;
+  onPhase?: (phase: string, evidence: { runId: string; artifactsDirectory: string }) => void;
+  deadlineAt?: number;
 }
 
+async function rejectedReason(response: IncomingMessage): Promise<string> {
+  let text = "";
+  for await (const chunk of response) {
+    text += Buffer.isBuffer(chunk) ? chunk.toString("utf8") : String(chunk);
+    if (text.length > 65536) { response.destroy(); break; }
+  }
+  if (/AuthenticationTypeDisabled|key.?based authentication is disabled/i.test(text)) return "azure-key-auth-disabled";
+  if (/insufficient_quota|billing_hard_limit|quota[_ -]?(?:exceeded|exhausted)/i.test(text)) return "permanent-quota";
+  return "provider-policy-or-request";
+}
 export interface BenchmarkWorkRequest {
   kind: "task" | "round";
   prompt: string;
@@ -77,7 +98,7 @@ export function benchmarkWorkRequests(
 
 export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
   const contract = materializeContract(config);
-  const runId = randomUUID();
+  const runId = options.runId ?? randomUUID();
   const startedAt = new Date().toISOString();
   const artifactsDirectory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
   mkdirSync(artifactsDirectory, { recursive: true });
@@ -95,16 +116,21 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   assertSupportedPolicy(contract);
   const collector = new EventCollector(artifacts.rawEvents, artifacts.normalizedEvents, options.onEvent);
   collector.captureRunnerEvent("runner.run_started", { runId });
+  const phase = (value: string) => {
+    atomicJson(join(artifactsDirectory, "phase.json"), { schemaVersion: 1, runId, phase: value, updatedAt: new Date().toISOString() });
+    options.onPhase?.(value, { runId, artifactsDirectory });
+  };
+  phase("prepared");
 
   let sessionId: string | null = null;
-  let validation = null;
   let runnerError: string | null = null;
+  let executionComplete = false;
   const sdkToolAllowlist = resolveSdkToolAllowlist(contract.execution.tools, contract.execution.mcpServers);
   const mcpServers = resolveMcpServersForLaunch(contract.execution.mcpServers, process.env);
   const cliPath = resolveCopilotCliPath(process.env);
   const runtimeDirectory = createIsolatedCopilotRuntimeDirectory();
   const client = new CopilotClient({
-    workingDirectory: config.workspacePath,
+    workingDirectory: config.isolation ? runtimeDirectory : config.workspacePath,
     baseDirectory: runtimeDirectory,
     useLoggedInUser: false,
     env: scrubFoundryEnvironment(process.env),
@@ -114,39 +140,51 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     // Force a child runtime: the SDK's in-process transport ignores env/base
     // directory isolation and would expose host credentials to shell tools.
     connection: RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined),
+    ...(config.isolation ? { mode: "empty" as const } : {}),
   });
   let session: CopilotSession | null = null;
   let compatibilityProxy: TemperatureStrippingProxy | null = null;
+  const guardStarted = Date.now();
+  const stages = 3 + config.rounds.length + (contract.task.conformanceProbe?.checks.length ?? 0)
+    + (contract.task.conformanceProbe?.setupCommand ? 1 : 0);
+  const guard = new RequestGuard(config.requestBounds, guardStarted,
+    options.deadlineAt ?? guardStarted + contract.execution.sessionTimeoutMs * stages);
+  let worker: ControlledWorker | null = null;
 
   try {
+    if (config.isolation) {
+      if (mcpServers) throw new TypeError("Isolated mode does not allow host/remote MCP servers.");
+      worker = await ControlledWorker.create(config.isolation,
+        collectSnapshot(config.workspacePath, config.isolation.maxFiles, config.isolation.maxBytes),
+        join(artifactsDirectory, "controlled-worker.json"), undefined, undefined, guard.deadline);
+    }
     const provider = resolveFoundryProvider(config.contract.foundryProvider, process.env);
-    compatibilityProxy = contract.foundryProvider?.requestAdaptation === "strip-temperature"
-      ? await startTemperatureStrippingProxy(provider.baseUrl)
-      : await startOpenAiNullRefusalSanitizingProxy(provider.baseUrl);
+    compatibilityProxy = await startRequestSanitizingProxy(provider.baseUrl,
+      contract.foundryProvider?.requestAdaptation === "strip-temperature" ? stripTemperature : stripNullMessageRefusals,
+      { guard, retries: contract.execution.retries, admission: options.admission,
+        deployment: `${contract.foundryProvider?.endpointFingerprint}/${contract.candidate.model}`,
+        wireApi: provider.wireApi, capture: (type, data) => collector.captureRunnerEvent(type, data) });
     const sessionProvider = compatibilityProxy ? { ...provider, baseUrl: compatibilityProxy.baseUrl } : provider;
     await client.start();
     session = await client.createSession({
       model: contract.candidate.model,
-      workingDirectory: config.workspacePath,
+      workingDirectory: config.isolation ? runtimeDirectory : config.workspacePath,
       streaming: true,
       enableSessionStore: false,
       reasoningEffort: contract.execution.reasoningEffort,
       systemMessage: { content: contract.execution.instructions },
-      availableTools: sdkToolAllowlist,
+      availableTools: worker ? new ToolSet().addCustom("controlled_workspace").toArray() : sdkToolAllowlist,
+      ...(worker ? { tools: [worker.tool(contract.execution.tools)] } : {}),
       onPermissionRequest: contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
       provider: sessionProvider,
       ...(mcpServers ? { mcpServers } : {}),
     });
     const activeSession = session;
+    phase("running");
     sessionId = activeSession.sessionId;
     collector.captureRunnerEvent("runner.session_created", { sessionId });
     for (const event of await activeSession.getEvents()) {
       collector.captureSdkEvent(event);
-    }
-    const reportedCliVersion = collector.events()
-      .find((event) => event.eventType === "session.start")?.data.copilotVersion;
-    if (typeof reportedCliVersion === "string") {
-      contract.runtime.cliVersion = reportedCliVersion;
     }
     collector.captureRunnerEvent("runner.contract_resolved", {
       contractHash: immutableContractHash(contract),
@@ -159,12 +197,15 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
         async (request) => {
           await activeSession.sendAndWait(
             { prompt: request.prompt, mode: request.mode },
-            contract.execution.sessionTimeoutMs,
+            Math.max(1, Math.min(contract.execution.sessionTimeoutMs, guard.deadline - Date.now())),
           );
         },
-        contract.execution.retries,
+        0,
         (eventType, data) => collector.captureRunnerEvent(eventType, data),
       );
+      if (guard.accounting.ambiguousRequests) throw new DispatchError("Provider returned ambiguous completion evidence; the work plan is interrupted.", "possibly-processed");
+      executionComplete = true;
+      phase("execution-complete");
     } finally {
       unsubscribe();
     }
@@ -174,27 +215,102 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
       metrics: usage ?? {},
     });
   } catch (error) {
+    executionComplete = false;
     runnerError = redactProviderError(error instanceof Error ? error.message : String(error));
     collector.captureRunnerEvent("runner.error", { message: runnerError });
   } finally {
+    phase("draining");
+    atomicJson(join(artifactsDirectory, "execution.json"), {
+      schemaVersion: 1, runId, contract, contractHash: immutableContractHash(contract), startedAt, sessionId, runnerError,
+      executionComplete: false,
+      requestAccounting: guard.accounting,
+    });
     try {
-      if (session) {
-        await client.deleteSession(session.sessionId);
-      }
-    } finally {
       try {
-        await client.stop();
+        if (session) await client.deleteSession(session.sessionId);
       } finally {
         try {
-          await compatibilityProxy?.stop();
+          await client.stop();
         } finally {
-          rmSync(runtimeDirectory, { recursive: true, force: true });
+          try {
+            await compatibilityProxy?.stop();
+          } finally {
+            rmSync(runtimeDirectory, { recursive: true, force: true });
+          }
         }
       }
+    } catch (error) {
+      try { await worker?.stop(); }
+      catch (cleanup) { throw new AggregateError([error, cleanup], "Runtime shutdown and owned worker stop failed; retain the recovery records."); }
+      throw error;
     }
   }
 
-  const workspaceChanges = captureWorkspaceChanges(config.workspacePath, contract.task.repository.commitSha);
+  executionComplete = executionComplete && guard.cleanlySettled();
+  atomicJson(join(artifactsDirectory, "execution.json"), {
+    schemaVersion: 1, runId, contract, contractHash: immutableContractHash(contract), startedAt, sessionId, runnerError, executionComplete,
+    requestAccounting: guard.accounting,
+  });
+  return finalizeExecution(config, { runId, contract, contractHash: immutableContractHash(contract), startedAt, sessionId, runnerError, executionComplete, requestAccounting: guard.accounting }, collector, phase, worker, guard.deadline);
+}
+
+interface ExecutionCheckpoint {
+  runId: string; contract: RunContract; startedAt: string; sessionId: string | null; runnerError: string | null;
+  contractHash: string; executionComplete: boolean;
+  requestAccounting: NonNullable<BenchmarkRun["requestAccounting"]>;
+}
+
+export async function resumeBenchmarkFinalization(config: BenchmarkConfig, runId: string, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
+  const directory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
+  const saved = JSON.parse(readFileSync(join(directory, "execution.json"), "utf8")) as ExecutionCheckpoint;
+  if (saved.runId !== runId || !saved.contract || !saved.requestAccounting || typeof saved.executionComplete !== "boolean"
+      || immutableContractHash(saved.contract) !== saved.contractHash
+      || evidenceHash(saved.contract.task) !== evidenceHash(config.contract.task)
+      || evidenceHash(saved.contract.execution) !== evidenceHash(config.contract.execution)
+      || evidenceHash(saved.contract.rounds) !== evidenceHash(config.rounds)
+      || evidenceHash(saved.contract.candidate) !== evidenceHash(config.contract.candidate)
+      || evidenceHash(saved.contract.executionProfile) !== evidenceHash(executionProfile(config))
+      || saved.contract.foundryProvider?.type !== config.contract.foundryProvider.type
+      || (saved.contract.foundryProvider.wireApi ?? "completions") !== (config.contract.foundryProvider.wireApi ?? "completions")
+      || Object.entries(config.contract.runtime ?? {}).some(([key, value]) => value !== saved.contract.runtime[key as keyof typeof saved.contract.runtime])) {
+    throw new TypeError("Invalid or mismatched saved execution checkpoint.");
+  }
+  const collector = new EventCollector(join(directory, "raw-events.ndjson"), join(directory, "normalized-events.ndjson"), options.onEvent);
+  const phase = (value: string) => {
+    atomicJson(join(directory, "phase.json"), { schemaVersion: 1, runId, phase: value, updatedAt: new Date().toISOString() });
+    options.onPhase?.(value, { runId, artifactsDirectory: directory });
+  };
+  return finalizeExecution(config, saved, collector, phase, null, options.deadlineAt);
+}
+
+async function finalizeExecution(
+  config: BenchmarkConfig, saved: ExecutionCheckpoint, collector: Collector, phase: (value: string) => void, worker: ControlledWorker | null,
+  deadlineAt = Date.now() + config.contract.execution.sessionTimeoutMs,
+): Promise<BenchmarkRun> {
+  const { runId, contract, startedAt, sessionId, runnerError } = saved;
+  const artifactsDirectory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
+  let workspace = config.workspacePath, workspaceHash: string | undefined;
+  if (config.isolation) {
+    workspace = join(artifactsDirectory, "workspace");
+    if (!existsSync(workspace)) {
+      worker ??= await ControlledWorker.reopen(join(artifactsDirectory, "controlled-worker.json"), undefined, deadlineAt);
+      workspaceHash = await worker.snapshot(workspace);
+      await worker.dispose();
+    } else {
+      workspaceHash = snapshotHash(collectSnapshot(workspace, config.isolation.maxFiles, config.isolation.maxBytes));
+      const snapshot = JSON.parse(readFileSync(join(artifactsDirectory, "controlled-worker.json.snapshot.json"), "utf8")) as { workspaceHash: string };
+      if (snapshot.workspaceHash !== workspaceHash) throw new Error("Retained exported workspace hash changed.");
+      await ControlledWorker.cleanup(join(artifactsDirectory, "controlled-worker.json"));
+    }
+  }
+  const artifacts = {
+    directory: artifactsDirectory, rawEvents: join(artifactsDirectory, "raw-events.ndjson"),
+    normalizedEvents: join(artifactsDirectory, "normalized-events.ndjson"), diagnostics: join(artifactsDirectory, "diagnostics.json"),
+    report: join(artifactsDirectory, "report.md"), changes: join(artifactsDirectory, "changes.patch"), workspace,
+    inspection: join(artifactsDirectory, "artifact-inspection.json"), conformance: join(artifactsDirectory, "conformance-probe.json"),
+  };
+  const workspaceChanges = captureWorkspaceChanges(workspace, contract.task.repository.commitSha);
+  phase("exported");
   if (workspaceChanges.patch !== null) {
     writeFileSync(artifacts.changes, workspaceChanges.patch, "utf8");
   }
@@ -206,16 +322,30 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     reason: workspaceChanges.reason ?? null,
   });
 
-  validation = await runValidation(
-    resolveValidationCommand(contract.task.validationCommand, config.workspacePath),
-    config.workspacePath,
+  let gradingWorker: ControlledWorker | null = null;
+  if (config.isolation) gradingWorker = await ControlledWorker.create(config.isolation,
+    collectSnapshot(workspace, config.isolation.maxFiles, config.isolation.maxBytes), join(artifactsDirectory, `grader-worker-${randomUUID()}.json`), undefined, undefined, deadlineAt);
+  const validate: typeof runValidation = gradingWorker
+    ? (command, _cwd, timeout) => gradingWorker!.validate(command, timeout)
+    : runValidation;
+  const execute: typeof runValidation = (command, cwd, timeout) => {
+    if (Date.now() >= deadlineAt) throw new Error("Finalization absolute deadline exceeded; retained execution can be finalized without inference.");
+    return validate(command, cwd, Math.max(1, Math.min(timeout, deadlineAt - Date.now())));
+  };
+  let validation: BenchmarkRun["validation"] = null;
+  let conformance = null;
+  try {
+  validation = await execute(
+    resolveValidationCommand(contract.task.validationCommand, workspace),
+    workspace,
     contract.execution.sessionTimeoutMs,
   );
+  phase("validation-complete");
   collector.captureRunnerEvent("runner.validation_finished", asRecord(validation));
 
   // Captured after validation so the inspected artifact is the exact tree the
   // deterministic command was run against.
-  const inspection = inspectArtifact(config.workspacePath);
+  const inspection = inspectArtifact(workspace);
   writeFileSync(artifacts.inspection, `${JSON.stringify(inspection, null, 2)}\n`, "utf8");
   collector.captureRunnerEvent("runner.artifact_inspected", {
     available: inspection.available,
@@ -230,11 +360,12 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   // Runs last so the probe sees the same tree validation and inspection saw.
   // A probe is task-owned and the agent never sees it, so passing it is
   // evidence about the delivered code rather than about the delivered tests.
-  const conformance = contract.task.conformanceProbe
+  conformance = contract.task.conformanceProbe
     ? await runConformanceProbe(
         contract.task.conformanceProbe,
-        config.workspacePath,
+        workspace,
         contract.task.conformanceProbe.timeoutMs ?? contract.execution.sessionTimeoutMs,
+        execute,
       )
     : null;
   if (conformance !== null) {
@@ -247,12 +378,13 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
       durationMs: conformance.durationMs,
     });
   }
+  } finally { await gradingWorker?.dispose(); }
 
   collector.captureRunnerEvent("runner.run_finished", { runId });
   const events = collector.events();
   const modelCalls = extractModelCalls(events);
   const toolCalls = extractToolCalls(events);
-  const diagnostics = createRunDiagnostics(events, contract.runtime, sdkToolAllowlist, runnerError);
+  const diagnostics = createRunDiagnostics(events, contract.runtime, resolveSdkToolAllowlist(contract.execution.tools), runnerError);
   const run: BenchmarkRun = {
     runId,
     contract,
@@ -268,12 +400,16 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     validation,
     ...(conformance === null ? {} : { conformance }),
     metrics: deriveMetrics(events, modelCalls),
-    outcome: classifyOutcome({ validation, toolCalls, runnerError }),
+    outcome: classifyOutcome({ validation, toolCalls, runnerError, executionComplete: saved.executionComplete }),
     runnerError,
+    executionStatus: saved.executionComplete ? "completed" : "interrupted",
+    requestAccounting: saved.requestAccounting,
+    ...(workspaceHash ? { workspaceHash } : {}),
   };
   writeFileSync(artifacts.diagnostics, `${JSON.stringify(diagnostics, null, 2)}\n`, "utf8");
-  writeFileSync(join(artifactsDirectory, "run.json"), `${JSON.stringify(run, null, 2)}\n`, "utf8");
+  atomicJson(join(artifactsDirectory, "run.json"), run);
   writeRunReport(run);
+  phase("finalized");
   return run;
 }
 
@@ -310,6 +446,7 @@ function assertFoundryOnlyConfig(config: unknown): asserts config is BenchmarkCo
         `contract.foundryProvider.type (${provider.type}).`,
     );
   }
+  providerSchema.parse(provider);
 }
 
 const sdkToolsByCapability: Record<ToolCapability, readonly string[]> = {
@@ -404,7 +541,7 @@ export function resolveCopilotCliPath(
   platform = process.platform,
   resolveExecutable: (command: string) => string | null = findExecutable,
 ): string | undefined {
-  const configuredPath = environment.BENCHMARK_COPILOT_CLI_PATH?.trim();
+  const configuredPath = environment.BENCHMARK_COPILOT_CLI_PATH?.trim() || environment.COPILOT_CLI_PATH?.trim();
   if (configuredPath) {
     return configuredPath;
   }
@@ -431,11 +568,15 @@ export function createRunDiagnostics(
   const configurationMessages = events
     .filter((event) => event.eventType === "session.info" && event.data.infoType === "configuration")
     .flatMap((event) => typeof event.data.message === "string" ? [event.data.message] : []);
-  const httpStatus = runnerError?.match(/\b([45]\d{2})\b/)?.[1];
+  const bridge = events.filter((event) => event.eventType === "runner.provider_bridge_error").at(-1);
+  const rejected = events.filter((event) => event.eventType === "runner.provider_rejected" && typeof event.data.status === "number").at(-1);
+  const httpStatus = typeof bridge?.data.status === "number" ? String(bridge.data.status)
+    : typeof rejected?.data.status === "number" ? String(rejected.data.status) : runnerError?.match(/\b([45]\d{2})\b/)?.[1];
   // The generic session-level auth error the CLI surfaces (and that we store as
   // runnerError) never carries the underlying provider error code, so detect
   // this signature from the raw model.call_failure event instead of runnerError.
   const azureKeyAuthDisabled = events.some((event) => {
+    if (event.eventType === "runner.provider_rejected" && event.data.reason === "azure-key-auth-disabled") return true;
     if (event.eventType !== "model.call_failure") {
       return false;
     }
@@ -446,6 +587,7 @@ export function createRunDiagnostics(
   return {
     schemaVersion: 1,
     runtime,
+    ...(typeof sessionStart?.data.copilotVersion === "string" ? { reportedBackendVersion: sessionStart.data.copilotVersion } : {}),
     selectedModel: typeof sessionStart?.data.selectedModel === "string" ? sessionStart.data.selectedModel : null,
     configuredToolFilters: [...configuredToolFilters],
     configurationMessages,
@@ -453,6 +595,8 @@ export function createRunDiagnostics(
       httpStatus: httpStatus ? Number(httpStatus) : null,
       signature: azureKeyAuthDisabled
         ? "azure_key_auth_disabled"
+      : rejected?.data.reason === "permanent-quota"
+        ? "permanent_quota"
       : /temperature.*deprecated/i.test(runnerError ?? "")
         ? "anthropic_temperature_deprecated"
       : /resource not found on provider.*\b404\b/i.test(runnerError ?? "")
@@ -490,13 +634,15 @@ export async function startOpenAiNullRefusalSanitizingProxy(targetBaseUrl: strin
   return startRequestSanitizingProxy(targetBaseUrl, stripNullMessageRefusals);
 }
 
-async function startRequestSanitizingProxy(
+export async function startRequestSanitizingProxy(
   targetBaseUrl: string,
   transform: (body: Buffer, contentType: string | string[] | undefined) => Buffer,
+  options: ProxyOptions = {},
 ): Promise<TemperatureStrippingProxy> {
+  options = { ...options, guard: options.guard ?? new RequestGuard(), admission: options.admission ?? new DeploymentAdmission() };
   const targetBase = new URL(targetBaseUrl);
   const server = createServer((incoming, outgoing) => {
-    void forwardSanitizedRequest(incoming, outgoing, targetBase, transform);
+    void forwardSanitizedRequest(incoming, outgoing, targetBase, transform, options);
   });
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
@@ -516,46 +662,178 @@ async function startRequestSanitizingProxy(
   };
 }
 
+export interface ProxyOptions {
+  guard?: RequestGuard;
+  retries?: number;
+  admission?: DeploymentAdmission;
+  deployment?: string;
+  wireApi?: "completions" | "responses";
+  capture?: (type: string, data: JsonRecord) => void;
+}
 async function forwardSanitizedRequest(
   incoming: IncomingMessage,
   outgoing: ServerResponse,
   targetBase: URL,
   transform: (body: Buffer, contentType: string | string[] | undefined) => Buffer,
+  options: ProxyOptions,
 ): Promise<void> {
+  const guard = options.guard ?? new RequestGuard();
+  let dispatched = false;
   try {
-    const requestBody = await readRequestBody(incoming);
-    const body = transform(requestBody, incoming.headers["content-type"]);
+    if (incoming.method !== "POST" || !/^\/(?:v1\/)?(?:chat\/completions|responses|messages)(?:\?[^#]*)?$/.test(incoming.url ?? "")) {
+      throw new DispatchError("Only inference POST routes are permitted by the provider bridge.", "not-dispatched");
+    }
+    if (options.wireApi && !(incoming.url ?? "").split("?")[0].endsWith(options.wireApi === "responses" ? "/responses" : "/chat/completions")) {
+      throw new DispatchError("Inference route differs from the recorded wire API.", "not-dispatched");
+    }
+    const requestBody = await readRequestBody(incoming, guard.bounds?.maxRequestBytes);
+    let body = transform(requestBody, incoming.headers["content-type"]);
+    if (guard.bounds) {
+      const payload = JSON.parse(body.toString()) as Record<string, unknown>;
+      assertTextTokenReservation(payload);
+      const field = options.wireApi === "responses" ? "max_output_tokens" : incoming.url?.includes("messages") ? "max_tokens" : "max_completion_tokens";
+      const existing = payload[field];
+      payload[field] = typeof existing === "number" ? Math.min(existing, guard.bounds.maxOutputTokens) : guard.bounds.maxOutputTokens;
+      body = Buffer.from(JSON.stringify(payload));
+    }
+    const tokens = body.length + (guard.bounds?.maxOutputTokens ?? 0);
+    const payloadHash = createHash("sha256").update(body).digest("hex");
     const target = new URL(`${targetBase.pathname.replace(/\/$/, "")}${incoming.url ?? "/"}`, targetBase.origin);
     const headers = forwardedHeaders(incoming.headers, body.length);
-    const forward = target.protocol === "https:" ? httpsRequest : httpRequest;
-    const upstream = forward(target, { method: incoming.method, headers }, (response) => {
-      outgoing.writeHead(response.statusCode ?? 502, response.headers);
-      response.pipe(outgoing);
-    });
-    upstream.once("error", () => {
-      if (!outgoing.headersSent) {
-        outgoing.writeHead(502, { "content-type": "application/json" });
+    const deadline = guard.deadline;
+    for (let attempt = 0; ; attempt++) {
+      if (guard.bounds) await (options.admission ?? new DeploymentAdmission()).admit(
+        options.deployment ?? target.origin, tokens, guard.bounds.requestsPerMinute, guard.bounds.tokensPerMinute, deadline,
+      );
+      guard.claim(payloadHash);
+      guard.reserve(body.length, tokens);
+      dispatched = true;
+      options.capture?.("runner.provider_dispatch", { request: guard.accounting.physicalRequests, reservedTokens: tokens });
+      const response = await upstreamResponse(target, headers, body, Math.max(1, deadline - Date.now()));
+      const status = response.statusCode ?? 502;
+      if (status === 429) {
+        guard.reject();
+        guard.rejectedPayload(payloadHash);
+        const delay = retryDelay({ get: (name) => String(response.headers[name] ?? "") || null }, attempt, Date.now());
+        const reason = await rejectedReason(response);
+        options.capture?.("runner.provider_rejected", { status, request: guard.accounting.physicalRequests, reason });
+        if (attempt < (options.retries ?? 0) && Date.now() + delay < deadline) {
+          if (reason === "permanent-quota") {
+            guard.close();
+            throw new DispatchError("Provider permanent quota exhaustion; no transient retry.", "explicitly-rejected", status);
+          }
+          dispatched = false;
+          await new Promise((resolve) => setTimeout(resolve, delay)); continue;
+        }
+        guard.close();
+        throw new DispatchError("Provider 429 rejection exhausted bounded physical-request recovery.", "explicitly-rejected", status);
       }
-      outgoing.end(JSON.stringify({ error: "Local provider compatibility proxy could not reach the upstream endpoint." }));
-    });
-    upstream.end(body);
-  } catch {
-    if (!outgoing.headersSent) {
+      if (status < 200 || status >= 300) {
+        if (status >= 500) {
+          response.resume();
+          throw new DispatchError(`Provider ${status} failure may have processed the request; no replay.`, "possibly-processed", status);
+        }
+        guard.reject(); guard.close();
+        const reason = await rejectedReason(response);
+        options.capture?.("runner.provider_rejected", { status, request: guard.accounting.physicalRequests, reason });
+        throw new DispatchError(`Provider rejected request (${status}, ${reason}); no identity fallback or retry.`, "explicitly-rejected", status);
+      }
+      const streaming = String(response.headers["content-type"] ?? "").includes("text/event-stream");
+      if (!streaming) {
+        const chunks: Buffer[] = [];
+        let bytes = 0;
+        for await (const chunk of response) {
+          const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+          bytes += buffer.length;
+          if (bytes > 16 * 1024 * 1024) { response.destroy(); throw new DispatchError("Provider response exceeds the 16 MiB byte bound.", "possibly-processed"); }
+          chunks.push(buffer);
+        }
+        const reply = Buffer.concat(chunks);
+        if (!isTerminalProviderResponse(incoming.url ?? "", JSON.parse(reply.toString("utf8")))) {
+          throw new DispatchError("Malformed or nonterminal successful provider response; hidden replay denied.", "possibly-processed");
+        }
+        guard.certifyResponse();
+        outgoing.writeHead(status, response.headers); outgoing.end(reply); return;
+      }
+      outgoing.writeHead(status, response.headers);
+      await new Promise<void>((resolve, reject) => {
+        let tail = "", completedStream = false, invalidStream = false;
+        response.on("data", (chunk: Buffer) => {
+          if (!streaming) return;
+          tail += chunk.toString("utf8");
+          const lines = tail.split(/\r?\n/);
+          tail = lines.pop()!;
+          if (tail.length > 16 * 1024 * 1024) {
+            response.destroy(); reject(new DispatchError("Provider SSE event exceeds the 16 MiB byte bound.", "possibly-processed")); return;
+          }
+          for (const line of lines) {
+            if (!line.startsWith("data:")) continue;
+            const data = line.slice(5).trim();
+            if (!data) continue;
+            if (data === "[DONE]") { completedStream = true; continue; }
+            try {
+              const event = JSON.parse(data) as { type?: unknown };
+              if (event.type === "response.completed" || event.type === "message_stop") completedStream = true;
+            } catch { invalidStream = true; }
+          }
+        });
+        response.once("end", () => {
+          if (invalidStream || !completedStream) reject(new DispatchError("Provider stream ended without valid completion evidence.", "possibly-processed"));
+          else resolve();
+        }); response.once("error", reject);
+        response.once("aborted", () => reject(new DispatchError("Partial provider response.", "possibly-processed")));
+        outgoing.once("close", () => { if (!response.complete) { response.destroy(); reject(new DispatchError("Downstream disconnected during provider response.", "possibly-processed")); } });
+        response.pipe(outgoing);
+      });
+      guard.certifyResponse();
+      return;
+    }
+
+    function isTerminalProviderResponse(route: string, value: unknown): boolean {
+      if (!isRecord(value) || "error" in value || typeof value.id !== "string") return false;
+      if (route.split("?")[0].endsWith("/responses")) return value.status === "completed" && Array.isArray(value.output);
+      if (route.split("?")[0].endsWith("/messages")) return value.type === "message" && typeof value.stop_reason === "string" && Array.isArray(value.content);
+      return Array.isArray(value.choices) && value.choices.length > 0
+        && value.choices.every((choice) => isRecord(choice) && isRecord(choice.message) && typeof choice.finish_reason === "string");
+    }
+
+    function assertTextTokenReservation(value: unknown): void {
+      if (Array.isArray(value)) { value.forEach(assertTextTokenReservation); return; }
+      if (!isRecord(value)) return;
+      if (typeof value.type === "string" && ["image", "image_url", "input_image", "input_audio", "audio", "video", "input_file", "file"].includes(value.type)) {
+        throw new DispatchError("Bounded inference currently requires text-only request content; media token admission is not implemented.", "not-dispatched");
+      }
+      Object.values(value).forEach(assertTextTokenReservation);
+    }
+  } catch (error) {
+    const certainty = error instanceof DispatchError ? error.certainty : dispatched ? "possibly-processed" : "not-dispatched";
+    if (certainty === "possibly-processed") guard.ambiguous();
+    options.capture?.("runner.provider_bridge_error", { certainty, status: error instanceof DispatchError ? error.status : null });
+    if (!outgoing.headersSent && !outgoing.destroyed) {
+      // Never hand a retryable 5xx back to a runtime with its own hidden retry layer.
       outgoing.writeHead(400, { "content-type": "application/json" });
     }
-    outgoing.end(JSON.stringify({ error: "Local provider compatibility proxy could not process the request." }));
+    if (!outgoing.destroyed) outgoing.end(JSON.stringify({ error: { message: error instanceof DispatchError ? error.message : `Provider bridge failure (${certainty}); request must not be replayed.`, type: "benchmark_bridge_error" } }));
   }
 }
 
-function readRequestBody(incoming: IncomingMessage): Promise<Buffer> {
+function upstreamResponse(target: URL, headers: IncomingHttpHeaders, body: Buffer, timeoutMs: number): Promise<IncomingMessage> {
+  return new Promise((resolve, reject) => {
+    const forward = target.protocol === "https:" ? httpsRequest : httpRequest;
+    const upstream = forward(target, { method: "POST", headers, signal: AbortSignal.timeout(timeoutMs) }, resolve);
+    upstream.once("error", reject);
+    upstream.end(body);
+  });
+}
+
+function readRequestBody(incoming: IncomingMessage, limit = 10 * 1024 * 1024): Promise<Buffer> {
   return new Promise((resolve, reject) => {
     const chunks: Buffer[] = [];
     let size = 0;
     incoming.on("data", (chunk: Buffer) => {
       size += chunk.length;
-      if (size > 10 * 1024 * 1024) {
-        reject(new RangeError("Provider request exceeds the 10 MB compatibility proxy limit."));
-        incoming.destroy();
+      if (size > limit) {
+        reject(new DispatchError("Provider request exceeds the configured compatibility proxy byte limit.", "not-dispatched"));
         return;
       }
       chunks.push(chunk);
@@ -628,20 +906,29 @@ function closeServer(server: Server): Promise<void> {
   });
 }
 
+export function executionProfile(config: BenchmarkConfig): RunContract["executionProfile"] {
+  return {
+    mode: config.isolation ? "container" : "trusted-local",
+    ...(config.isolation ? { image: config.isolation.image } : {}),
+    ...(config.requestBounds ? { requestBoundsHash: evidenceHash(config.requestBounds) } : {}),
+  };
+}
+
 function materializeContract(config: BenchmarkConfig): RunContract {
   assertFoundryOnlyConfig(config);
+  const runtime = readRuntimeIdentity();
+  if (Object.entries(config.contract.runtime ?? {}).some(([key, value]) => value !== runtime[key as keyof typeof runtime])) {
+    throw new DispatchError("Selected SDK/CLI executable identity differs from the prepared runtime; no work was dispatched.", "not-dispatched");
+  }
   return {
     contractVersion: 2,
     task: config.contract.task,
     candidate: config.contract.candidate,
     execution: config.contract.execution,
     rounds: config.rounds.map((round) => ({ ...round })),
-    runtime: {
-      sdkVersion: config.contract.runtime?.sdkVersion ?? installedSdkVersion(),
-      cliVersion: config.contract.runtime?.cliVersion ?? "runtime-reported-in-session.start-event",
-      nodeVersion: config.contract.runtime?.nodeVersion ?? process.version,
-    },
+    runtime,
     foundryProvider: createFoundryProviderIdentity(config.contract.foundryProvider, process.env),
+    executionProfile: executionProfile(config),
   };
 }
 
@@ -659,13 +946,12 @@ export function resolveFoundryProvider(
   environment: NodeJS.ProcessEnv,
 ): ProviderConfig {
   const baseUrl = deriveFoundryInferenceBase(requiredEnvironmentValue("FOUNDRY_ENDPOINT", environment), config.type);
-  const apiKey = requiredEnvironmentValue("FOUNDRY_API_KEY", environment);
   return {
     type: config.type,
     baseUrl,
-    apiKey,
+    ...providerAuthentication(config, environment, () => requiredEnvironmentValue("FOUNDRY_API_KEY", environment)),
     bearerToken: undefined,
-    wireApi: config.type === "openai" ? "completions" : undefined,
+    wireApi: config.type === "openai" ? config.wireApi ?? "completions" : undefined,
     azure: undefined,
   };
 }
@@ -679,6 +965,8 @@ export function createFoundryProviderIdentity(
     type: config.type,
     endpointFingerprint: createHash("sha256").update(baseUrl).digest("hex"),
     requestAdaptation: config.type === "openai" ? "openai-null-refusal-sanitizer" : "strip-temperature",
+    ...(config.wireApi ? { wireApi: config.wireApi } : {}),
+    ...(config.auth ? { auth: config.auth } : {}),
   };
 }
 
@@ -716,33 +1004,14 @@ export async function dispatchBenchmarkWorkRequests(
       request.kind === "task" ? "runner.task_started" : "runner.round_started",
       request.round === null ? {} : { round: request.round },
     );
-    for (let attempt = 0; attempt <= retries; attempt += 1) {
-      try {
-        await send(request);
-        break;
-      } catch (error) {
-        if (attempt === retries) {
-          throw error;
-        }
-        captureRunnerEvent(request.kind === "task" ? "runner.task_retry" : "runner.round_retry", {
-          ...(request.round === null ? {} : { round: request.round }),
-          attempt: attempt + 1,
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-    }
+    // A work request can contain multiple paid calls and non-idempotent tools.
+    // Only the bridge may recover explicitly rejected physical requests.
+    await send(request);
     captureRunnerEvent(
       request.kind === "task" ? "runner.task_finished" : "runner.round_finished",
       request.round === null ? {} : { round: request.round },
     );
   }
-}
-
-function installedSdkVersion(): string {
-  const packageJson = JSON.parse(readFileSync(join(process.cwd(), "node_modules", "@github", "copilot-sdk", "package.json"), "utf8")) as {
-    version?: unknown;
-  };
-  return typeof packageJson.version === "string" ? packageJson.version : "unknown";
 }
 
 async function readUsageMetrics(session: CopilotSession): Promise<JsonRecord | null> {

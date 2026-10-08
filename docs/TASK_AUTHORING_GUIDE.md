@@ -29,31 +29,102 @@ tool implements another harness.
 |---|---|---|
 | **Simple quickstart prompt** | Exploring whether a task is clear and bounded. | One disposable local run. |
 | **Detailed task file + controlled config** | Comparing candidates or repeats after requirements are fixed. | Comparable artifacts under a cohort parent. |
+| **Prepared campaign with task-owned evaluators** | One or many custom tasks, candidates, types/categories and repeats. | Immutable inputs, durable recovery, declared missing cells and portable reports. |
 
-All quickstart examples need configured Foundry credentials, an existing
-deployment, and the matching `--provider` value. Add `--source
+All quickstart examples are **cost-bearing trusted-local execution**, not
+sandboxed/Docker execution. They need an existing deployment, reachable
+`FOUNDRY_ENDPOINT`, selected **key or Entra** authentication and the matching
+`--provider` value. Follow the [first-run guide](../README.md#first-run-one-task-one-deployment)
+and [keyless instructions](KEYLESS_AUTH.md) first. Docker is optional except
+for [explicitly isolated configurations](ISOLATED_EXECUTION.md); quickstart
+has no isolation flag. Add `--source
 'C:\path\to\starter'` when an existing starter is needed; it copies input and
 does not alter the original. Promote a prompt to controlled mode only after its
 acceptance criteria, baseline, and evaluator are stable.
 
+For a campaign, add each task configuration to a `schemaVersion: 1` manifest;
+candidate deployments are supplied separately and override the config's
+placeholder candidate. The [compact custom example](../examples/custom-campaign/campaign.json)
+and [campaign guide](CAMPAIGNS_AND_PUBLICATION.md) show preparation, bounded
+execution, resume, optional private grader assets and reviewed publication.
+No fixed category vocabulary, private suite, canned model advice or required
+task count exists.
+
+## Versioned evidence and evaluator design
+
+Optional task `version`, `title`, `taskType` and `tags` organize reporting.
+Choose stable task IDs and meaningful types yourself. The campaign pins input
+bytes, instructions, full task/round prompts, execution/runtime/image and
+evaluator policy. Changing any immutable comparison input means a new cohort.
+Neither a recovery prompt for only one candidate nor a model-specific grading
+exception is a fair shared policy.
+
+Candidate-owned validation answers whether its visible checks ran green.
+Independent required acceptance is a separate dimension. Without complete
+required evidence, a clean run is **UNGRADED**, not PASS. Required content
+failures stay selected; an advisory WEAK result is visible but not a required
+failure. Evaluator ERROR is not silently treated as incorrect content or zero.
+The default report selects the latest **clean completed** attempt rather than
+the latest passing attempt; planned repeats and infrastructure attempts have
+different denominators.
+
+A generic evaluator JSON declares schema/version, timeout/optional overall
+deadline and check ID, public requirement ID, category, expected type,
+required/advisory severity and command. Exit 0 passes; `failureExitCodes`
+defaults to `[1]`; other exits mean evaluator error. Checks run sequentially
+and retain every check status. Use stable public criteria, not wording or
+formatting preferences that were never requested.
+
+Calibrate required checks using reference positives, deliberate negatives and
+equivalent-valid representations. Examples include whitespace/key-order
+differences for JSON, alternate valid field access for code, or semantically
+equivalent wording where the public contract permits it. Do not normalize away
+a genuinely required source ID, numeric type, set membership or ordering rule.
+`calibrateEvaluator`/`verifyCalibration` bind the reference observations to the
+exact policy hash. A calibration flag alone is not evidence.
+
+Saved grades bind the run, contract, workspace byte hash, policy and version.
+To fix a grader, version the policy and apply it uniformly to all relevant
+saved outputs in a separately declared report cohort. Resume never regrades
+one failed candidate until it passes or silently changes immutable grades.
+
+Publication is separate from grading. Keep confidential inputs/oracles outside
+candidate inputs and default exports. Only a reviewed manifest may approve
+source/output previews and optionally active original downloads. The campaign
+guide explains content hashes, private `/grader` files, unsupported PDF/OCR
+and workbook recalculation, and honest missingness.
+
 ## Simple quickstart prompts
 
 These one-paragraph prompts are intentionally exploratory prototypes. Each is
-copyable after replacing `$model` with an OpenAI-compatible Foundry deployment;
-for an Anthropic-compatible deployment, use `--provider anthropic`.
+copyable after setting `$model` to an OpenAI-compatible Foundry deployment.
+Choose one authentication array in the same PowerShell shell:
+
+```powershell
+$model = 'YOUR_DEPLOYMENT_NAME'
+# Key mode: FOUNDRY_API_KEY must already be set in the host environment.
+$authFlags = @('--auth', 'key')
+# Alternatively, after the keyless guide's tenant/account login:
+# $authFlags = @('--auth', 'entra', '--credential', 'azure-cli', '--tenant-id', $tenantId, '--wire-api', 'responses')
+```
+
+`@authFlags` below forwards these implemented options; `az login` alone never
+selects Entra mode. Responses requires deployment support. For an
+Anthropic-compatible deployment use `--provider anthropic` and omit
+`--wire-api`; check that deployment's authentication support separately.
 
 ### CSV parser regression
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model --task 'Build a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
+npm run quickstart -- --provider openai --model $model @authFlags --task 'Build a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
 ```
 
 ### TTL get-or-load cache
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model --task 'Build a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
+npm run quickstart -- --provider openai --model $model @authFlags --task 'Build a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
 ```
 
 ### Retry-policy repair
@@ -61,7 +132,7 @@ npm run quickstart -- --provider openai --model $model --task 'Build a TypeScrip
 ```powershell
 $model = '<deployment-name>'
 $source = Read-Host 'Clean TypeScript retry-policy starter path'
-npm run quickstart -- --provider openai --model $model --source $source --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
+npm run quickstart -- --provider openai --model $model @authFlags --source $source --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
 ```
 
 ## Build a detailed task file
@@ -192,6 +263,12 @@ merge it with the required execution fields in the full template.
 `candidate.provider` and `foundryProvider.type` must be the same supported
 wire shape (`openai` or `anthropic`). A round should give every candidate the
 same repair opportunity, not restate the task or introduce a new requirement.
+The shown provider omits `auth`/`wireApi`, so it retains key/completions mode.
+For keyless Responses, replace that fragment with the implemented provider
+object in [Entra onboarding](KEYLESS_AUTH.md#local-developer-setup).
+`bench --config` starts paid inference immediately; it has no `--auth`
+override or `--allow-paid` flag. Use an unused candidate copy, not a source
+baseline or another candidate's mutated workspace.
 
 ## Fairness checklist
 
@@ -202,8 +279,9 @@ same repair opportunity, not restate the task or introduce a new requirement.
   sleeps unless the task evaluates them deliberately.
 - Keep the task prompt, instructions, ordered rounds/modes, tools, allowed
   network access, timeouts, retry policy, cache policy, and runtime fixed.
-- Run every candidate and repeat in an isolated clean workspace from that
-  baseline. Retain failures, rate limits, and timeouts alongside passes.
+- Run every candidate and repeat in a fresh clean workspace from that baseline.
+  A clean directory is not credential/process isolation; configure the Docker
+  boundary when required. Retain failures, rate limits and timeouts alongside passes.
 - Define whether web access or outside knowledge is permitted. If not, remove
   it consistently; if it is, make it the same for every candidate and record
   it in the contract.
@@ -254,6 +332,6 @@ alternatives are not guessed, Claude cache writes retain 5-minute and 1-hour
 scenarios, and minimum published list price is an estimate rather than an
 invoice. The report withholds cost ranking when contracts drift.
 
-See the README’s [Start here](../README.md#start-here) flow and [report
+See the README’s [first-run](../README.md#first-run-one-task-one-deployment) flow and [report
 guidance](../README.md#reading-a-generated-report) for the canonical commands
 and interpretation.
