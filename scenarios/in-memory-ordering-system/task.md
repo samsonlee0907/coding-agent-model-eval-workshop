@@ -157,16 +157,31 @@ A scenario directory is a **reusable task definition**, not a compiled binary.
 The `task.md` above is the human-readable spec; the JSON files next to it are
 run configurations. There are two ways to run it:
 
+Both commands below start **paid inference** immediately and use trusted-local
+execution by default, with no credential/process isolation. Docker is not
+required for them. Follow the [README onboarding](../../README.md#first-run-one-task-one-deployment)
+for install, endpoint and key/Entra setup; use
+[explicit container configuration](../../docs/ISOLATED_EXECUTION.md) for
+isolated execution. A clean workspace or a task instruction is not a sandbox.
+
 **A. Quick single-workspace run (fastest to try).** Let the quickstart command
 scaffold a throwaway workspace and local git baseline for you, using this
 scenario's initial task prompt as the task:
 
 ```bash
-# from the repository root, with FOUNDRY_ENDPOINT and FOUNDRY_API_KEY exported
+# Bash example: key mode, with FOUNDRY_ENDPOINT and FOUNDRY_API_KEY exported.
 npm run quickstart -- \
   --task-file scenarios/in-memory-ordering-system/round1.prompt.txt \
   --provider openai \
-  --model <your-foundry-deployment>
+  --model 'YOUR_DEPLOYMENT' \
+  --auth key
+```
+
+PowerShell keyless alternative, after the
+[Azure CLI tenant/account steps](../../docs/KEYLESS_AUTH.md):
+
+```powershell
+npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId
 ```
 
 **B. Full multi-round contract run (rigorous / reproducible).** Copy
@@ -179,6 +194,10 @@ needed:
 ```bash
 npm run bench -- --config ./my-ordering-run.json
 ```
+
+The supplied template defaults to key/completions. Keyless `bench` uses the
+`contract.foundryProvider.auth`/`wireApi` JSON shown in the auth guide, not
+command-line identity overrides.
 
 `workspacePath` must be a clean directory the agent can work in (for a
 greenfield task, an empty folder you have `git init`-ed is enough). See

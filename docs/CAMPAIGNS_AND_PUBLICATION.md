@@ -6,6 +6,14 @@ its task/evaluator JSON files use only Node standard-library checks and public
 requirements. Replace deployment placeholders and review bounds before
 inference. No command provisions Azure, grants roles or merges branches.
 
+New users: follow the [single-cell first-run walkthrough](../README.md#first-run-one-task-one-deployment)
+instead of assembling configuration fragments here. Docker is **not** a core
+prerequisite: saved reporting, preparation and trusted-local runs work without
+it. For supported keyless configuration see [Entra onboarding](KEYLESS_AUTH.md);
+for the optional isolated boundary see [Docker setup and feasibility](ISOLATED_EXECUTION.md).
+Preparation can pin an isolation policy offline without a daemon; actually
+executing/grading it requires the Linux daemon and approved local image.
+
 ## Prepare, run, resume
 
 `npm run campaign -- --help` lists all commands. Preparation resolves task
@@ -103,7 +111,11 @@ Container mode requires a functioning **Linux Docker daemon** and a locally
 available, immutable `repository@sha256:<64-hex-digest>` image. The image must
 have `/usr/local/bin/node`, `/bin/sh`, `chmod`, and task/grader
 dependencies ready for **offline** operation. Images are never automatically
-pulled. Put this top-level block in each isolated task config:
+pulled. Follow the [step-by-step optional isolation path](ISOLATED_EXECUTION.md)
+for official installers, host/freezer feasibility, image review/digest pinning
+and a no-inference owned-worker probe. Installing Docker Desktop or passing
+`doctor` alone does not prove the boundary. Put this top-level block in each
+isolated task config (it is a fragment, not a complete runnable task):
 
 ```json
 {
@@ -261,6 +273,8 @@ behavior is covered with injected executors, not claimed as live verified.
 
 - [Pinned Copilot SDK BYOK](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/auth/byok.md)
 - [Pinned SDK Azure Identity callback guide](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/setup/azure-managed-identity.md)
+- [Local CLI login and keyless prerequisites](KEYLESS_AUTH.md)
+- [Optional Linux Docker setup and local feasibility](ISOLATED_EXECUTION.md)
 - [Azure Identity JavaScript owner package](https://github.com/Azure/azure-sdk-for-js/tree/main/sdk/identity/identity)
 - [Microsoft Responses authentication examples](https://learn.microsoft.com/azure/foundry/openai/how-to/responses)
 - [Azure OpenAI resource RBAC](https://learn.microsoft.com/azure/foundry-classic/openai/how-to/role-based-access-control)
