@@ -8,6 +8,7 @@ const usage = "Usage: npm run quickstart -- --task <prompt> | --task-file <file>
   "  [--wire-api completions|responses] [--reasoning-effort high]\n" +
   "  [--auth key|entra] [--credential azure-cli|managed-identity|workload-identity]\n" +
   "  [--tenant-id <uuid>] [--subscription-id <uuid>] [--client-id <uuid>]\n" +
+  "Azure CLI: --tenant-id and --subscription-id are mutually exclusive.\n" +
   "Trusted-local only. Without --prepare-only this sends paid inference immediately; explicit bounds are required.";
 if (process.argv.includes("--help")) {
   console.log(usage);

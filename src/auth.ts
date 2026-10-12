@@ -14,7 +14,11 @@ export const authSchema = z.discriminatedUnion("mode", [
     clientId: z.string().uuid().optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
   }).strict(),
-]);
+]).superRefine((auth, ctx) => {
+  if (auth.mode === "entra" && auth.credential === "azure-cli" && auth.tenantId && auth.subscriptionId) {
+    ctx.addIssue({ code: "custom", message: "Azure CLI token acquisition accepts only one of tenantId or subscriptionId, not both. Choose the intended selector explicitly; neither is silently ignored." });
+  }
+});
 export const providerSchema = z.object({
   type: z.enum(["openai", "anthropic"]),
   wireApi: z.enum(["completions", "responses"]).optional(),
@@ -43,6 +47,7 @@ export interface RefreshableCredential {
 }
 
 export function createCredential(auth: Extract<FoundryAuth, { mode: "entra" }>): RefreshableCredential {
+  providerSchema.parse({ type: "openai", auth });
   switch (auth.credential) {
     case "azure-cli":
       return new AzureCliCredential({ tenantId: auth.tenantId, subscription: auth.subscriptionId, processTimeoutInMs: auth.timeoutMs ?? 30000 });
@@ -87,6 +92,9 @@ export function bearerTokenProvider(
 
 export function credentialFailureDetail(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
+  if (/Please specify only one of subscription and tenant, not both/i.test(message)) {
+    return "Azure CLI option conflict: choose only one of tenantId or subscriptionId, not both. No token or inference was acquired.";
+  }
   const aad = /\bAADSTS\d{5,10}\b/.exec(message)?.[0];
   if (aad === "AADSTS90072" || aad === "AADSTS50020") return `${aad}: selected account does not belong to the requested tenant. Select the intended CLI tenant/subscription explicitly; this is not inference RBAC or quota.`;
   if (aad) return `${aad}: identity service rejected credential acquisition. Check login, tenant and federation; no inference was sent.`;

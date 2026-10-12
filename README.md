@@ -175,15 +175,25 @@ az version
 $tenantId = 'REPLACE_WITH_TENANT_UUID'
 $subscriptionId = 'REPLACE_WITH_SUBSCRIPTION_UUID'
 az login --tenant $tenantId
-az account show --subscription $subscriptionId --query '{tenant:tenantId,subscription:id,user:user.name}' --output json
+$account = az account show --subscription $subscriptionId --output json | ConvertFrom-Json
+if ($LASTEXITCODE -ne 0) { throw 'The intended subscription is not available in the CLI login.' }
+if ($account.tenantId -ne $tenantId) { throw 'The selected subscription does not belong to the intended tenant.' }
 Remove-Item Env:FOUNDRY_API_KEY -ErrorAction SilentlyContinue
 $spec.candidates[0].foundryProvider.auth = [pscustomobject]@{
-    mode = 'entra'; credential = 'azure-cli'; tenantId = $tenantId; subscriptionId = $subscriptionId
+    mode = 'entra'; credential = 'azure-cli'; subscriptionId = $subscriptionId
 }
 ```
 
-The toolkit scopes each CLI token request to these IDs without changing the
-shared `az` default subscription. Keep that CLI login stable throughout the campaign.
+The toolkit scopes each CLI token request to this subscription's cached
+account/tenant without changing the shared `az` default subscription.
+Azure CLI token acquisition accepts **either** `subscriptionId` **or**
+`tenantId`, not both. This recipe deliberately selects the subscription and
+checks its tenant during setup; it does not store a separate expected-tenant
+restriction. For explicit tenant-only requests, replace `subscriptionId` with
+`tenantId`, understanding that the current default CLI account supplies the
+principal. Invalid both-ID configurations fail before token/inference acquisition;
+the toolkit never silently discards an intended selector. Keep the CLI login
+stable throughout the campaign.
 Login/context selection
 does **not** grant inference permission. The current callback requests
 `https://ai.azure.com/.default`, as in the pinned SDK and Microsoft v1 Responses
@@ -363,7 +373,7 @@ For a disposable exploratory task, review
 and prepare without inference:
 
 ```powershell
-npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --prepare-only --task 'Build a string-reversal CLI, deterministic tests and package.json test/build scripts.' --output '.\.benchmark-runs\exploration-v1'
+npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --prepare-only --task 'Build a string-reversal CLI, deterministic tests and package.json test/build scripts.' --output '.\.benchmark-runs\exploration-v1'
 npm run doctor -- --config '.\.benchmark-runs\exploration-v1\benchmark.local.json' --verify-runtime
 # Paid inference; trusted-local, not isolated. Run only after the gate passes:
 npm run bench -- --config '.\.benchmark-runs\exploration-v1\benchmark.local.json'
@@ -498,6 +508,7 @@ acquisition still leaves `data-plane-inference: not-verified`.
 | Configuration or endpoint check fails | Replace example placeholders; use the canonical resource root, exact deployment name and supported provider/protocol |
 | Entra credential acquisition fails | Check Azure CLI installation, selected account/tenant and login, or configured host identity; see [keyless diagnostics](docs/KEYLESS_AUTH.md#preflight-and-errors) |
 | AADSTS90072/AADSTS50020 | Account/tenant mismatch during credential acquisition, not inference RBAC; verify explicit tenant/subscription and login without changing shared defaults |
+| Azure CLI selector/option conflict | Choose only one of `tenantId`/`subscriptionId` or `--tenant-id`/`--subscription-id`; both are rejected before acquisition, not silently ignored |
 | Unknown/disabled coding tool | Run `doctor --verify-runtime`; inspect selected executable/hash, backend and resolved filters. Do not add shell or remove the allowlist |
 | Quickstart/judge asks for `--bounds` | Review the supplied request policy file; this public CLI requirement preserves request/token/output/pacing/deadline limits |
 | Inference returns 401/403 | Confirm token audience, deployment auth support, endpoint-specific inference role and network access; management roles alone are insufficient |

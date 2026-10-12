@@ -182,7 +182,7 @@ PowerShell keyless alternative, after the
 [Azure CLI tenant/account steps](../../docs/KEYLESS_AUTH.md):
 
 ```powershell
-npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json'
+npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json'
 ```
 
 Review the bounds file before either paid command. Add `--prepare-only` to

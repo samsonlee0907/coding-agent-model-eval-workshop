@@ -51,17 +51,24 @@ test("quickstart and judge share explicit identity/protocol flags", () => {
   assert.throws(() => parseQuickstartOptions([...args, "--task", "task", "--auth", "key", "--client-id", "bad"]));
 });
 
-test("Azure CLI tenant/subscription scope is passed per token request without changing shared defaults", async () => {
+test("Azure CLI subscription selector is passed without an incompatible tenant flag or default-context mutation", async () => {
   const tenantId = "11111111-2222-4333-8444-555555555555", subscriptionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
   const acquisition = mock.method(cliCredentialInternals, "getAzureCliAccessToken", async (resource: string, tenant: string, subscription: string) => {
-    assert.equal(resource, "https://ai.azure.com"); assert.equal(tenant, tenantId); assert.equal(subscription, subscriptionId);
+    assert.equal(resource, "https://ai.azure.com"); assert.equal(tenant, undefined); assert.equal(subscription, subscriptionId);
     return { stdout: JSON.stringify({ accessToken: "fixture-only-token", expiresOn: "2099-01-01 00:00:00.000000" }), stderr: "", error: null };
   });
   try {
-    const credential = createCredential({ mode: "entra", credential: "azure-cli", tenantId, subscriptionId });
+    const credential = createCredential({ mode: "entra", credential: "azure-cli", subscriptionId });
     assert.equal((await credential.getToken(foundryScope, { abortSignal: AbortSignal.timeout(5000) }))?.token, "fixture-only-token");
     assert.equal(acquisition.mock.callCount(), 1);
   } finally { acquisition.mock.restore(); }
+  const incompatible = { mode: "entra" as const, credential: "azure-cli" as const, tenantId, subscriptionId };
+  assert.throws(() => createCredential(incompatible), /only one of tenantId or subscriptionId/);
+  assert.throws(() => providerSchema.parse({ type: "openai", auth: incompatible }), /only one of tenantId or subscriptionId/);
+  const flags = ["--provider", "openai", "--model", "fixture", "--auth", "entra", "--credential", "azure-cli",
+    "--tenant-id", tenantId, "--subscription-id", subscriptionId];
+  assert.throws(() => parseQuickstartOptions([...flags, "--task", "fixture"]), /only one of tenantId or subscriptionId/);
+  assert.throws(() => parseEvaluationOptions(flags), /only one of tenantId or subscriptionId/);
   assert.throws(() => providerSchema.parse({ type: "openai", auth: { mode: "entra", credential: "managed-identity", subscriptionId } }));
   const auth = { mode: "entra" as const, credential: "azure-cli" as const, subscriptionId };
   await assert.rejects(bearerTokenProvider(auth, { async getToken() { throw new Error("AADSTS90072 account private@example.test secret=PRIVATE"); } }),

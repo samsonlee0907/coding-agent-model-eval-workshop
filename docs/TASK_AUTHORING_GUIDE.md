@@ -111,12 +111,14 @@ $model = 'YOUR_DEPLOYMENT_NAME'
 # Key mode: FOUNDRY_API_KEY must already be set in the host environment.
 $authFlags = @('--auth', 'key')
 # Alternatively, after the keyless guide's tenant/account login:
-# $authFlags = @('--auth', 'entra', '--credential', 'azure-cli', '--tenant-id', $tenantId, '--subscription-id', $subscriptionId, '--wire-api', 'responses')
+# $authFlags = @('--auth', 'entra', '--credential', 'azure-cli', '--subscription-id', $subscriptionId, '--wire-api', 'responses')
 ```
 
 `@authFlags` below forwards these implemented options; `az login` alone never
 selects Entra mode. Responses requires deployment support. For an
-Anthropic-compatible deployment use `--provider anthropic` and omit
+explicit tenant-only token request, replace `--subscription-id` and its value
+with `--tenant-id` and its value; never combine them for Azure CLI.
+For an Anthropic-compatible deployment use `--provider anthropic` and omit
 `--wire-api`; check that deployment's authentication support separately.
 
 ### CSV parser regression

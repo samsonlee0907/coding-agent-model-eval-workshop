@@ -10,6 +10,7 @@ if (process.argv.includes("--help")) {
   console.log("Usage: npm run evaluate -- --runs <run-directory> --provider <openai|anthropic> --model <judge-deployment> --bounds <request-bounds.json>\n" +
     "  [--wire-api completions|responses] [--auth key|entra] [--credential azure-cli|managed-identity|workload-identity]\n" +
     "  [--tenant-id <uuid>] [--subscription-id <uuid>] [--client-id <uuid>]\n" +
+    "Azure CLI: --tenant-id and --subscription-id are mutually exclusive.\n" +
     "  [--reasoning-effort high] [--timeout-ms 120000] [--output <evaluation.json>]\nPaid inference immediately; explicit request/token/output/pacing/deadline bounds are required.");
 } else {
   try {

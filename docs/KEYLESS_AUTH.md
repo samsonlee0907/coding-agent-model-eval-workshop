@@ -25,17 +25,30 @@ authentication.
    $subscriptionId = 'REPLACE_WITH_SUBSCRIPTION_UUID'
    az version
    az login --tenant $tenantId
-   az account show --subscription $subscriptionId --query '{tenant:tenantId,subscription:id,user:user.name}' --output json
+   $account = az account show --subscription $subscriptionId --output json | ConvertFrom-Json
+   if ($LASTEXITCODE -ne 0) { throw 'The intended subscription is not available in the CLI login.' }
+   if ($account.tenantId -ne $tenantId) { throw 'The selected subscription does not belong to the intended tenant.' }
    ```
 
    Check the returned account/tenant/subscription yourself. A subscription
-   selection is not an inference grant. Configure both `tenantId` and
-   `subscriptionId` below: pinned Azure Identity 4.13.0 supports
-   [`AzureCliCredentialOptions.subscription`](https://github.com/Azure/azure-sdk-for-js/blob/@azure/identity_4.13.0/sdk/identity/identity/src/credentials/azureCliCredentialOptions.ts).
-   The toolkit maps the UUID to that option and passes it on each token request,
-   without `az account set` or a mutation of shared defaults. If omitted, CLI
-   context still applies; explicit selection is preferable for multi-account
-   hosts. Keep the selected CLI login stable during a campaign.
+   selection is not an inference grant. Use **one** token selector:
+   `subscriptionId` is recommended for the intended cached subscription/account;
+   `tenantId` alone explicitly selects the token tenant but still uses the
+   default CLI account as the principal. The subscription-only recipe checks
+   the intended tenant during setup, not as a second stored credential selector.
+   No token decoding or implicit expected-tenant enforcement is claimed.
+
+   The lockfile pins Azure Identity **4.13.3**. Its
+   [`AzureCliCredential` subprocess](https://github.com/Azure/azure-sdk-for-js/blob/@azure/identity_4.13.3/sdk/identity/identity/src/credentials/azureCliCredential.ts)
+   supports the two options individually, but
+   [Azure CLI 2.65.0 `get_raw_token`](https://github.com/Azure/azure-cli/blob/azure-cli-2.65.0/src/azure-cli-core/azure/cli/core/_profile.py)
+   rejects `--subscription` plus `--tenant`. Therefore the shared schema,
+   direct credential factory and CLIs reject both-ID configurations before
+   acquisition. Neither selector is silently dropped. The selected subscription
+   supplies its cached tenant/account; an unavailable subscription fails, with
+   no fallback to the shared default. The toolkit never runs `az account set`.
+   Keep the selected CLI login stable during a campaign; if already logged in,
+   check its mapping without repeating login.
    Follow [Microsoft's interactive-login guidance](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively)
    if browser login is unavailable (for example, its supported device-code
    flow). Do not use a username/password script or copy an access token.
@@ -52,7 +65,7 @@ authentication.
    `unset FOUNDRY_API_KEY`. The variable is required even though login succeeded.
 5. Select **both** Entra mode and the credential in configuration before
    preparation. This provider fragment is accepted by the current parser;
-   replace the illustrative UUID with your tenant:
+   replace the illustrative UUID with your subscription:
 
    ```json
    {
@@ -61,7 +74,6 @@ authentication.
      "auth": {
        "mode": "entra",
        "credential": "azure-cli",
-       "tenantId": "11111111-2222-4333-8444-555555555555",
        "subscriptionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
        "timeoutMs": 30000
      }
@@ -75,6 +87,11 @@ authentication.
    during campaign execution. Save both files as in
    [README configuration step 5](../README.md#5-save-the-configuration).
    `candidate.model`/quickstart `--model` must be the exact deployment name.
+   For the tenant-only alternative, replace the `subscriptionId` field with
+   `"tenantId": "11111111-2222-4333-8444-555555555555"`; do not add both.
+   Use `--subscription-id $subscriptionId` **or** `--tenant-id $tenantId` in
+   quickstart/judge commands, never both. Omit both only when deliberately
+   accepting the current CLI default account/tenant.
 
    Omitted auth remains key mode; merely running `az login` does not select
    keyless mode. `azure-cli` cannot take `clientId`; that option belongs to
@@ -140,6 +157,7 @@ Expect `credential-acquisition: pass` if acquisition works and
 |---|---|
 | Credential acquisition fails | Verify CLI installation, account, tenant, interactive login/MFA or host federation setup; no fallback was attempted |
 | AADSTS90072 / AADSTS50020 | Explicit CLI account/tenant mismatch; verify login and scoped tenant/subscription. The safe code is retained without account/token/error-payload details; this is not inference RBAC |
+| Only one of tenant/subscription accepted | Fix the explicit choice in config/flags before token acquisition; known CLI option-conflict text is safely categorized, not replaced with full private stderr |
 | 401 | Confirm deployment Entra support and token audience; token acquisition alone does not prove compatibility |
 | 403 | Check endpoint-specific resource inference permission and private-network access, not just subscription/project roles |
 | 404 | Check resource name, exact deployment name and selected protocol |
@@ -166,9 +184,9 @@ Quickstart and the optional judge use implemented flags instead of campaign
 JSON; **both invoke models immediately**, without an `--allow-paid` gate:
 
 ```powershell
-npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --task 'Create a string-reversal CLI with package.json test/build scripts and deterministic tests.' --output '.\.benchmark-runs\keyless-exploration-v1'
+npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --task 'Create a string-reversal CLI with package.json test/build scripts and deterministic tests.' --output '.\.benchmark-runs\keyless-exploration-v1'
 # Optional paid judge, only if explicitly wanted:
-npm run evaluate -- --runs '.\.benchmark-runs\keyless-exploration-v1\artifacts' --provider openai --model 'YOUR_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json'
+npm run evaluate -- --runs '.\.benchmark-runs\keyless-exploration-v1\artifacts' --provider openai --model 'YOUR_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json'
 ```
 
 For key authentication choose `{"mode":"key"}`, supply `FOUNDRY_API_KEY` only

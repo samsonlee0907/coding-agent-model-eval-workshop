@@ -36,7 +36,7 @@ test("public paid quickstart/judge reject absent bounds and offline quickstart p
     const bounds = resolve("examples", "request-bounds.example.json"), output = join(root, "prepared");
     const text = execFileSync(process.execPath, [resolve("dist", "quickstart-cli.js"), "--provider", "openai", "--model", "fixture-model", "--task", "Public fixture",
       "--bounds", bounds, "--prepare-only", "--output", output, "--wire-api", "responses", "--auth", "entra", "--credential", "azure-cli",
-      "--tenant-id", "11111111-2222-4333-8444-555555555555", "--subscription-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"], {
+      "--subscription-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"], {
       cwd: root, encoding: "utf8", env: { ...process.env, FOUNDRY_ENDPOINT: "", FOUNDRY_API_KEY: "" },
     });
     assert.equal(JSON.parse(text).inference, "not-dispatched");
