@@ -34,7 +34,7 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     writeFileSync(join(root, "image.png"), png);
     const entries = [["html", "candidate.html"], ["text", "source.txt"], ["json", "output.json"], ["image", "image.png"]].map(([kind, path], i) => ({
       id: `preview-${i}`, title: `Approved ${kind}`, role: "output", task, attempt: runs[0].runId, root: "approved", path,
-      kind, sha256: createHash("sha256").update(readFileSync(join(root, path))).digest("hex"), allowOriginalDownload: false,
+      kind, sha256: createHash("sha256").update(readFileSync(join(root, path))).digest("hex"), allowOriginalDownload: kind === "text",
     }));
     const index = writeReportBundle(evidence, join(root, "report"), { publication: { schemaVersion: 1, roots: { approved: root }, entries } });
     assert.ok(readFileSync(index).length < 3 * 1024 * 1024);
@@ -58,6 +58,17 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     assert.equal(await page.frameLocator("iframe").locator("script,form,img").count(), 0);
     assert.equal(await page.locator("#previews img").count(), 1);
     assert.equal(await page.evaluate(() => "candidateScriptExecuted" in window), false);
+    const originalLink = page.getByRole("link", { name: "Open/save explicitly approved original (may be active content)" });
+    assert.equal(await originalLink.count(), 1);
+    assert.equal(await originalLink.getAttribute("rel"), "noopener noreferrer");
+    const reportUrl = page.url();
+    const popupPromise = page.waitForEvent("popup");
+    await originalLink.click();
+    const popup = await popupPromise; await popup.waitForLoadState();
+    assert.match(await popup.locator("body").textContent() ?? "", /Approved source fixture/);
+    assert.equal(page.url(), reportUrl);
+    assert.equal(await popup.evaluate(() => window.opener === null), true);
+    await popup.close();
     await page.setViewportSize({ width: 390, height: 844 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.locator("#cell-selector").focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");

@@ -96,12 +96,14 @@ test("onboarding auth/isolation fragments and immediate-run commands match imple
     const args = (command[2].match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((arg) => {
       if (arg === "$deployment") return "fixture-deployment";
       if (arg === "$tenantId") return "11111111-2222-4333-8444-555555555555";
+      if (arg === "$subscriptionId") return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
       return arg.replace(/^['"]|['"]$/g, "");
     });
 
     const options = command[1] === "quickstart" ? parseQuickstartOptions(args) : parseEvaluationOptions(args);
     assert.equal(options.auth?.mode, "entra");
     assert.equal(options.wireApi, "responses");
+    assert.ok(options.requestBounds);
   }
 });
 

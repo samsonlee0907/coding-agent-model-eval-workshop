@@ -146,6 +146,27 @@ no containers and does not prove Linux freezing or security/resource controls.
 If keyless credentials also need checking, use `--acquire-auth` separately;
 that contacts identity services but still performs no model inference.
 
+Next, explicitly authorize the public **actual SDK/CLI + actual worker-image
+coding gate**:
+
+```powershell
+npm run doctor -- --config "$work\text-task.json" --verify-runtime --allow-container-probe
+if ($LASTEXITCODE -ne 0) { throw 'Actual-image coding gate failed; do not run inference.' }
+```
+
+This currently covers explicit OpenAI-compatible Responses. The SDK/CLI and
+fake provider run on the orchestrator host; the pinned Linux image supplies
+the isolated `controlled_workspace` tool, not a second Copilot executable.
+The same capability contract is enforced in local and isolated sessions.
+The gate imports only public fixtures, creates/edits two files across fixed
+rounds, validates before freezing, checks exported bytes, and forwards a
+greater-than-192-KiB request. It records host executable/hash, separately
+reported backend version and worker image. Real tokens/inputs are not used.
+It creates and normally disposes only UUID-owned Docker resources. A creation/
+cleanup failure retains the reported ownership record for bounded owned cleanup;
+do not delete that record or touch unrelated containers. It does **not** prove
+Azure auth/deployment behavior or all kernel/security properties.
+
 The following **optional local Docker acceptance probe** creates named,
 UUID-owned resources using the actual toolkit, validates nonroot execution,
 imports the example files, freezes the candidate, exports its volume through

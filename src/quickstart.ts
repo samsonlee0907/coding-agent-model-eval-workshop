@@ -9,6 +9,8 @@ import type {
   FoundryAuth,
 } from "./types.js";
 import { parseAuthFlags, providerSchema } from "./auth.js";
+import { loadRequestBounds, type RequestBounds } from "./request-policy.js";
+import { assertCliArguments } from "./cli-arguments.js";
 
 const ignoredArtifactEntries = new Set([".git", "node_modules", "dist", ".benchmark-artifacts", ".benchmark-runs"]);
 
@@ -22,6 +24,8 @@ export interface QuickstartOptions {
   reasoningEffort?: ReasoningEffort;
   auth?: FoundryAuth;
   wireApi?: "completions" | "responses";
+  requestBounds?: RequestBounds;
+  prepareOnly?: boolean;
 }
 
 export interface QuickstartWorkspace {
@@ -54,6 +58,7 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
   const baselineCommitSha = createLocalBaselineCommit(workspacePath);
   const containerFingerprint = createLocalEnvironmentFingerprint(workspacePath);
   const config: BenchmarkConfig = {
+    ...(options.requestBounds ? { requestBounds: options.requestBounds } : {}),
     contract: {
       task: {
         id: `quickstart-${digest(options.task).slice(0, 12)}`,
@@ -128,6 +133,8 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
     throw new TypeError("--model is required.");
   }
   return {
+    requestBounds: loadRequestBounds(argumentValue(argv, "--bounds")),
+    prepareOnly: argv.includes("--prepare-only"),
     task: task ?? (taskFile ? readFileSync(resolve(taskFile), "utf8") : ""),
     sourcePath: argumentValue(argv, "--source"),
     outputDirectory: argumentValue(argv, "--output"),
@@ -141,7 +148,7 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
 }
 
 function assertSupportedOptions(argv: readonly string[]): void {
-  const optionsWithValues = new Set([
+  const optionsWithValues = [
     "--task",
     "--task-file",
     "--model",
@@ -150,15 +157,9 @@ function assertSupportedOptions(argv: readonly string[]): void {
     "--reasoning-effort",
     "--source",
     "--output",
-    "--auth", "--credential", "--tenant-id", "--client-id", "--wire-api",
-  ]);
-  for (const token of argv) {
-    if (token.startsWith("--") && !optionsWithValues.has(token)) {
-      throw new TypeError(
-        `Unsupported option ${token}. This workshop accepts only Foundry --provider openai or --provider anthropic with FOUNDRY_ENDPOINT and FOUNDRY_API_KEY.`,
-      );
-    }
-  }
+    "--auth", "--credential", "--tenant-id", "--client-id", "--subscription-id", "--wire-api", "--bounds",
+  ];
+  assertCliArguments(argv, { ...Object.fromEntries(optionsWithValues.map((flag) => [flag, "value" as const])), "--prepare-only": "switch" });
 }
 
 function argumentValue(argv: readonly string[], name: string): string | undefined {

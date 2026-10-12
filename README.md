@@ -12,6 +12,13 @@ multi-task evaluations with arbitrary candidate counts. Tasks, acceptance
 checks and optional categories are supplied by the user; no fixed benchmark
 dataset or model ranking is bundled.
 
+**GitHub Copilot is still the agent runtime.** The pinned
+[`@github/copilot-sdk` 1.0.10-preview.0](https://github.com/github/copilot-sdk/tree/v1.0.10-preview.0)
+and selected Copilot CLI manage sessions, coding tools and fixed multi-turn
+work. Microsoft Foundry supplies model inference through the SDK's BYOK
+provider; this toolkit supplies task policy, accounting, evaluators and reports.
+BYOK runs do not require a GitHub Copilot subscription or Copilot login.
+
 ## Contents
 
 - [Expected outcomes](#expected-outcomes)
@@ -168,15 +175,16 @@ az version
 $tenantId = 'REPLACE_WITH_TENANT_UUID'
 $subscriptionId = 'REPLACE_WITH_SUBSCRIPTION_UUID'
 az login --tenant $tenantId
-az account set --subscription $subscriptionId
-az account show --query '{tenant:tenantId,subscription:id,user:user.name}' --output json
+az account show --subscription $subscriptionId --query '{tenant:tenantId,subscription:id,user:user.name}' --output json
 Remove-Item Env:FOUNDRY_API_KEY -ErrorAction SilentlyContinue
 $spec.candidates[0].foundryProvider.auth = [pscustomobject]@{
-    mode = 'entra'; credential = 'azure-cli'; tenantId = $tenantId
+    mode = 'entra'; credential = 'azure-cli'; tenantId = $tenantId; subscriptionId = $subscriptionId
 }
 ```
 
-Keep that CLI account stable throughout the campaign. Login/context selection
+The toolkit scopes each CLI token request to these IDs without changing the
+shared `az` default subscription. Keep that CLI login stable throughout the campaign.
+Login/context selection
 does **not** grant inference permission. The current callback requests
 `https://ai.azure.com/.default`, as in the pinned SDK and Microsoft v1 Responses
 examples; it does not auto-select arbitrary endpoint audiences. See
@@ -240,14 +248,14 @@ before using the first-run commands below.
 
 | Command | Purpose | Inference and access |
 |---|---|---|
-| `npm run doctor -- --config <task.json>` | Check local configuration, runtime and prerequisites | No inference; `--acquire-auth` optionally acquires an Entra token; isolated configs inspect Docker/image metadata |
+| `npm run doctor -- --config <task.json>` | Check configuration; `--verify-runtime` exercises actual coding tools against a local fake provider | No cloud inference; `--acquire-auth` optionally acquires an Entra token; a container coding probe requires separate consent |
 | `npm run campaign -- <command> ...` | Prepare, run, status, resume, report or clean up owned workers | Prepare/status/report use saved or local evidence; run/resume require `--allow-paid`; isolated cleanup uses Docker |
-| `npm run quickstart -- ...` | Create a disposable task workspace and run an exploratory session | Paid inference immediately; trusted-local only |
+| `npm run quickstart -- ...` | Create a disposable workspace with `--bounds`; `--prepare-only` prepares offline | Otherwise paid inference immediately; trusted-local only |
 | `npm run bench -- --config <task.json>` | Execute one configured task/session | Paid inference immediately; selected task execution mode |
 | `npm run report:html -- --runs <runs> ...` | Export saved runs to HTML or a portable folder/ZIP | Offline; no inference |
 | `npm run portfolio -- --runs <runs>` | Generate a Markdown comparison from saved runs | Offline; no inference |
 | `npm run prices:refresh -- --runs <runs>` | Save an explicit official-price what-if snapshot | Public pricing-page requests, not model inference |
-| `npm run evaluate -- ...` | Attach an optional fixed-rubric LLM-judge evaluation | Paid inference immediately; selected key/Entra auth |
+| `npm run evaluate -- ...` | Attach an optional fixed-rubric judge with explicit `--bounds` | Paid inference immediately; selected key/Entra auth |
 
 Campaign run/resume have a paid-operation gate; `quickstart`, `bench` and
 `evaluate` do **not** have an `--allow-paid` gate. Do not treat those commands
@@ -263,13 +271,27 @@ For an offline preview, complete only the first step below.
 ```powershell
 # onboarding:offline
 npm run doctor -- --config "$work\text-task.json"
+npm run doctor -- --config "$work\text-task.json" --verify-runtime
+if ($LASTEXITCODE -ne 0) { throw 'Runtime coding probe failed; do not run inference.' }
 npm run campaign -- prepare --spec "$work\campaign.json" --directory $state
 npm run campaign -- status --directory $state
 npm run campaign -- report --directory $state --output "$work\preview-v1" --zip
 ```
 
 Expected: `doctor` prints JSON local checks; `data-plane-inference` remains
-`not-verified`. Preparation creates `$state\prepared.json`; status shows one
+`not-verified`. The separate runtime gate creates and edits **two public
+fixture files**, reads/lists inputs, runs immediate/enqueued fixed rounds and
+handles a request larger than 192 KiB through the actual selected SDK/CLI
+against localhost fake Responses. It validates file content, records executable
+version/hash separately from backend version, and cleans its owned temporary
+files. It uses neither your task inputs nor real credentials. It is not a
+live deployment/RBAC check. Unsupported/missing read/edit tools fail before
+model dispatch; shell is not added to repair a read/edit contract.
+This gate currently supports explicit OpenAI-compatible Responses only.
+For a configured isolated worker use the
+[explicit actual-image probe](docs/ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference).
+
+Preparation creates `$state\prepared.json`; status shows one
 `missing` cell and zero attempts. Open `$work\preview-v1\index.html` directly
 in a browser, or share `$work\preview-v1.zip`. Missing is not PASS.
 
@@ -302,6 +324,13 @@ are sensitive local artifacts. Publish only the reviewed
 `selected-results.json/.csv`, `task-types.json/.csv` and `integrity.json`.
 Default publication excludes raw prompts, logs and source/output content.
 
+Treat this one-cell run as the **bounded live gate before scale**: inspect
+clean execution completion, the requested file, required acceptance grade and
+physical request/unknown-spend accounting. A fake-runtime pass does not prove
+live transport or model quality. Do not scale an interrupted or ungraded gate;
+retain its diagnostics and prepare a new cohort if immutable policy changes.
+A clean content FAIL remains a completed result, never an excuse to retry until PASS.
+
 #### 3. Resume an interrupted campaign
 
 If interrupted, fix the prerequisite and use the same state:
@@ -329,15 +358,20 @@ work, not to select a newer PASS or bypass ambiguous dispatch.
 
 ### Exploratory quickstart and saved-run reports
 
-For a disposable exploratory coding task after configuring authentication:
+For a disposable exploratory task, review
+[`examples/request-bounds.example.json`](examples/request-bounds.example.json)
+and prepare without inference:
 
 ```powershell
-# Paid inference; trusted-local, not isolated.
-npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --task 'Build a string-reversal CLI, deterministic tests and package.json test/build scripts.' --output '.\.benchmark-runs\exploration-v1'
+npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --prepare-only --task 'Build a string-reversal CLI, deterministic tests and package.json test/build scripts.' --output '.\.benchmark-runs\exploration-v1'
+npm run doctor -- --config '.\.benchmark-runs\exploration-v1\benchmark.local.json' --verify-runtime
+# Paid inference; trusted-local, not isolated. Run only after the gate passes:
+npm run bench -- --config '.\.benchmark-runs\exploration-v1\benchmark.local.json'
 ```
 
-For key auth use `--auth key` and omit identity flags. Quickstart runs
-immediately; it has no `--allow-paid` flag. It writes
+For key auth use `--auth key` and omit identity flags. Without `--prepare-only`,
+quickstart runs immediately; it has no `--allow-paid` flag. The CLI requires
+`--bounds` in either mode and writes
 `exploration-v1\benchmark.local.json`, `workspace` and `artifacts\<run-id>`.
 `--source` copies a starter without changing the original. Report it with:
 
@@ -378,7 +412,11 @@ probes, a fixed multi-turn plan and the runnable
 [`benchmark.example.json`](benchmark.example.json) is an advanced controlled
 template, not an already filled first-run configuration.
 
-Tools default to `read`, `edit`, `shell`. Optional
+Tools default to `read`, `edit`, `shell`. The selected runtime's catalog maps
+edit to native `create` plus `edit`, or `apply_patch` when that catalog supplies
+patch editing. Requested capabilities and actual session/wire tools are checked
+before inference; neither shell widening nor a blind CLI downgrade is a repair.
+Optional
 [MCP](https://modelcontextprotocol.io) servers are part of the immutable local
 execution contract and are disallowed in isolated mode. Environment secret
 placeholders expand only at launch; never store credentials in config files.
@@ -408,10 +446,12 @@ not a live offline price feed or a replacement for recorded prices. See
 
 Portable folder/ZIP and explicit HTML exports make no external requests when
 opened. Default publication includes allowlisted metadata only; review labels
-too. Sources, output previews and active original downloads need an explicit
+too. Sources, output previews and active original Open/save links need an explicit
 hash-bound [publication manifest](examples/publication.example.json).
 Raw logs, run/check/grade JSON, per-run Markdown, workspaces, patches and full
 judge output are sensitive local evidence requiring separate review.
+Approved originals open separately and can be saved by the browser; offline
+`file://` download behavior is browser-dependent and is not guaranteed.
 
 ## Known limitations and troubleshooting
 
@@ -434,7 +474,11 @@ processes; isolated execution requires the documented Linux worker boundary.
 
 Tests use fake transport/tokens/clocks and deidentified fixtures. Actual
 pinned SDK/CLI integration checks use localhost fake inference and offline
-browser checks.
+browser checks, including real file creation and multi-round editing.
+The relay handles SSE event boundaries, split UTF-8 and protocol-specific
+completion, cancels disconnected downstream requests and retains safe phase/status/
+byte diagnostics. These reproduced relay fixes do **not** establish the root
+cause of older upstream interruptions whose saved evidence lacks that detail.
 
 **Live Azure key/Entra/RBAC/deployment/network and real Docker enforcement were
 not verified.** Docker command construction, export and ownership are tested
@@ -453,6 +497,9 @@ acquisition still leaves `data-plane-inference: not-verified`.
 |---|---|
 | Configuration or endpoint check fails | Replace example placeholders; use the canonical resource root, exact deployment name and supported provider/protocol |
 | Entra credential acquisition fails | Check Azure CLI installation, selected account/tenant and login, or configured host identity; see [keyless diagnostics](docs/KEYLESS_AUTH.md#preflight-and-errors) |
+| AADSTS90072/AADSTS50020 | Account/tenant mismatch during credential acquisition, not inference RBAC; verify explicit tenant/subscription and login without changing shared defaults |
+| Unknown/disabled coding tool | Run `doctor --verify-runtime`; inspect selected executable/hash, backend and resolved filters. Do not add shell or remove the allowlist |
+| Quickstart/judge asks for `--bounds` | Review the supplied request policy file; this public CLI requirement preserves request/token/output/pacing/deadline limits |
 | Inference returns 401/403 | Confirm token audience, deployment auth support, endpoint-specific inference role and network access; management roles alone are insufficient |
 | Inference returns 404/429 | Check resource/deployment/protocol for 404; check quota and pacing diagnostics for 429, without treating permanent quota as transient |
 | Docker/image or worker probe fails | Review Linux daemon, approved local digest, resource controls and freezing; follow [isolation checks](docs/ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference), never disable isolation as a fallback |

@@ -194,6 +194,7 @@ export type FoundryAuth =
       mode: "entra";
       credential: "azure-cli" | "managed-identity" | "workload-identity";
       tenantId?: string;
+      subscriptionId?: string;
       clientId?: string;
       timeoutMs?: number;
     };
@@ -436,6 +437,7 @@ export interface LlmJudgeConfig {
   model: string;
   reasoningEffort: ReasoningEffort;
   timeoutMs: number;
+  requestBounds?: import("./request-policy.js").RequestBounds;
 }
 
 export type InspectedFileRole = "source" | "test" | "config" | "doc" | "other";
@@ -579,6 +581,8 @@ export interface LlmEvaluationResult {
   comparisonSummary: string;
   limitations: string[];
   rawResponse: string;
+  requestAccounting?: NonNullable<BenchmarkRun["requestAccounting"]>;
+  requestBoundsHash?: string;
 }
 
 export interface RunDiagnostics {
@@ -589,6 +593,7 @@ export interface RunDiagnostics {
   configuredToolFilters: string[];
   configurationMessages: string[];
   providerFailure: {
+    bridge?: JsonRecord;
     httpStatus: number | null;
     signature:
       | "anthropic_temperature_deprecated"

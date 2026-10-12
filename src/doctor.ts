@@ -7,8 +7,9 @@ import { resolveFoundryProvider } from "./runner.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
 import { executeDocker } from "./controlled-worker.js";
 import { inferenceDiagnostic } from "./auth.js";
+import { verifyRuntime } from "./runtime-verification.js";
 
-export async function doctor(configPath: string, acquireAuth = false) {
+export async function doctor(configPath: string, acquireAuth = false, verify = false, allowContainerProbe = false) {
   const config = benchmarkConfigSchema.parse(JSON.parse(readFileSync(configPath, "utf8")));
   const workspace = resolve(dirname(configPath), config.workspacePath);
   const checks: Array<{ stage: string; status: "pass" | "fail" | "not-verified"; detail: string }> = [];
@@ -54,10 +55,20 @@ export async function doctor(configPath: string, acquireAuth = false) {
     }
   } else checks.push({ stage: "credential-acquisition", status: "not-verified", detail: "Not attempted. Use --acquire-auth for an explicit token-only network check." });
   checks.push({ stage: "data-plane-inference", status: "not-verified", detail: "No model call made. Token acquisition and management login do not certify inference RBAC, deployment, private network or quota." });
+  let runtimeVerification: Awaited<ReturnType<typeof verifyRuntime>> | undefined;
+  if (verify) {
+    try {
+      runtimeVerification = await verifyRuntime(config, allowContainerProbe);
+      checks.push({ stage: "runtime-coding-probe", status: "pass", detail: "Actual runtime created and edited two files over fixed local fake-provider rounds, including >192 KiB input, then validated exact content. No Azure inference." });
+    } catch (error) {
+      checks.push({ stage: "runtime-coding-probe", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+    }
+  }
   return {
     schemaVersion: 1, auth: config.contract.foundryProvider.auth ?? { mode: "key" },
     wireApi: config.contract.foundryProvider.wireApi ?? (config.contract.foundryProvider.type === "openai" ? "completions" : "messages"),
     localChecksPassed: checks.every((check) => check.status !== "fail"), checks,
+    ...(runtimeVerification ? { runtimeVerification } : {}),
     diagnostics: [401, 403, 404, 429].map((status) => ({ status, guidance: inferenceDiagnostic(status) })),
   };
 }

@@ -10,6 +10,7 @@ export const authSchema = z.discriminatedUnion("mode", [
     mode: z.literal("entra"),
     credential: z.enum(["azure-cli", "managed-identity", "workload-identity"]),
     tenantId: z.string().uuid().optional(),
+    subscriptionId: z.string().uuid().optional(),
     clientId: z.string().uuid().optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
   }).strict(),
@@ -19,6 +20,9 @@ export const providerSchema = z.object({
   wireApi: z.enum(["completions", "responses"]).optional(),
   auth: authSchema.optional(),
 }).strict().superRefine((value, ctx) => {
+  if (value.auth?.mode === "entra" && value.auth.subscriptionId && value.auth.credential !== "azure-cli") {
+    ctx.addIssue({ code: "custom", message: "subscriptionId selects an Azure CLI account only; it does not apply to managed/workload identity." });
+  }
   if (value.type === "anthropic" && value.wireApi) {
     ctx.addIssue({ code: "custom", message: "wireApi applies only to openai; anthropic uses Messages." });
   }
@@ -41,7 +45,7 @@ export interface RefreshableCredential {
 export function createCredential(auth: Extract<FoundryAuth, { mode: "entra" }>): RefreshableCredential {
   switch (auth.credential) {
     case "azure-cli":
-      return new AzureCliCredential({ tenantId: auth.tenantId, processTimeoutInMs: auth.timeoutMs ?? 30000 });
+      return new AzureCliCredential({ tenantId: auth.tenantId, subscription: auth.subscriptionId, processTimeoutInMs: auth.timeoutMs ?? 30000 });
     case "managed-identity":
       return auth.clientId ? new ManagedIdentityCredential({ clientId: auth.clientId }) : new ManagedIdentityCredential();
     case "workload-identity":
@@ -69,15 +73,26 @@ export function bearerTokenProvider(
         ]);
         if (!token?.token || token.expiresOnTimestamp <= Date.now()) throw new Error("No valid access token returned.");
         return token.token;
-      } catch {
-        throw new Error(`Entra ${auth.credential} acquisition failed. Check the selected identity, tenant, login/federation and network. No key or identity fallback was attempted.`);
+      } catch (error) {
+        throw new Error(`Entra ${auth.credential} acquisition failed. ${credentialFailureDetail(error)} No key or identity fallback was attempted.`);
       } finally {
         if (onAbort) signal.removeEventListener("abort", onAbort);
         acquiring = null;
       }
+
     })();
     return acquiring;
   };
+}
+
+export function credentialFailureDetail(error: unknown): string {
+  const message = error instanceof Error ? error.message : "";
+  const aad = /\bAADSTS\d{5,10}\b/.exec(message)?.[0];
+  if (aad === "AADSTS90072" || aad === "AADSTS50020") return `${aad}: selected account does not belong to the requested tenant. Select the intended CLI tenant/subscription explicitly; this is not inference RBAC or quota.`;
+  if (aad) return `${aad}: identity service rejected credential acquisition. Check login, tenant and federation; no inference was sent.`;
+  if (/deadline|timed? ?out/i.test(message)) return "Credential acquisition timed out; check identity-service connectivity.";
+  if (/\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET)\b/.test(message)) return "Identity-service network connection failed; check DNS/connectivity.";
+  return "Check the selected account, tenant/subscription, login/federation and network.";
 }
 
 export function providerAuthentication(
@@ -91,15 +106,15 @@ export function providerAuthentication(
 export function parseAuthFlags(value: (flag: string) => string | undefined): FoundryAuth | undefined {
   const mode = value("--auth");
   if (!mode) {
-    if (value("--credential") || value("--tenant-id") || value("--client-id")) throw new TypeError("Identity options require --auth entra.");
+    if (value("--credential") || value("--tenant-id") || value("--client-id") || value("--subscription-id")) throw new TypeError("Identity options require --auth entra.");
     return undefined;
   }
   if (mode === "key") {
-    if (value("--credential") || value("--tenant-id") || value("--client-id")) throw new TypeError("Key mode cannot select an Entra identity.");
+    if (value("--credential") || value("--tenant-id") || value("--client-id") || value("--subscription-id")) throw new TypeError("Key mode cannot select an Entra identity.");
     return authSchema.parse({ mode });
   }
   return authSchema.parse({
-    mode, credential: value("--credential"), tenantId: value("--tenant-id"), clientId: value("--client-id"),
+    mode, credential: value("--credential"), tenantId: value("--tenant-id"), clientId: value("--client-id"), subscriptionId: value("--subscription-id"),
   });
 }
 

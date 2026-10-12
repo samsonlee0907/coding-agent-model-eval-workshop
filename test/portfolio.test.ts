@@ -127,3 +127,23 @@ test("portfolio accepts an identical version-2 cohort", () => {
   const report = renderModelSelectionReport(runs);
   assert.match(report, /\| Strictly comparable baseline \| Pass \| 1 baseline\/task\/environment variants are present\. \|/);
 });
+
+test("portfolio distinguishes retained interruptions from completed content failures", () => {
+  const interrupted = run("interrupted", "candidate-a", null);
+  interrupted.executionStatus = "interrupted";
+  interrupted.runnerError = "Transport interrupted";
+  interrupted.outcome = { class: "harness_failure", category: "runner-error", detail: "interrupted" };
+  const failed = run("failed", "candidate-b", null);
+  failed.executionStatus = "completed";
+  failed.outcome = { class: "unresolved", category: "deterministic-evaluator", detail: "content FAIL" };
+  const report = renderModelSelectionReport([interrupted, failed]);
+  assert.match(report, /\*\*Retained runs:\*\* 2/);
+  assert.match(report, /\*\*Completed runs:\*\* 1/);
+  assert.match(report, /\*\*Interrupted runs:\*\* 1/);
+  assert.match(report, /No-go/);
+  interrupted.outcome = { class: "resolved", category: "deterministic-evaluator", detail: "stale validation" };
+  const stale = renderModelSelectionReport([interrupted]);
+  assert.match(stale, /\| Deterministic correctness \| Fail/);
+  assert.match(stale, /— interrupted:/);
+  assert.match(stale, /No resolved deterministic validation/);
+});

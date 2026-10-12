@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
-import test from "node:test";
-import { bearerTokenProvider, foundryScope, providerSchema } from "../src/auth.js";
+import test, { mock } from "node:test";
+import { bearerTokenProvider, createCredential, foundryScope, providerSchema } from "../src/auth.js";
+import { cliCredentialInternals } from "../node_modules/@azure/identity/dist/esm/credentials/azureCliCredential.js";
 import { resolveFoundryProvider, createFoundryProviderIdentity } from "../src/runner.js";
 import { parseQuickstartOptions } from "../src/quickstart.js";
 import { parseEvaluationOptions } from "../src/evaluator-options.js";
@@ -48,4 +49,21 @@ test("quickstart and judge share explicit identity/protocol flags", () => {
   assert.equal(parseQuickstartOptions([...args, "--task", "custom task"]).auth?.mode, "entra");
   assert.equal(parseEvaluationOptions(args).wireApi, "responses");
   assert.throws(() => parseQuickstartOptions([...args, "--task", "task", "--auth", "key", "--client-id", "bad"]));
+});
+
+test("Azure CLI tenant/subscription scope is passed per token request without changing shared defaults", async () => {
+  const tenantId = "11111111-2222-4333-8444-555555555555", subscriptionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+  const acquisition = mock.method(cliCredentialInternals, "getAzureCliAccessToken", async (resource: string, tenant: string, subscription: string) => {
+    assert.equal(resource, "https://ai.azure.com"); assert.equal(tenant, tenantId); assert.equal(subscription, subscriptionId);
+    return { stdout: JSON.stringify({ accessToken: "fixture-only-token", expiresOn: "2099-01-01 00:00:00.000000" }), stderr: "", error: null };
+  });
+  try {
+    const credential = createCredential({ mode: "entra", credential: "azure-cli", tenantId, subscriptionId });
+    assert.equal((await credential.getToken(foundryScope, { abortSignal: AbortSignal.timeout(5000) }))?.token, "fixture-only-token");
+    assert.equal(acquisition.mock.callCount(), 1);
+  } finally { acquisition.mock.restore(); }
+  assert.throws(() => providerSchema.parse({ type: "openai", auth: { mode: "entra", credential: "managed-identity", subscriptionId } }));
+  const auth = { mode: "entra" as const, credential: "azure-cli" as const, subscriptionId };
+  await assert.rejects(bearerTokenProvider(auth, { async getToken() { throw new Error("AADSTS90072 account private@example.test secret=PRIVATE"); } }),
+    (error: Error) => /AADSTS90072.*not inference RBAC/.test(error.message) && !/private@|PRIVATE/.test(error.message));
 });

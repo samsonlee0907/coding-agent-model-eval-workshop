@@ -64,11 +64,13 @@ test("quickstart accepts only exact Foundry provider values and rejects removed 
     outputDirectory: undefined,
     sourcePath: undefined,
     reasoningEffort: undefined,
+    requestBounds: undefined,
+    prepareOnly: false,
   });
   assert.throws(() => parseQuickstartOptions(["--task", "one", "--model", "gpt"]), /--provider is required/);
   assert.throws(() => parseQuickstartOptions(["--task", "one", "--model", "gpt", "--provider", "azure"]), /exactly openai or anthropic/);
-  assert.throws(() => parseQuickstartOptions(["--task", "one", "--model", "gpt", "--provider", "openai", "--foundry"]), /Unsupported option --foundry/);
-  assert.throws(() => parseQuickstartOptions(["--task", "one", "--model", "gpt", "--provider", "openai", "--base-url-env", "OTHER"]), /Unsupported option --base-url-env/);
+  assert.throws(() => parseQuickstartOptions(["--task", "one", "--model", "gpt", "--provider", "openai", "--foundry"]), /Unsupported argument --foundry/);
+  assert.throws(() => parseQuickstartOptions(["--task", "one", "--model", "gpt", "--provider", "openai", "--base-url-env", "OTHER"]), /Unsupported argument --base-url-env/);
 });
 
 test("automatic validation selects project scripts and reports absent metadata", async () => {

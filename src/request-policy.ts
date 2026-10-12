@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { readFileSync } from "node:fs";
 
 export type DispatchCertainty = "not-dispatched" | "explicitly-rejected" | "possibly-processed";
 export class DispatchError extends Error {
@@ -13,6 +14,9 @@ export const requestBoundsSchema = z.object({
   tokensPerMinute: z.number().int().positive(),
 }).strict();
 export type RequestBounds = z.infer<typeof requestBoundsSchema>;
+export function loadRequestBounds(path: string | undefined): RequestBounds | undefined {
+  return path ? requestBoundsSchema.parse(JSON.parse(readFileSync(path, "utf8"))) : undefined;
+}
 export interface PolicyClock { now(): number; sleep(ms: number): Promise<void>; }
 export const realClock: PolicyClock = { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
 
@@ -59,13 +63,15 @@ export class DeploymentAdmission {
 }
 
 export class RequestGuard {
+  public readonly bounds?: RequestBounds;
   readonly accounting = { physicalRequests: 0, reservedTokens: 0, ambiguousRequests: 0, rejectedRequests: 0 };
   private blocked = false;
   private readonly processed = new Set<string>();
   private completedResponses = 0;
   public readonly deadline: number;
-  constructor(public readonly bounds?: RequestBounds, private readonly started = Date.now(), deadline?: number) {
-    this.deadline = Math.min(bounds ? started + bounds.deadlineMs : deadline ?? started + 900000, deadline ?? Infinity);
+  constructor(bounds?: RequestBounds, private readonly started = Date.now(), deadline?: number) {
+    this.bounds = bounds ? requestBoundsSchema.parse(bounds) : undefined;
+    this.deadline = Math.min(this.bounds ? started + this.bounds.deadlineMs : deadline ?? started + 900000, deadline ?? Infinity);
   }
   reserve(bytes: number, tokens: number): void {
     if (this.blocked) throw new DispatchError("Provider lane closed after ambiguous/permanent failure; no automatic replay.", "not-dispatched");

@@ -174,6 +174,7 @@ npm run quickstart -- \
   --task-file scenarios/in-memory-ordering-system/round1.prompt.txt \
   --provider openai \
   --model 'YOUR_DEPLOYMENT' \
+  --bounds examples/request-bounds.example.json \
   --auth key
 ```
 
@@ -181,8 +182,14 @@ PowerShell keyless alternative, after the
 [Azure CLI tenant/account steps](../../docs/KEYLESS_AUTH.md):
 
 ```powershell
-npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId
+npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json'
 ```
+
+Review the bounds file before either paid command. Add `--prepare-only` to
+create the workspace/config offline, verify it with `doctor --verify-runtime`
+(explicit Responses only), and then execute `bench --config` after the gate
+passes. Use the [README progression](../../README.md#first-run-one-task-one-deployment)
+for a bounded one-cell live gate before scale.
 
 **B. Full multi-round contract run (rigorous / reproducible).** Copy
 `benchmark.template.json`, fill in the placeholder fields (`model`,

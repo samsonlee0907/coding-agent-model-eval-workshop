@@ -201,6 +201,11 @@ export function assertBenchmarkRun(value: unknown): asserts value is BenchmarkRu
   if (immutableContractHash(run.contract) !== run.contractHash) throw new TypeError(`Contract hash mismatch for run ${run.runId}.`);
 }
 
+export function cleanlyCompletedRun(run: BenchmarkRun): boolean {
+  return run.executionStatus ? run.executionStatus === "completed"
+    : run.runnerError === null && ["resolved", "unresolved", "empty_patch"].includes(run.outcome.class);
+}
+
 export function attemptFromRun(
   run: BenchmarkRun, task: string, candidate: string, repeat = 0, grade?: EvaluatorGrade,
 ): EvidenceAttempt {
@@ -219,8 +224,7 @@ export function attemptFromRun(
   const required = checks.filter((c) => c.severity === "required");
   const requiredErrors = required.filter((c) => c.status === "error").length;
   const failed = required.filter((c) => c.status === "fail").length;
-  const completed = run.executionStatus ? run.executionStatus === "completed"
-    : run.runnerError === null && ["resolved", "unresolved", "empty_patch"].includes(run.outcome.class);
+  const completed = cleanlyCompletedRun(run);
   const validation = !run.validation ? "unavailable" : run.validation.timedOut || run.validation.errorMessage || run.validation.exitCode === null
     ? "error" : run.validation.exitCode === 0 ? "pass" : "fail";
   const acceptance = requiredErrors ? "error" : failed ? "fail" : required.length && required.every((c) => c.status === "pass")

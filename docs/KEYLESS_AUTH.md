@@ -25,14 +25,17 @@ authentication.
    $subscriptionId = 'REPLACE_WITH_SUBSCRIPTION_UUID'
    az version
    az login --tenant $tenantId
-   az account set --subscription $subscriptionId
-   az account show --query '{tenant:tenantId,subscription:id,user:user.name}' --output json
+   az account show --subscription $subscriptionId --query '{tenant:tenantId,subscription:id,user:user.name}' --output json
    ```
 
    Check the returned account/tenant/subscription yourself. A subscription
-   selection is CLI context, not a new inference grant and not an auth field
-   in campaign JSON. `AzureCliCredential` uses the signed-in CLI account in
-   the selected tenant; do not change that account during a campaign.
+   selection is not an inference grant. Configure both `tenantId` and
+   `subscriptionId` below: pinned Azure Identity 4.13.0 supports
+   [`AzureCliCredentialOptions.subscription`](https://github.com/Azure/azure-sdk-for-js/blob/@azure/identity_4.13.0/sdk/identity/identity/src/credentials/azureCliCredentialOptions.ts).
+   The toolkit maps the UUID to that option and passes it on each token request,
+   without `az account set` or a mutation of shared defaults. If omitted, CLI
+   context still applies; explicit selection is preferable for multi-account
+   hosts. Keep the selected CLI login stable during a campaign.
    Follow [Microsoft's interactive-login guidance](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively)
    if browser login is unavailable (for example, its supported device-code
    flow). Do not use a username/password script or copy an access token.
@@ -59,6 +62,7 @@ authentication.
        "mode": "entra",
        "credential": "azure-cli",
        "tenantId": "11111111-2222-4333-8444-555555555555",
+       "subscriptionId": "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
        "timeoutMs": 30000
      }
    }
@@ -135,6 +139,7 @@ Expect `credential-acquisition: pass` if acquisition works and
 | Symptom | Action before another paid run |
 |---|---|
 | Credential acquisition fails | Verify CLI installation, account, tenant, interactive login/MFA or host federation setup; no fallback was attempted |
+| AADSTS90072 / AADSTS50020 | Explicit CLI account/tenant mismatch; verify login and scoped tenant/subscription. The safe code is retained without account/token/error-payload details; this is not inference RBAC |
 | 401 | Confirm deployment Entra support and token audience; token acquisition alone does not prove compatibility |
 | 403 | Check endpoint-specific resource inference permission and private-network access, not just subscription/project roles |
 | 404 | Check resource name, exact deployment name and selected protocol |
@@ -161,13 +166,13 @@ Quickstart and the optional judge use implemented flags instead of campaign
 JSON; **both invoke models immediately**, without an `--allow-paid` gate:
 
 ```powershell
-npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --task 'Create a string-reversal CLI with package.json test/build scripts and deterministic tests.' --output '.\.benchmark-runs\keyless-exploration-v1'
+npm run quickstart -- --provider openai --model $deployment --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --task 'Create a string-reversal CLI with package.json test/build scripts and deterministic tests.' --output '.\.benchmark-runs\keyless-exploration-v1'
 # Optional paid judge, only if explicitly wanted:
-npm run evaluate -- --runs '.\.benchmark-runs\keyless-exploration-v1\artifacts' --provider openai --model 'YOUR_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId
+npm run evaluate -- --runs '.\.benchmark-runs\keyless-exploration-v1\artifacts' --provider openai --model 'YOUR_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --tenant-id $tenantId --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json'
 ```
 
 For key authentication choose `{"mode":"key"}`, supply `FOUNDRY_API_KEY` only
-in the host process, and omit credential/tenant/client flags. The endpoint
+in the host process, and omit credential/tenant/subscription/client flags. The endpoint
 variable is unchanged. Key-mode `doctor --acquire-auth` proves only key
 presence, not validity or whether resource key authentication is enabled.
 
@@ -184,6 +189,8 @@ configured for the identity. This repo never enables it automatically.
 | Federated workload identity | `{"mode":"entra","credential":"workload-identity","tenantId":"<tenant-uuid>","clientId":"<client-uuid>"}` | Configured federation and host-supplied, rotating `AZURE_FEDERATED_TOKEN_FILE` accessible only to the orchestrator |
 
 Managed identity rejects `tenantId` (the Azure host owns that tenant).
+`subscriptionId` is only an Azure CLI credential selector; managed/workload
+identities reject it rather than silently ignoring it.
 Workload identity requires explicit tenant/client IDs; a federated token file
 alone is not a configured trust relationship. Host task tools/dependencies,
 runtime and Linux daemon/image prerequisites still apply for isolated runs.

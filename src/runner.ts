@@ -51,6 +51,8 @@ import { ControlledWorker, collectSnapshot, snapshotHash } from "./controlled-wo
 import type { EventCollector as Collector } from "./event-collector.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
 import { evidenceHash } from "./evidence.js";
+import { ProviderStream } from "./provider-stream.js";
+import { once } from "node:events";
 
 export interface BenchmarkRunOptions {
   onEvent?: (event: NormalizedEvent) => void;
@@ -98,6 +100,11 @@ export function benchmarkWorkRequests(
 
 export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
   const contract = materializeContract(config);
+  const guardStarted = Date.now();
+  const stages = 3 + config.rounds.length + (contract.task.conformanceProbe?.checks.length ?? 0)
+    + (contract.task.conformanceProbe?.setupCommand ? 1 : 0);
+  const guard = new RequestGuard(config.requestBounds, guardStarted,
+    options.deadlineAt ?? guardStarted + contract.execution.sessionTimeoutMs * stages);
   const runId = options.runId ?? randomUUID();
   const startedAt = new Date().toISOString();
   const artifactsDirectory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
@@ -125,7 +132,6 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   let sessionId: string | null = null;
   let runnerError: string | null = null;
   let executionComplete = false;
-  const sdkToolAllowlist = resolveSdkToolAllowlist(contract.execution.tools, contract.execution.mcpServers);
   const mcpServers = resolveMcpServersForLaunch(contract.execution.mcpServers, process.env);
   const cliPath = resolveCopilotCliPath(process.env);
   const runtimeDirectory = createIsolatedCopilotRuntimeDirectory();
@@ -144,11 +150,6 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
   });
   let session: CopilotSession | null = null;
   let compatibilityProxy: TemperatureStrippingProxy | null = null;
-  const guardStarted = Date.now();
-  const stages = 3 + config.rounds.length + (contract.task.conformanceProbe?.checks.length ?? 0)
-    + (contract.task.conformanceProbe?.setupCommand ? 1 : 0);
-  const guard = new RequestGuard(config.requestBounds, guardStarted,
-    options.deadlineAt ?? guardStarted + contract.execution.sessionTimeoutMs * stages);
   let worker: ControlledWorker | null = null;
 
   try {
@@ -159,13 +160,18 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
         join(artifactsDirectory, "controlled-worker.json"), undefined, undefined, guard.deadline);
     }
     const provider = resolveFoundryProvider(config.contract.foundryProvider, process.env);
+    await client.start();
+    const catalog = await client.rpc.tools.list({ model: contract.candidate.model });
+    const sdkToolAllowlist = worker ? new ToolSet().addCustom("controlled_workspace").toArray()
+      : resolveSdkToolAllowlist(contract.execution.tools, contract.execution.mcpServers, catalog.tools.map((tool) => tool.name));
+    collector.captureRunnerEvent("runner.tools_resolved", { filters: sdkToolAllowlist });
     compatibilityProxy = await startRequestSanitizingProxy(provider.baseUrl,
       contract.foundryProvider?.requestAdaptation === "strip-temperature" ? stripTemperature : stripNullMessageRefusals,
       { guard, retries: contract.execution.retries, admission: options.admission,
         deployment: `${contract.foundryProvider?.endpointFingerprint}/${contract.candidate.model}`,
-        wireApi: provider.wireApi, capture: (type, data) => collector.captureRunnerEvent(type, data) });
+        wireApi: provider.wireApi, capture: (type, data) => collector.captureRunnerEvent(type, data),
+        validateTools: (payload) => assertAdvertisedTools(payload, sdkToolAllowlist) });
     const sessionProvider = compatibilityProxy ? { ...provider, baseUrl: compatibilityProxy.baseUrl } : provider;
-    await client.start();
     session = await client.createSession({
       model: contract.candidate.model,
       workingDirectory: config.isolation ? runtimeDirectory : config.workspacePath,
@@ -173,12 +179,15 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
       enableSessionStore: false,
       reasoningEffort: contract.execution.reasoningEffort,
       systemMessage: { content: contract.execution.instructions },
-      availableTools: worker ? new ToolSet().addCustom("controlled_workspace").toArray() : sdkToolAllowlist,
+      availableTools: sdkToolAllowlist,
       ...(worker ? { tools: [worker.tool(contract.execution.tools)] } : {}),
       onPermissionRequest: contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
       provider: sessionProvider,
       ...(mcpServers ? { mcpServers } : {}),
     });
+    await session.rpc.tools.initializeAndValidate();
+    const effectiveTools = await session.rpc.tools.getCurrentMetadata();
+    assertAdvertisedTools(effectiveTools, sdkToolAllowlist);
     const activeSession = session;
     phase("running");
     sessionId = activeSession.sessionId;
@@ -384,7 +393,9 @@ async function finalizeExecution(
   const events = collector.events();
   const modelCalls = extractModelCalls(events);
   const toolCalls = extractToolCalls(events);
-  const diagnostics = createRunDiagnostics(events, contract.runtime, resolveSdkToolAllowlist(contract.execution.tools), runnerError);
+  const filters = events.find((event) => event.eventType === "runner.tools_resolved")?.data.filters;
+  const diagnostics = createRunDiagnostics(events, contract.runtime,
+    Array.isArray(filters) ? filters.filter((filter): filter is string => typeof filter === "string") : resolveSdkToolAllowlist(contract.execution.tools), runnerError);
   const run: BenchmarkRun = {
     runId,
     contract,
@@ -451,7 +462,7 @@ function assertFoundryOnlyConfig(config: unknown): asserts config is BenchmarkCo
 
 const sdkToolsByCapability: Record<ToolCapability, readonly string[]> = {
   read: ["view", "glob"],
-  edit: ["edit"],
+  edit: ["create", "edit"],
   shell: process.platform === "win32" ? ["powershell"] : ["bash"],
 };
 
@@ -460,19 +471,44 @@ const sdkToolsByCapability: Record<ToolCapability, readonly string[]> = {
  * capabilities to source-qualified Copilot SDK tool filters. When the contract
  * configures MCP servers, their tools are also exposed (`mcp:*`); the per-server
  * `tools` filter still governs which individual tools each server advertises.
- * With no MCP servers configured the output is identical to the built-in-only
- * allowlist, so existing read/edit/shell runs are unaffected.
+ * Resolve creation as well as modification. Model-specific runtime catalogs
+ * may replace create/edit with apply_patch; never grant shell to supply editing.
  */
 export function resolveSdkToolAllowlist(
   capabilities: readonly ToolCapability[],
   mcpServers?: Record<string, McpServerSpec>,
+  available?: readonly string[],
 ): string[] {
-  const builtInTools = [...new Set(capabilities.flatMap((capability) => sdkToolsByCapability[capability]))];
+  const builtInTools = [...new Set(capabilities.flatMap((capability) =>
+    capability === "edit" && available?.includes("apply_patch") ? ["apply_patch"] : sdkToolsByCapability[capability]))];
+  if (available) {
+    const missing = builtInTools.filter((tool) => !available.includes(tool)
+      && !(tool === "powershell" && available.includes("bash")));
+    if (missing.length) throw new DispatchError(
+      `Selected runtime cannot provide requested capabilities: missing ${missing.join(", ")}. Verify this executable/model with doctor; no inference dispatched. Do not broaden tools or downgrade implicitly.`,
+      "not-dispatched",
+    );
+  }
   const toolSet = new ToolSet().addBuiltIn(builtInTools);
   if (mcpServers && Object.keys(mcpServers).length > 0) {
     toolSet.addMcp("*");
   }
+
   return toolSet.toArray();
+}
+
+export function assertAdvertisedTools(payload: unknown, filters: readonly string[]): void {
+  if (!filters.some((filter) => filter.startsWith("builtin:") || filter.startsWith("custom:"))) return;
+  if (!isRecord(payload) || !Array.isArray(payload.tools)) throw new DispatchError("Runtime did not advertise its requested tools; no inference dispatched.", "not-dispatched");
+  const names = payload.tools.map((tool) => isRecord(tool)
+    ? typeof tool.name === "string" ? tool.name : isRecord(tool.function) ? tool.function.name : undefined : undefined);
+  const required = filters.filter((filter) => filter.startsWith("builtin:") || filter.startsWith("custom:"))
+    .map((filter) => filter.slice(filter.indexOf(":") + 1));
+  const missing = required.filter((tool) => !names.includes(tool));
+  if (missing.length) throw new DispatchError(
+    `Runtime tool advertisement is missing ${missing.join(", ")}. Verify selected SDK/CLI capability support with doctor before a paid run; no inference dispatched.`,
+    "not-dispatched",
+  );
 }
 
 /**
@@ -568,9 +604,11 @@ export function createRunDiagnostics(
   const configurationMessages = events
     .filter((event) => event.eventType === "session.info" && event.data.infoType === "configuration")
     .flatMap((event) => typeof event.data.message === "string" ? [event.data.message] : []);
-  const bridge = events.filter((event) => event.eventType === "runner.provider_bridge_error").at(-1);
+  const bridgeErrors = events.filter((event) => event.eventType === "runner.provider_bridge_error");
+  const bridge = bridgeErrors.find((event) => event.data.certainty === "possibly-processed") ?? bridgeErrors.at(-1);
   const rejected = events.filter((event) => event.eventType === "runner.provider_rejected" && typeof event.data.status === "number").at(-1);
   const httpStatus = typeof bridge?.data.status === "number" ? String(bridge.data.status)
+    : typeof bridge?.data.upstreamStatus === "number" ? String(bridge.data.upstreamStatus)
     : typeof rejected?.data.status === "number" ? String(rejected.data.status) : runnerError?.match(/\b([45]\d{2})\b/)?.[1];
   // The generic session-level auth error the CLI surfaces (and that we store as
   // runnerError) never carries the underlying provider error code, so detect
@@ -592,6 +630,7 @@ export function createRunDiagnostics(
     configuredToolFilters: [...configuredToolFilters],
     configurationMessages,
     providerFailure: {
+      ...(bridge ? { bridge: bridge.data } : {}),
       httpStatus: httpStatus ? Number(httpStatus) : null,
       signature: azureKeyAuthDisabled
         ? "azure_key_auth_disabled"
@@ -669,6 +708,7 @@ export interface ProxyOptions {
   deployment?: string;
   wireApi?: "completions" | "responses";
   capture?: (type: string, data: JsonRecord) => void;
+  validateTools?: (payload: unknown) => void;
 }
 async function forwardSanitizedRequest(
   incoming: IncomingMessage,
@@ -679,6 +719,10 @@ async function forwardSanitizedRequest(
 ): Promise<void> {
   const guard = options.guard ?? new RequestGuard();
   let dispatched = false;
+  let bridgePhase = "request-body", upstreamStatus: number | null = null, responseBytes = 0;
+  const disconnected = new AbortController();
+  const onClose = () => { if (!outgoing.writableFinished) disconnected.abort(); };
+  outgoing.once("close", onClose);
   try {
     if (incoming.method !== "POST" || !/^\/(?:v1\/)?(?:chat\/completions|responses|messages)(?:\?[^#]*)?$/.test(incoming.url ?? "")) {
       throw new DispatchError("Only inference POST routes are permitted by the provider bridge.", "not-dispatched");
@@ -688,6 +732,7 @@ async function forwardSanitizedRequest(
     }
     const requestBody = await readRequestBody(incoming, guard.bounds?.maxRequestBytes);
     let body = transform(requestBody, incoming.headers["content-type"]);
+    options.validateTools?.(JSON.parse(body.toString("utf8")));
     if (guard.bounds) {
       const payload = JSON.parse(body.toString()) as Record<string, unknown>;
       assertTextTokenReservation(payload);
@@ -702,15 +747,20 @@ async function forwardSanitizedRequest(
     const headers = forwardedHeaders(incoming.headers, body.length);
     const deadline = guard.deadline;
     for (let attempt = 0; ; attempt++) {
+      bridgePhase = "admission";
       if (guard.bounds) await (options.admission ?? new DeploymentAdmission()).admit(
         options.deployment ?? target.origin, tokens, guard.bounds.requestsPerMinute, guard.bounds.tokensPerMinute, deadline,
       );
       guard.claim(payloadHash);
+      if (disconnected.signal.aborted) throw new DispatchError("Downstream disconnected before dispatch.", "not-dispatched");
       guard.reserve(body.length, tokens);
       dispatched = true;
       options.capture?.("runner.provider_dispatch", { request: guard.accounting.physicalRequests, reservedTokens: tokens });
-      const response = await upstreamResponse(target, headers, body, Math.max(1, deadline - Date.now()));
+      bridgePhase = "upstream-headers";
+      const response = await upstreamResponse(target, headers, body, AbortSignal.any([disconnected.signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]));
       const status = response.statusCode ?? 502;
+      upstreamStatus = status;
+      bridgePhase = "upstream-body";
       if (status === 429) {
         guard.reject();
         guard.rejectedPayload(payloadHash);
@@ -745,6 +795,7 @@ async function forwardSanitizedRequest(
         for await (const chunk of response) {
           const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
           bytes += buffer.length;
+          responseBytes = bytes;
           if (bytes > 16 * 1024 * 1024) { response.destroy(); throw new DispatchError("Provider response exceeds the 16 MiB byte bound.", "possibly-processed"); }
           chunks.push(buffer);
         }
@@ -752,40 +803,22 @@ async function forwardSanitizedRequest(
         if (!isTerminalProviderResponse(incoming.url ?? "", JSON.parse(reply.toString("utf8")))) {
           throw new DispatchError("Malformed or nonterminal successful provider response; hidden replay denied.", "possibly-processed");
         }
+        if (disconnected.signal.aborted || outgoing.destroyed) throw new DispatchError("Downstream disconnected before completion delivery.", "possibly-processed");
         guard.certifyResponse();
         outgoing.writeHead(status, response.headers); outgoing.end(reply); return;
       }
       outgoing.writeHead(status, response.headers);
-      await new Promise<void>((resolve, reject) => {
-        let tail = "", completedStream = false, invalidStream = false;
-        response.on("data", (chunk: Buffer) => {
-          if (!streaming) return;
-          tail += chunk.toString("utf8");
-          const lines = tail.split(/\r?\n/);
-          tail = lines.pop()!;
-          if (tail.length > 16 * 1024 * 1024) {
-            response.destroy(); reject(new DispatchError("Provider SSE event exceeds the 16 MiB byte bound.", "possibly-processed")); return;
-          }
-          for (const line of lines) {
-            if (!line.startsWith("data:")) continue;
-            const data = line.slice(5).trim();
-            if (!data) continue;
-            if (data === "[DONE]") { completedStream = true; continue; }
-            try {
-              const event = JSON.parse(data) as { type?: unknown };
-              if (event.type === "response.completed" || event.type === "message_stop") completedStream = true;
-            } catch { invalidStream = true; }
-          }
-        });
-        response.once("end", () => {
-          if (invalidStream || !completedStream) reject(new DispatchError("Provider stream ended without valid completion evidence.", "possibly-processed"));
-          else resolve();
-        }); response.once("error", reject);
-        response.once("aborted", () => reject(new DispatchError("Partial provider response.", "possibly-processed")));
-        outgoing.once("close", () => { if (!response.complete) { response.destroy(); reject(new DispatchError("Downstream disconnected during provider response.", "possibly-processed")); } });
-        response.pipe(outgoing);
-      });
+      const stream = new ProviderStream(incoming.url ?? "");
+      for await (const chunk of response) {
+        const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        responseBytes += buffer.length;
+        stream.push(buffer);
+        if (!outgoing.write(buffer)) await once(outgoing, "drain", { signal: disconnected.signal });
+      }
+      bridgePhase = "stream-completion";
+      stream.finish();
       guard.certifyResponse();
+      outgoing.end();
       return;
     }
 
@@ -808,19 +841,27 @@ async function forwardSanitizedRequest(
   } catch (error) {
     const certainty = error instanceof DispatchError ? error.certainty : dispatched ? "possibly-processed" : "not-dispatched";
     if (certainty === "possibly-processed") guard.ambiguous();
-    options.capture?.("runner.provider_bridge_error", { certainty, status: error instanceof DispatchError ? error.status : null });
+    const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
+      && /^[A-Z_0-9]{1,40}$/.test(error.code) ? error.code : null;
+    options.capture?.("runner.provider_bridge_error", { certainty, status: error instanceof DispatchError ? error.status : null,
+      phase: bridgePhase, upstreamStatus, responseBytes, code,
+      reason: error instanceof DispatchError ? error.message : disconnected.signal.aborted ? "Downstream disconnected."
+        : Date.now() >= guard.deadline ? "Provider request deadline exceeded." : "Upstream connection or response consumption failed." });
+    if (outgoing.headersSent) { outgoing.destroy(); return; }
     if (!outgoing.headersSent && !outgoing.destroyed) {
       // Never hand a retryable 5xx back to a runtime with its own hidden retry layer.
       outgoing.writeHead(400, { "content-type": "application/json" });
     }
     if (!outgoing.destroyed) outgoing.end(JSON.stringify({ error: { message: error instanceof DispatchError ? error.message : `Provider bridge failure (${certainty}); request must not be replayed.`, type: "benchmark_bridge_error" } }));
+  } finally {
+    outgoing.off("close", onClose);
   }
 }
 
-function upstreamResponse(target: URL, headers: IncomingHttpHeaders, body: Buffer, timeoutMs: number): Promise<IncomingMessage> {
+function upstreamResponse(target: URL, headers: IncomingHttpHeaders, body: Buffer, signal: AbortSignal): Promise<IncomingMessage> {
   return new Promise((resolve, reject) => {
     const forward = target.protocol === "https:" ? httpsRequest : httpRequest;
-    const upstream = forward(target, { method: "POST", headers, signal: AbortSignal.timeout(timeoutMs) }, resolve);
+    const upstream = forward(target, { method: "POST", headers, signal }, resolve);
     upstream.once("error", reject);
     upstream.end(body);
   });
@@ -843,7 +884,7 @@ function readRequestBody(incoming: IncomingMessage, limit = 10 * 1024 * 1024): P
   });
 }
 
-function stripTemperature(body: Buffer, contentType: string | string[] | undefined): Buffer {
+export function stripTemperature(body: Buffer, contentType: string | string[] | undefined): Buffer {
   if (!contentType?.toString().toLowerCase().includes("application/json") || body.length === 0) {
     return body;
   }

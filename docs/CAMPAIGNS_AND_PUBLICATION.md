@@ -39,6 +39,27 @@ with the bundled executable as the fallback. A changed binding stops before
 inference. The session's separately reported backend version is retained in
 diagnostics; vendor backend and executable/package version labels can differ.
 
+Before immutable preparation, run the
+[README runtime coding gate](../README.md#1-check-prepare-and-preview-without-inference).
+It drives real native read/create/edit or patch tools through the selected
+SDK/CLI against local fake Responses, including multi-round validation and
+large request bodies. For an isolated configuration, explicitly approve the
+[actual worker-image gate](ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference).
+No model brand determines the tool allowlist: the runtime catalog supplies
+supported identifiers, and missing declared capabilities fail before physical
+dispatch. The gate never adds shell to a read/edit-only contract.
+Catalog discovery/initialization uses the pinned SDK's
+[experimental tool RPC surface](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/nodejs/src/generated/rpc.ts).
+An SDK/CLI upgrade needs a new runtime gate and immutable cohort, not a promise
+that preview tool names remain unchanged.
+
+Progress from that gate to offline prepare/status/report, then a **bounded
+one-cell paid gate**, inspecting clean completion, actual files, acceptance
+grade and request accounting before scale. A no-tool READY response is not
+coding acceptance. Historical monolithic worker runtimes are not a reason to
+downgrade the selected CLI or put cloud credentials in the worker. This
+toolkit's SDK/transport are host-owned and its isolated file tools are worker-owned.
+
 Run/resume requires `--allow-paid`. An exclusive ownership record prevents
 concurrent resume. `journal.ndjson` is append-safe authoritative state;
 `state.json` is a derived convenience index. Interrupted unterminated tails
@@ -73,6 +94,16 @@ Reservations persist across attempts/resumes and are not refunded as charges.
 Legacy single-run calls without request bounds derive their overall ceiling
 from the declared session timeout and task/round/validation/probe stage count,
 not a study-specific fixed duration.
+Public `quickstart` and `evaluate` CLIs now require `--bounds <file>`, parsed
+by this same strict policy schema; review
+[`request-bounds.example.json`](../examples/request-bounds.example.json).
+`quickstart --prepare-only` prepares a disposable config/baseline without
+inference, for `doctor --verify-runtime` and then cost-bearing `bench --config`.
+The exported JavaScript APIs still accept omitted bounds for compatibility.
+Judge requests use the same admission/output/deadline/ambiguity guard; failed
+judge execution or score parsing retains a separate
+`llm-evaluation-failure-*.json` with physical accounting/safe provider diagnostics
+and no scores. Protective token reservations are not measured usage or money.
 
 Token admission reserves **one token per serialized UTF-8 request byte plus
 the output ceiling**, deliberately pessimistic rather than an unverified
@@ -87,6 +118,16 @@ honored. Auth, permanent quota, malformed/nonterminal 200, partial stream and
 ambiguous disconnect close the lane. A whole conversation work request is
 never retried: it may already have invoked non-idempotent tools. Duplicate
 possibly processed payloads cannot trigger hidden SDK replay.
+SSE uses event boundaries and streaming UTF-8 decoding, not line/chunk
+assumptions. Route-specific terminal evidence is certified before ending the
+downstream response; partial streams are destroyed rather than extended with
+JSON. Safe bridge diagnostics retain phase, upstream status, byte count and
+allowlisted error code without provider payloads/credentials. Parser/lifecycle
+regressions are reproduced offline; saved older transport ambiguities without
+those details remain unresolved and are not automatically replayed.
+The framing reference is the owner
+[SSE interpretation specification](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation),
+not a provider-specific assumption about TCP chunks.
 
 The whole fixed task/round plan and runtime draining must finish before an
 execution is completed. A crash during draining retains an interrupted

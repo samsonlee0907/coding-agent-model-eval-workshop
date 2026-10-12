@@ -41,6 +41,12 @@ has no isolation flag. Add `--source
 'C:\path\to\starter'` when an existing starter is needed; it copies input and
 does not alter the original. Promote a prompt to controlled mode only after its
 acceptance criteria, baseline, and evaluator are stable.
+Every public quickstart/judge route requires `--bounds`; review the supplied
+`examples\request-bounds.example.json`, then adjust a local copy for your task.
+Use `--prepare-only` to generate the exploratory workspace/config offline,
+`doctor --verify-runtime` for actual tool execution against local fake Responses,
+and only then paid `bench --config`. Keep a bounded one-cell live gate before
+scaling, as shown in the [README progression](../README.md#first-run-one-task-one-deployment).
 
 For a campaign, add each task configuration to a `schemaVersion: 1` manifest;
 candidate deployments are supplied separately and override the config's
@@ -90,7 +96,7 @@ one failed candidate until it passes or silently changes immutable grades.
 
 Publication is separate from grading. Keep confidential inputs/oracles outside
 candidate inputs and default exports. Only a reviewed manifest may approve
-source/output previews and optionally active original downloads. The campaign
+source/output previews and optionally active original Open/save links. The campaign
 guide explains content hashes, private `/grader` files, unsupported PDF/OCR
 and workbook recalculation, and honest missingness.
 
@@ -105,7 +111,7 @@ $model = 'YOUR_DEPLOYMENT_NAME'
 # Key mode: FOUNDRY_API_KEY must already be set in the host environment.
 $authFlags = @('--auth', 'key')
 # Alternatively, after the keyless guide's tenant/account login:
-# $authFlags = @('--auth', 'entra', '--credential', 'azure-cli', '--tenant-id', $tenantId, '--wire-api', 'responses')
+# $authFlags = @('--auth', 'entra', '--credential', 'azure-cli', '--tenant-id', $tenantId, '--subscription-id', $subscriptionId, '--wire-api', 'responses')
 ```
 
 `@authFlags` below forwards these implemented options; `az login` alone never
@@ -117,14 +123,14 @@ Anthropic-compatible deployment use `--provider anthropic` and omit
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model @authFlags --task 'Build a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
+npm run quickstart -- --provider openai --model $model @authFlags --bounds '.\examples\request-bounds.example.json' --task 'Build a TypeScript CSV parser with a documented parseCsv(text) API. Accept UTF-8 input with an optional BOM, CRLF or LF line endings, quoted commas, and escaped quotes. Reject unmatched quotes with a clear Error. Add focused tests for every stated case, and make npm test and npm run build pass. Do not add a dependency, network call, or unrelated feature.'
 ```
 
 ### TTL get-or-load cache
 
 ```powershell
 $model = '<deployment-name>'
-npm run quickstart -- --provider openai --model $model @authFlags --task 'Build a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
+npm run quickstart -- --provider openai --model $model @authFlags --bounds '.\examples\request-bounds.example.json' --task 'Build a TypeScript TTL cache exposing getOrLoad(key, loader). Concurrent requests for the same missing key must share one in-flight loader; values expire using injected or fake time; rejected loaders must not be cached. Add deterministic tests with no real sleep, and make npm test and npm run build pass. Do not add external storage, network access, or unrelated behavior.'
 ```
 
 ### Retry-policy repair
@@ -132,7 +138,7 @@ npm run quickstart -- --provider openai --model $model @authFlags --task 'Build 
 ```powershell
 $model = '<deployment-name>'
 $source = Read-Host 'Clean TypeScript retry-policy starter path'
-npm run quickstart -- --provider openai --model $model @authFlags --source $source --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
+npm run quickstart -- --provider openai --model $model @authFlags --bounds '.\examples\request-bounds.example.json' --source $source --task 'Repair the supplied TypeScript retry policy so only idempotent requests retry HTTP 429 and 5xx responses, Retry-After is honored when present, attempts stop at the configured limit, and authorization values are never logged. Use injected fake transport and sleeper in tests; do not use real network calls or sleeps. Preserve the public API, add focused regressions, and make npm test and npm run build pass.'
 ```
 
 ## Build a detailed task file
