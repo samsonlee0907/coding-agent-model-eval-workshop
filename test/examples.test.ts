@@ -11,6 +11,7 @@ import { authSchema, foundryScope, providerSchema } from "../src/auth.js";
 import { isolationSchema } from "../src/controlled-worker.js";
 import { parseQuickstartOptions } from "../src/quickstart.js";
 import { parseEvaluationOptions } from "../src/evaluator-options.js";
+import { loadRequestBounds } from "../src/request-policy.js";
 
 test("documented custom campaign prepares, grades varied categories, resumes and publishes without inference", async () => {
   const root = mkdtempSync(join(tmpdir(), "benchmark-example-"));
@@ -37,6 +38,39 @@ test("documented custom campaign prepares, grades varied categories, resumes and
     const report = reportCampaign(directory, join(root, "report"), { zip: true });
     assert.match(readFileSync(report, "utf8"), /Coding Agent Model Benchmark/);
     assert.equal(JSON.parse(readFileSync(join(root, "report", "selected-results.json"), "utf8")).length, 4);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("finite subscription-only Responses diagnostic profile prepares offline and binds the public CLI bounds", () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-diagnostic-profile-"));
+  try {
+    const policy = resolve("examples", "request-bounds.responses-diagnostic.example.json");
+    const bounds = loadRequestBounds(policy)!;
+    assert.deepEqual(bounds, { maxRequests: 10, maxRequestBytes: 1048576, maxTokens: 200000, maxOutputTokens: 2000,
+      deadlineMs: 300000, requestsPerMinute: 10, tokensPerMinute: 200000 });
+    const spec = JSON.parse(readFileSync(resolve("examples", "custom-campaign", "campaign.json"), "utf8"));
+    const originalTask = resolve("examples", "custom-campaign", "text-task.json");
+    const task = JSON.parse(readFileSync(originalTask, "utf8"));
+    spec.id = "first-run-diagnostic-v1"; spec.tasks = [spec.tasks[0]]; spec.candidates = [spec.candidates[0]];
+    spec.candidates[0].candidate.model = "fixture-deployment";
+    spec.candidates[0].foundryProvider.auth = { mode: "entra", credential: "azure-cli",
+      subscriptionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" };
+    spec.requestBounds = bounds; spec.bounds.maxRequests = bounds.maxRequests;
+    spec.bounds.maxReservedTokens = bounds.maxTokens; spec.bounds.maxReservationUsd = 4;
+    task.contract.candidate = spec.candidates[0].candidate; task.contract.foundryProvider = spec.candidates[0].foundryProvider;
+    task.workspacePath = resolve(dirname(originalTask), task.workspacePath); task.requestBounds = bounds;
+    const taskPath = join(root, "text-task.json"); writeFileSync(taskPath, JSON.stringify(task));
+    spec.tasks[0].config = taskPath; spec.tasks[0].evaluator = resolve("examples", "custom-campaign", "text-evaluator.json");
+    const specPath = join(root, "campaign.json"); writeFileSync(specPath, JSON.stringify(spec));
+    const prepared = prepareCampaign(specPath, join(root, "state"), fixtureRuntime);
+    assert.equal(prepared.spec.tasks.length * prepared.spec.candidates.length * prepared.spec.repeats, 1);
+    assert.deepEqual(prepared.tasks[0].config.requestBounds, bounds);
+    assert.equal(prepared.tasks[0].config.contract.execution.reasoningEffort, "high");
+    const flags = ["--provider", "openai", "--model", "fixture-deployment", "--wire-api", "responses", "--bounds", policy,
+      "--auth", "entra", "--credential", "azure-cli", "--subscription-id", "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"];
+    assert.deepEqual(parseQuickstartOptions([...flags, "--prepare-only", "--task", "Public task"]).requestBounds, bounds);
+    assert.deepEqual(parseEvaluationOptions(flags).requestBounds, bounds);
+    assert.equal(campaignStatus(join(root, "state")).cells[0].status, "missing");
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 

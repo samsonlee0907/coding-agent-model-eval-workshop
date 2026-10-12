@@ -369,8 +369,8 @@ function efficiencyProfileSection(runs: readonly BenchmarkRun[]): string {
       cells: runs.map((run) => formatCount(run.metrics.cacheReadTokens)),
     },
     {
-      label: "SDK-reported cache share",
-      note: "cacheReadTokens / inputTokens. This is an SDK-counter ratio, not provider-wire normalization or billing.",
+      label: "Captured cache share",
+      note: "cacheReadTokens / inputTokens from captured provider-terminal or legacy SDK counters, not billing.",
       cells: runs.map((run) => {
         const share = sdkReportedCacheShare(run);
         return share.ratio === null
@@ -487,7 +487,7 @@ function publicationEvidenceSection(
     rank("Mean wall time per attempt", values.map((row) => ({ candidate: row.candidate, value: row.wall, note: "Complete captured wall-time evidence required." }))),
     rank("Mean output tokens per attempt", values.map((row) => ({ candidate: row.candidate, value: row.output, note: "Output includes reported reasoning; it is not added twice." }))),
     rank("Mean agent turns and model-usage records", values.map((row) => ({ candidate: row.candidate, value: row.turns, note: `Agent turns; model-usage records: ${row.calls === null ? "Unavailable" : row.calls.toFixed(2)}. These are not user rounds or verified HTTP requests.` }))),
-    rank("SDK-reported cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / SDK inputTokens; not billing or native normalization." })), true),
+    rank("Captured cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / captured inputTokens; not billing or native normalization." })), true),
     strictlyComparable
       ? ""
       : "<p class=\"note warn-text\">Minimum published list-price values remain descriptive, but their ranking is withheld because the run contracts are not strictly comparable.</p>",

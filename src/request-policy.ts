@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { readFileSync } from "node:fs";
+import type { BenchmarkRun } from "./types.js";
+import type { ProviderTerminalEvidence } from "./provider-stream.js";
 
 export type DispatchCertainty = "not-dispatched" | "explicitly-rejected" | "possibly-processed";
 export class DispatchError extends Error {
@@ -64,7 +66,7 @@ export class DeploymentAdmission {
 
 export class RequestGuard {
   public readonly bounds?: RequestBounds;
-  readonly accounting = { physicalRequests: 0, reservedTokens: 0, ambiguousRequests: 0, rejectedRequests: 0 };
+  readonly accounting: NonNullable<BenchmarkRun["requestAccounting"]> = { physicalRequests: 0, reservedTokens: 0, ambiguousRequests: 0, rejectedRequests: 0 };
   private blocked = false;
   private readonly processed = new Set<string>();
   private completedResponses = 0;
@@ -90,6 +92,14 @@ export class RequestGuard {
     this.processed.add(payloadHash);
   }
   rejectedPayload(payloadHash: string): void { this.processed.delete(payloadHash); }
+  recordTerminal(terminal: ProviderTerminalEvidence): void {
+    if (!this.accounting.physicalRequests) throw new DispatchError("Provider terminal metering requires a dispatched request.", "not-dispatched");
+    this.accounting.providerTerminals ??= [];
+    if (this.accounting.providerTerminals.some((entry) => entry.request === this.accounting.physicalRequests)) {
+      throw new DispatchError("Duplicate terminal metering for a physical request.", "possibly-processed");
+    }
+    this.accounting.providerTerminals.push({ request: this.accounting.physicalRequests, terminal });
+  }
   certifyResponse(): void { this.completedResponses++; }
   cleanlySettled(): boolean {
     return this.completedResponses > 0 && !this.accounting.ambiguousRequests

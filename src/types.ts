@@ -420,6 +420,7 @@ export interface BenchmarkRun {
     reservedTokens: number;
     ambiguousRequests: number;
     rejectedRequests: number;
+    providerTerminals?: Array<{ request: number; terminal: import("./provider-stream.js").ProviderTerminalEvidence }>;
   };
   recordedPricing?: {
     snapshotHash: string;
@@ -600,6 +601,10 @@ export interface RunDiagnostics {
       | "provider_resource_not_found"
       | "azure_key_auth_disabled"
       | "permanent_quota"
+      | "provider_output_limit"
+      | "provider_content_filter"
+      | "provider_terminal_failure"
+      | "provider_stream_incomplete"
       | "other"
       | null;
     message: string | null;

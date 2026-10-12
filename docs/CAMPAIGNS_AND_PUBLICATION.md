@@ -125,6 +125,26 @@ JSON. Safe bridge diagnostics retain phase, upstream status, byte count and
 allowlisted error code without provider payloads/credentials. Parser/lifecycle
 regressions are reproduced offline; saved older transport ambiguities without
 those details remain unresolved and are not automatically replayed.
+Responses terminals additionally record only categorical event/status,
+incomplete reason and allowlisted provider error code, plus validated usage
+counters. `provider-terminal` failures are distinct from missing terminal
+frames and connection loss, without widening recovery eligibility.
+`requestAccounting.providerTerminals` binds each retained terminal to its
+physical request, and the first bridge error retains its terminal evidence.
+`ambiguousRequests` remains execution/replay uncertainty, **not** a count of
+requests that must lack metering.
+
+Where provider terminal usage is available, token metrics use its known
+subtotal, including failed/incomplete responses, without adding SDK counters
+again. Reasoning is already included in output tokens. Missing or invalid
+usage remains unknown; cache counters and monetary costs are not invented.
+SDK `modelUsageRecords`/SDK cost remain their own observations, not physical
+request counts or reconstructed bills. New what-if pricing refuses unknown
+physical-request spend; existing recorded estimates are never rewritten.
+Metadata-safe evidence/replay exports retain these categories/counters but
+never terminal messages, output, response IDs, request bodies or headers.
+Older records have no retroactively inferred terminal metering. See the
+[finite keyless diagnostic gate and allowance guidance](KEYLESS_AUTH.md#bounded-terminal-failure-diagnosis).
 The framing reference is the owner
 [SSE interpretation specification](https://html.spec.whatwg.org/multipage/server-sent-events.html#event-stream-interpretation),
 not a provider-specific assumption about TCP chunks.

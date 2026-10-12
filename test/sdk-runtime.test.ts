@@ -9,12 +9,91 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CopilotClient, RuntimeConnection, ToolSet, defineTool } from "@github/copilot-sdk";
 import { bearerTokenProvider } from "../src/auth.js";
-import { runBenchmark, startRequestSanitizingProxy } from "../src/runner.js";
+import { runBenchmark, startRequestSanitizingProxy, resolveCopilotCliPath, createRunDiagnostics } from "../src/runner.js";
+import { scrubFoundryEnvironment } from "../src/validation.js";
 import { RequestGuard } from "../src/request-policy.js";
 import { fixtureConfig } from "./fixtures/revamp.js";
 import { readRuntimeIdentity } from "../src/runtime-identity.js";
 import { verifyRuntime } from "../src/runtime-verification.js";
 import { FoundryJudgeInvoker } from "../src/evaluator.js";
+import { deriveMetrics } from "../src/metrics.js";
+import { event } from "./fixtures/events.js";
+import type { JsonRecord } from "../src/types.js";
+
+test("selected SDK/CLI fails closed on metered incomplete/failed/error terminals and unmetered partial 200 without cloud", { timeout: 120000 }, async () => {
+  const root = mkdtempSync(join(tmpdir(), "bt-terminal-"));
+  const cliPath = resolveCopilotCliPath(process.env), runtime = readRuntimeIdentity();
+  const client = new CopilotClient({ mode: "empty", baseDirectory: root, workingDirectory: root, useLoggedInUser: false,
+    env: scrubFoundryEnvironment(process.env), logLevel: "none",
+    connection: RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined) });
+  try {
+    await client.start();
+    for (const mode of ["max_output_tokens", "content_filter", "failed", "error", "partial"] as const) {
+      let calls = 0;
+      const captured: Array<{ type: string; data: JsonRecord }> = [];
+      const usage = { input_tokens: 125, output_tokens: 32, total_tokens: 157,
+        input_tokens_details: { cached_tokens: 20, cache_write_tokens: 0 }, output_tokens_details: { reasoning_tokens: 24 } };
+      const terminal = mode === "error" ? { type: "error", code: "server_error", message: "PRIVATE_TERMINAL_TEXT", sequence_number: 1 }
+        : { type: mode === "failed" ? "response.failed" : "response.incomplete", sequence_number: 1,
+          response: { id: "fixture-terminal", object: "response", status: mode === "failed" ? "failed" : "incomplete",
+            output: [], usage, max_output_tokens: 32,
+            ...(mode === "failed" ? { error: { code: "server_error", message: "PRIVATE_TERMINAL_TEXT" } }
+              : { incomplete_details: { reason: mode } }) } };
+      const data = 'data: {"type":"response.created","response":{"id":"fixture-terminal","object":"response","status":"in_progress","output":[]}}\n\n'
+        + (mode === "partial" ? "" : `data: ${JSON.stringify(terminal)}\n\n`);
+      const server = createServer((req, res) => {
+        const chunks: Buffer[] = [];
+        req.on("data", (chunk: Buffer) => chunks.push(chunk));
+        req.on("end", () => {
+          calls++;
+          const payload = JSON.parse(Buffer.concat(chunks).toString());
+          assert.equal(payload.max_output_tokens, 32);
+          assert.equal(payload.reasoning.effort, "high");
+          assert.equal(payload.tools?.length ?? 0, 0);
+          res.writeHead(200, { "content-type": "text/event-stream" }); res.end(data);
+        });
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const address = server.address(); assert.ok(address && typeof address !== "string");
+      const guard = new RequestGuard({ maxRequests: 2, maxRequestBytes: 1048576, maxTokens: 1000000, maxOutputTokens: 32,
+        deadlineMs: 30000, requestsPerMinute: 60, tokensPerMinute: 1000000 });
+      const proxy = await startRequestSanitizingProxy(`http://127.0.0.1:${address.port}`, (body) => body, {
+        guard, retries: 2, wireApi: "responses", capture(type, data) { captured.push({ type, data }); },
+      });
+      try {
+        const session = await client.createSession({
+          model: "fixture-model", reasoningEffort: "high", availableTools: [], workingDirectory: root, streaming: true, enableSessionStore: false,
+          provider: { type: "openai", wireApi: "responses", baseUrl: proxy.baseUrl, apiKey: "fixture-only-key" },
+        });
+        await assert.rejects(() => session.sendAndWait({ prompt: `Public terminal fixture ${mode}.` }, 20000));
+        await client.deleteSession(session.sessionId);
+        const first = captured.find((entry) => entry.type === "runner.provider_bridge_error")!.data;
+        assert.equal(first.phase, mode === "partial" ? "stream-completion" : "provider-terminal");
+        assert.equal(first.upstreamStatus, 200); assert.equal(first.responseBytes, Buffer.byteLength(data));
+        assert.equal(first.certainty, "possibly-processed");
+        assert.equal(calls, 1); assert.equal(guard.accounting.physicalRequests, 1);
+        assert.equal(guard.accounting.ambiguousRequests, 1); assert.equal(guard.accounting.rejectedRequests, 0);
+        assert.equal(guard.cleanlySettled(), false);
+        const metered = !["error", "partial"].includes(mode);
+        assert.equal(guard.accounting.providerTerminals?.[0].terminal.usage?.outputTokens ?? null, metered ? 32 : null);
+        const normalized = captured.map((entry, index) => ({ ...event(index + 1, entry.type, "2026-10-12T00:00:00Z"), data: entry.data }));
+        const metrics = deriveMetrics(normalized, []);
+        assert.equal(metrics.inputTokens.value, metered ? 125 : null); assert.equal(metrics.outputTokens.value, metered ? 32 : null);
+        assert.equal(metrics.cost.value, null);
+        const diagnostics = createRunDiagnostics(normalized, runtime, [], "synthetic downstream 400 query fallout");
+        assert.equal(diagnostics.providerFailure.httpStatus, 200);
+        assert.deepEqual(diagnostics.providerFailure.bridge, first);
+        assert.equal(diagnostics.providerFailure.signature, mode === "max_output_tokens" ? "provider_output_limit"
+          : mode === "content_filter" ? "provider_content_filter" : mode === "partial" ? "provider_stream_incomplete" : "provider_terminal_failure");
+        if (mode === "max_output_tokens") assert.match(diagnostics.providerFailure.message!, /allowance exhausted/);
+        assert.doesNotMatch(JSON.stringify(captured), /PRIVATE_TERMINAL_TEXT|fixture-only-key/);
+      } finally {
+        await proxy.stop();
+        await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+      }
+    }
+  } finally { await client.stop(); rmSync(root, { recursive: true, force: true }); }
+});
 
 test("compiled runtime locates pinned SDK metadata without a TypeScript loader", () => {
   const module = new URL("../dist/runtime-identity.js", import.meta.url).href;
@@ -67,6 +146,17 @@ test("pinned SDK uses refreshed bearer, large multi-round Responses and controll
       routes.push(req.url ?? "");
       const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
       toolCounts.push(body.tools?.length ?? 0);
+      if (JSON.stringify(body.input).includes("PRODUCTION_TERMINAL_FIXTURE")) {
+        assert.equal(body.max_output_tokens, 32);
+        res.writeHead(200, { "content-type": "text/event-stream" });
+        res.end(`data: ${JSON.stringify({ type: "response.incomplete", response: {
+          id: "fixture-incomplete", status: "incomplete", output: [], max_output_tokens: 32,
+          incomplete_details: { reason: "max_output_tokens" },
+          usage: { input_tokens: 125, output_tokens: 32, total_tokens: 157,
+            input_tokens_details: { cached_tokens: 20, cache_write_tokens: 0 }, output_tokens_details: { reasoning_tokens: 24 } },
+        } })}\n\n`);
+        return;
+      }
       if (JSON.stringify(body.input).includes("PRODUCTION_CODING_FIXTURE")) {
         const action = codingActions[codingCursor++];
         if (action) {
@@ -213,6 +303,29 @@ test("pinned SDK uses refreshed bearer, large multi-round Responses and controll
       assert.match(readFileSync(join(codingWorkspace, "result.txt"), "utf8"), /^OK\r?\n$/);
       assert.equal(JSON.parse(readFileSync(join(codingWorkspace, "answer.json"), "utf8")).sum, 16);
       assert.deepEqual(codingRun.diagnostics.configuredToolFilters, ["builtin:view", "builtin:glob", "builtin:create", "builtin:edit"]);
+      const terminalConfig = fixtureConfig(workspace, "terminal-fixture", "fixture-model");
+      terminalConfig.contract.runtime = readRuntimeIdentity();
+      terminalConfig.contract.task.prompt = "PRODUCTION_TERMINAL_FIXTURE";
+      terminalConfig.requestBounds = { ...bounds, maxOutputTokens: 32 };
+      terminalConfig.artifactsDirectory = join(root, "terminal-artifacts");
+      const beforeTerminal = intercepted, terminalRun = await runBenchmark(terminalConfig);
+      assert.equal(intercepted, beforeTerminal + 1);
+      assert.equal(terminalRun.executionStatus, "interrupted");
+      assert.equal(terminalRun.validation?.exitCode, 0);
+      assert.notEqual(terminalRun.outcome.class, "resolved");
+      assert.equal(terminalRun.modelCalls.length, 0);
+      assert.equal(terminalRun.metrics.inputTokens.value, 125);
+      assert.equal(terminalRun.metrics.outputTokens.value, 32);
+      assert.equal(terminalRun.metrics.cost.value, null);
+      assert.equal(terminalRun.requestAccounting?.physicalRequests, 1);
+      assert.equal(terminalRun.requestAccounting?.ambiguousRequests, 1);
+      assert.equal(terminalRun.requestAccounting?.providerTerminals?.[0].terminal.usage?.reasoningTokens, 24);
+      assert.equal(terminalRun.diagnostics.providerFailure.signature, "provider_output_limit");
+      assert.match(terminalRun.diagnostics.providerFailure.message!, /allowance exhausted/);
+      const savedTerminal = JSON.parse(readFileSync(join(terminalRun.artifacts.directory, "run.json"), "utf8"));
+      assert.deepEqual(savedTerminal.requestAccounting, terminalRun.requestAccounting);
+      assert.deepEqual(JSON.parse(readFileSync(join(terminalRun.artifacts.directory, "execution.json"), "utf8")).requestAccounting,
+        terminalRun.requestAccounting);
       const beforeUnsupported = intercepted, originalStart = CopilotClient.prototype.start;
       const unsupported = mock.method(CopilotClient.prototype, "start", async function (this: CopilotClient) {
         await originalStart.call(this);

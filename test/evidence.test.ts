@@ -3,6 +3,8 @@ import test from "node:test";
 import { immutableContractHash } from "../src/contract.js";
 import { evidenceFromRuns, parseReportEvidence, selectReportCells, taskTypeAnalysis, attemptFromRun, evidenceHash } from "../src/evidence.js";
 import { fixtureConfig, fixtureRun } from "./fixtures/revamp.js";
+import { providerTerminal } from "../src/provider-stream.js";
+import { renderEvidenceReport } from "../src/report-ui.js";
 
 test("latest clean content FAIL replaces PASS; newer interruption does not", () => {
   const pass = fixtureRun("old-pass"), fail = fixtureRun("new-fail", fixtureConfig(), "fail"), interrupted = fixtureRun("interrupted");
@@ -11,6 +13,31 @@ test("latest clean content FAIL replaces PASS; newer interruption does not", () 
   interrupted.executionStatus = "interrupted"; interrupted.runnerError = "ambiguous timeout";
   const [cell] = selectReportCells(evidenceFromRuns([pass, fail, interrupted]));
   assert.equal(cell.selected?.id, "new-fail"); assert.equal(cell.status, "fail"); assert.equal(cell.attempts.length, 3);
+});
+
+test("metadata evidence retains metered failed terminals without changing interruption selection or inventing old usage", () => {
+  const run = fixtureRun("metered-interruption");
+  run.executionStatus = "interrupted"; run.runnerError = "provider incomplete";
+  const terminal = providerTerminal({ type: "response.incomplete", response: { status: "incomplete", output: [],
+    incomplete_details: { reason: "max_output_tokens" }, error: { code: "PRIVATE_CODE", message: "PRIVATE_BODY" },
+    usage: { input_tokens: 100, output_tokens: 32, total_tokens: 132, output_tokens_details: { reasoning_tokens: 30 } } } }, true)!;
+  run.requestAccounting = { physicalRequests: 1, reservedTokens: 2000, ambiguousRequests: 1, rejectedRequests: 0,
+    providerTerminals: [{ request: 1, terminal }] };
+  const evidence = evidenceFromRuns([run]), attempt = evidence.attempts[0];
+  assert.equal(selectReportCells(evidence)[0].status, "interrupted");
+  assert.equal(attempt.accounting.providerTerminals?.[0].terminal.usage?.outputTokens, 32);
+  assert.equal(attempt.accounting.providerTerminals?.[0].terminal.errorCode, "other");
+  assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE_CODE|PRIVATE_BODY/);
+  const html = renderEvidenceReport(evidence);
+  assert.match(html, /providerTerminals/); assert.match(html, /Ambiguous execution does not imply missing metering/);
+  assert.doesNotMatch(html, /PRIVATE_CODE|PRIVATE_BODY/);
+  assert.throws(() => evidenceFromRuns([{ ...run, requestAccounting: { ...run.requestAccounting,
+    providerTerminals: [{ request: 2, terminal }] } }]), /dispatched physical requests/);
+  assert.throws(() => evidenceFromRuns([{ ...run, requestAccounting: { ...run.requestAccounting,
+    providerTerminals: [{ request: 1, terminal }, { request: 1, terminal }] } }]), /unique/);
+  const legacy = fixtureRun("old-interruption");
+  legacy.executionStatus = "interrupted"; legacy.runnerError = "unknown old provider error";
+  assert.equal(evidenceFromRuns([legacy]).attempts[0].accounting.providerTerminals, undefined);
 });
 test("latest selection compares instants rather than lexical timezone strings", () => {
   const pass = fixtureRun("earlier"), fail = fixtureRun("later", fixtureConfig(), "fail");

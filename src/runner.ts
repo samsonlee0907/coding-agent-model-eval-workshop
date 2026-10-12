@@ -51,7 +51,8 @@ import { ControlledWorker, collectSnapshot, snapshotHash } from "./controlled-wo
 import type { EventCollector as Collector } from "./event-collector.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
 import { evidenceHash } from "./evidence.js";
-import { ProviderStream } from "./provider-stream.js";
+import { ProviderStream, ProviderTerminalError, providerTerminal, providerTerminalSchema } from "./provider-stream.js";
+import type { ProviderTerminalEvidence } from "./provider-stream.js";
 import { once } from "node:events";
 
 export interface BenchmarkRunOptions {
@@ -606,6 +607,7 @@ export function createRunDiagnostics(
     .flatMap((event) => typeof event.data.message === "string" ? [event.data.message] : []);
   const bridgeErrors = events.filter((event) => event.eventType === "runner.provider_bridge_error");
   const bridge = bridgeErrors.find((event) => event.data.certainty === "possibly-processed") ?? bridgeErrors.at(-1);
+  const terminal = providerTerminalSchema.safeParse(bridge?.data.providerTerminal);
   const rejected = events.filter((event) => event.eventType === "runner.provider_rejected" && typeof event.data.status === "number").at(-1);
   const httpStatus = typeof bridge?.data.status === "number" ? String(bridge.data.status)
     : typeof bridge?.data.upstreamStatus === "number" ? String(bridge.data.upstreamStatus)
@@ -632,7 +634,13 @@ export function createRunDiagnostics(
     providerFailure: {
       ...(bridge ? { bridge: bridge.data } : {}),
       httpStatus: httpStatus ? Number(httpStatus) : null,
-      signature: azureKeyAuthDisabled
+      signature: terminal.success && terminal.data.terminalResponse && terminal.data.incompleteReason === "max_output_tokens"
+        ? "provider_output_limit"
+      : terminal.success && (terminal.data.incompleteReason === "content_filter" || terminal.data.errorCode === "content_filter")
+        ? "provider_content_filter"
+      : terminal.success ? "provider_terminal_failure"
+      : bridge?.data.phase === "stream-completion" ? "provider_stream_incomplete"
+      : azureKeyAuthDisabled
         ? "azure_key_auth_disabled"
       : rejected?.data.reason === "permanent-quota"
         ? "permanent_quota"
@@ -641,7 +649,7 @@ export function createRunDiagnostics(
       : /resource not found on provider.*\b404\b/i.test(runnerError ?? "")
         ? "provider_resource_not_found"
         : runnerError ? "other" : null,
-      message: runnerError,
+      message: terminal.success && typeof bridge?.data.reason === "string" ? bridge.data.reason : runnerError,
     },
   };
 }
@@ -720,6 +728,7 @@ async function forwardSanitizedRequest(
   const guard = options.guard ?? new RequestGuard();
   let dispatched = false;
   let bridgePhase = "request-body", upstreamStatus: number | null = null, responseBytes = 0;
+  let outputTokenLimit: number | null = null;
   const disconnected = new AbortController();
   const onClose = () => { if (!outgoing.writableFinished) disconnected.abort(); };
   outgoing.once("close", onClose);
@@ -736,9 +745,10 @@ async function forwardSanitizedRequest(
     if (guard.bounds) {
       const payload = JSON.parse(body.toString()) as Record<string, unknown>;
       assertTextTokenReservation(payload);
-      const field = options.wireApi === "responses" ? "max_output_tokens" : incoming.url?.includes("messages") ? "max_tokens" : "max_completion_tokens";
+      const field = incoming.url?.split("?")[0].endsWith("/responses") ? "max_output_tokens" : incoming.url?.includes("messages") ? "max_tokens" : "max_completion_tokens";
       const existing = payload[field];
-      payload[field] = typeof existing === "number" ? Math.min(existing, guard.bounds.maxOutputTokens) : guard.bounds.maxOutputTokens;
+      outputTokenLimit = typeof existing === "number" ? Math.min(existing, guard.bounds.maxOutputTokens) : guard.bounds.maxOutputTokens;
+      payload[field] = outputTokenLimit;
       body = Buffer.from(JSON.stringify(payload));
     }
     const tokens = body.length + (guard.bounds?.maxOutputTokens ?? 0);
@@ -755,7 +765,7 @@ async function forwardSanitizedRequest(
       if (disconnected.signal.aborted) throw new DispatchError("Downstream disconnected before dispatch.", "not-dispatched");
       guard.reserve(body.length, tokens);
       dispatched = true;
-      options.capture?.("runner.provider_dispatch", { request: guard.accounting.physicalRequests, reservedTokens: tokens });
+      options.capture?.("runner.provider_dispatch", { request: guard.accounting.physicalRequests, reservedTokens: tokens, outputTokenLimit });
       bridgePhase = "upstream-headers";
       const response = await upstreamResponse(target, headers, body, AbortSignal.any([disconnected.signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]));
       const status = response.statusCode ?? 502;
@@ -800,7 +810,15 @@ async function forwardSanitizedRequest(
           chunks.push(buffer);
         }
         const reply = Buffer.concat(chunks);
-        if (!isTerminalProviderResponse(incoming.url ?? "", JSON.parse(reply.toString("utf8")))) {
+        const value: unknown = JSON.parse(reply.toString("utf8"));
+        if ((incoming.url ?? "").split("?")[0].endsWith("/responses")) {
+          const terminal = providerTerminal(value, false);
+          if (terminal) {
+            recordTerminal(terminal);
+            if (terminal.eventType !== "response.completed" || !terminal.terminalResponse) throw new ProviderTerminalError(terminal);
+          }
+        }
+        if (!isTerminalProviderResponse(incoming.url ?? "", value)) {
           throw new DispatchError("Malformed or nonterminal successful provider response; hidden replay denied.", "possibly-processed");
         }
         if (disconnected.signal.aborted || outgoing.destroyed) throw new DispatchError("Downstream disconnected before completion delivery.", "possibly-processed");
@@ -808,7 +826,7 @@ async function forwardSanitizedRequest(
         outgoing.writeHead(status, response.headers); outgoing.end(reply); return;
       }
       outgoing.writeHead(status, response.headers);
-      const stream = new ProviderStream(incoming.url ?? "");
+      const stream = new ProviderStream(incoming.url ?? "", recordTerminal);
       for await (const chunk of response) {
         const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         responseBytes += buffer.length;
@@ -822,8 +840,13 @@ async function forwardSanitizedRequest(
       return;
     }
 
+    function recordTerminal(terminal: ProviderTerminalEvidence): void {
+      guard.recordTerminal(terminal);
+      options.capture?.("runner.provider_terminal", { request: guard.accounting.physicalRequests, terminal });
+    }
+
     function isTerminalProviderResponse(route: string, value: unknown): boolean {
-      if (!isRecord(value) || "error" in value || typeof value.id !== "string") return false;
+      if (!isRecord(value) || value.error != null || typeof value.id !== "string") return false;
       if (route.split("?")[0].endsWith("/responses")) return value.status === "completed" && Array.isArray(value.output);
       if (route.split("?")[0].endsWith("/messages")) return value.type === "message" && typeof value.stop_reason === "string" && Array.isArray(value.content);
       return Array.isArray(value.choices) && value.choices.length > 0
@@ -844,7 +867,8 @@ async function forwardSanitizedRequest(
     const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
       && /^[A-Z_0-9]{1,40}$/.test(error.code) ? error.code : null;
     options.capture?.("runner.provider_bridge_error", { certainty, status: error instanceof DispatchError ? error.status : null,
-      phase: bridgePhase, upstreamStatus, responseBytes, code,
+      phase: error instanceof ProviderTerminalError ? "provider-terminal" : bridgePhase, upstreamStatus, responseBytes, code, outputTokenLimit,
+      ...(error instanceof ProviderTerminalError ? { providerTerminal: error.terminal } : {}),
       reason: error instanceof DispatchError ? error.message : disconnected.signal.aborted ? "Downstream disconnected."
         : Date.now() >= guard.deadline ? "Provider request deadline exceeded." : "Upstream connection or response consumption failed." });
     if (outgoing.headersSent) { outgoing.destroy(); return; }

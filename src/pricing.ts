@@ -81,6 +81,14 @@ export function estimateRunPriceUsd(run: BenchmarkRun, snapshot: PricingSnapshot
   const candidate = snapshot.candidates.find((entry) => entry.candidate === candidateKey(run));
   const scenario = candidate?.scenarios.find((entry) => entry.id === scenarioId);
   if (!scenarioId || !scenario) return unavailable("Select an explicit saved pricing scenario; no billing default is inferred.");
+  if (run.requestAccounting?.ambiguousRequests && !run.requestAccounting.providerTerminals) {
+    return unavailable("Ambiguous dispatch lacks complete provider metering; missing historical usage cannot be reconstructed.");
+  }
+  if (run.requestAccounting?.providerTerminals
+      && run.requestAccounting.providerTerminals.filter((entry) => entry.terminal.usageStatus === "reported").length
+        + run.requestAccounting.rejectedRequests < run.requestAccounting.physicalRequests) {
+    return unavailable("Some dispatched physical requests lack complete provider token usage; known subtotals cannot price unknown spend.");
+  }
   if (scenario.unavailableReason || !scenario.input || !scenario.output) return unavailable(scenario.unavailableReason ?? "The selected scenario lacks input or output rates.");
   if (scenario.provider === "anthropic" && !anthropicAccounting) return unavailable("Claude input accounting is unverified; choose the labelled SDK-inclusive or native-uncached assumption.");
   const values = Object.fromEntries(meters.map((field) => [field, metric(run.metrics[field === "cachedInput" ? "cacheReadTokens" : field === "cacheWrite" ? "cacheWriteTokens" : `${field}Tokens` as "inputTokens" | "outputTokens"])])) as Record<Meter, number | null>;
@@ -97,7 +105,7 @@ export function estimateRunPriceUsd(run: BenchmarkRun, snapshot: PricingSnapshot
 
 export function sdkReportedCacheShare(run: BenchmarkRun): { ratio: number | null; reason: string | null } {
   const input = metric(run.metrics.inputTokens), reads = metric(run.metrics.cacheReadTokens);
-  if (input === null || reads === null || input === 0 || reads > input) return { ratio: null, reason: "Requires complete SDK input and cache-read counters with positive input and reads not exceeding input." };
+  if (input === null || reads === null || input === 0 || reads > input) return { ratio: null, reason: "Requires captured input and cache-read counters with positive input and reads not exceeding input." };
   return { ratio: reads / input, reason: null };
 }
 

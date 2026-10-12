@@ -150,6 +150,11 @@ checks. Per-attempt limits are 10 physical requests, 100,000 reserved tokens,
 5,000 output tokens/request and five minutes. The USD reservation uses a
 declared protective rate, **not an invoice or guaranteed spend cap**. Adjust
 bounds to your deployment/task before preparing; no automatic retry-until-PASS.
+Responses output limits include reasoning tokens, not just visible text or
+files. These example ceilings are protective limits, not evidence that every
+task can finish within them. See
+[bounded terminal-failure diagnosis](docs/KEYLESS_AUTH.md#bounded-terminal-failure-diagnosis)
+before interpreting an interruption or changing the allowance.
 
 ### 3. Configure Foundry authentication
 
@@ -512,6 +517,8 @@ acquisition still leaves `data-plane-inference: not-verified`.
 | Unknown/disabled coding tool | Run `doctor --verify-runtime`; inspect selected executable/hash, backend and resolved filters. Do not add shell or remove the allowlist |
 | Quickstart/judge asks for `--bounds` | Review the supplied request policy file; this public CLI requirement preserves request/token/output/pacing/deadline limits |
 | Inference returns 401/403 | Confirm token audience, deployment auth support, endpoint-specific inference role and network access; management roles alone are insufficient |
+| HTTP 200 with `provider-terminal` failure | Inspect the first bridge diagnostic's categorical event/status/reason/error code and usage; incomplete is not success or retryable rejection |
+| `provider_output_limit` | Confirm retained `max_output_tokens` terminal evidence; reasoning shares the output allowance. Review finite output/total budgets explicitly in a new cohort, not an automatic replay |
 | Inference returns 404/429 | Check resource/deployment/protocol for 404; check quota and pacing diagnostics for 429, without treating permanent quota as transient |
 | Docker/image or worker probe fails | Review Linux daemon, approved local digest, resource controls and freezing; follow [isolation checks](docs/ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference), never disable isolation as a fallback |
 | Prepared configuration/runtime no longer matches | Prepare a new immutable campaign; do not edit state to bypass provenance checks |

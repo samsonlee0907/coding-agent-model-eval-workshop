@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { refreshPricingSnapshot } from "../src/pricing.js";
+import { refreshPricingSnapshot, estimateRunPriceUsd } from "../src/pricing.js";
 import type { BenchmarkRun, Metric } from "../src/types.js";
+import { providerTerminal } from "../src/provider-stream.js";
 
 const metric = (value: number): Metric<number> => ({ status: "available", value });
 const claudeRun = (): BenchmarkRun => ({
@@ -27,4 +28,14 @@ test("Claude pricing accepts official React comment nodes and captures both writ
   assert.equal(scenarios[0]!.input?.retailPrice, 3);
   assert.equal(scenarios[0]!.output?.retailPrice, 15);
   assert.equal(scenarios[1]!.cacheWrite?.retailPrice, 6);
+  const run = claudeRun(), scenario = scenarios[0].id;
+  run.requestAccounting = { physicalRequests: 1, reservedTokens: 1000, ambiguousRequests: 1, rejectedRequests: 0 };
+  assert.match(estimateRunPriceUsd(run, snapshot, scenario, "sdk-inclusive").unavailableReason!, /historical usage cannot be reconstructed/);
+  const terminal = providerTerminal({ type: "response.incomplete", response: { status: "incomplete", output: [],
+    usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } } }, true)!;
+  run.requestAccounting.providerTerminals = [{ request: 1, terminal }];
+  assert.notEqual(estimateRunPriceUsd(run, snapshot, scenario, "sdk-inclusive").totalUsd, null);
+  run.requestAccounting.physicalRequests = 2;
+  assert.equal(estimateRunPriceUsd(run, snapshot, scenario, "sdk-inclusive").totalUsd, null);
+  assert.match(estimateRunPriceUsd(run, snapshot, scenario, "sdk-inclusive").unavailableReason!, /known subtotals cannot price unknown spend/);
 });

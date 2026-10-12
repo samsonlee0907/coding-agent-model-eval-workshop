@@ -168,6 +168,74 @@ the [recorded dispatch-certainty policy](CAMPAIGNS_AND_PUBLICATION.md#bounds-and
 If you change auth/config/runtime, prepare a **new** campaign rather than
 editing immutable state.
 
+## Bounded terminal-failure diagnosis
+
+An HTTP 200 stream can finish with `response.incomplete`, `response.failed`
+or `error` rather than a completed task. The **first**
+`runner.provider_bridge_error` retains `phase: provider-terminal` plus
+`providerTerminal.eventType`, `responseStatus`, `incompleteReason`,
+`errorCode`, `terminalResponse`, `usageStatus` and available numeric `usage`.
+`outputTokenLimit` is the actual bridge-applied ceiling; a provider's echoed
+`maxOutputTokens` is separate. Unknown categories become `other`, never raw
+messages, request/response payloads, IDs or tokens.
+
+Consistent, framed `response.incomplete` evidence with
+`incompleteReason: max_output_tokens` yields `provider_output_limit` and
+explicit allowance guidance. Content filtering and other terminal failures
+have separate signatures. A missing terminal frame instead yields
+`stream-completion`/`provider_stream_incomplete`; an upstream disconnect
+remains an `upstream-body` failure with a safe network code when available.
+Do not mistake a later synthetic bridge 400/session error for the first cause.
+Neither a terminal incomplete nor a truncated transport is successful,
+explicitly rejected or eligible for automatic replay.
+
+[OpenAI's Responses parameters](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py)
+define `max_output_tokens` as **visible output plus reasoning**.
+[Usage's reasoning count](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_usage.py)
+is a subset of `output_tokens`, not an extra amount to add. A small output
+ceiling with high reasoning may leave no allowance for text or tool calls,
+but that is only a hypothesis until terminal evidence establishes it.
+The general 5,000-token examples are unchanged; they are not universal
+reasoning-headroom recommendations. If the retained reason proves exhaustion,
+review a larger **finite** ceiling together with reserved-token/TPM/deadline
+and protective USD limits in a new cohort. Do not silently lower effort,
+change the task, disable ceilings or reuse ambiguous attempts.
+Use [Azure's Responses guide](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses)
+for deployment/API compatibility; neither successful login nor a local
+terminal fixture certifies the live endpoint.
+
+For a new reader's one-cell diagnostic gate, an explicitly reviewable
+[2,000-output-token profile](../examples/request-bounds.responses-diagnostic.example.json)
+holds a deliberately small allowance for observing the terminal category:
+10 physical requests, 1 MiB/request, 200,000 pessimistically reserved tokens,
+five minutes, 10 RPM and 200,000 TPM. It does **not** promise task completion.
+After README setup/auth/execution-mode steps, **before saving/preparing**, use:
+
+```powershell
+# Fresh one-cell configuration only; never mutate a prepared campaign.
+$spec.id = 'first-run-diagnostic-v1'
+$spec.requestBounds = Get-Content -LiteralPath '.\examples\request-bounds.responses-diagnostic.example.json' -Raw | ConvertFrom-Json
+$spec.bounds.maxRequests = $spec.requestBounds.maxRequests
+$spec.bounds.maxReservedTokens = $spec.requestBounds.maxTokens
+$spec.bounds.maxReservationUsd = 4 # At the example's declared $20/million protective rate, not an invoice.
+$task | Add-Member -NotePropertyName requestBounds -NotePropertyValue $spec.requestBounds -Force
+```
+
+Then follow [README save and first-run commands](../README.md#5-save-the-configuration):
+runtime fake gate, offline prepare, token-only doctor, and the explicitly
+cost-bearing one-cell campaign run. Keep the selected CLI subscription-only
+credential and declared effort unchanged. Stop at the first interruption,
+grade/evidence failure or bound; do not scale.
+
+For diagnosing an **existing** generic failure, retain its task, effort,
+allowance and other bounds in a newly authorized attempt/cohort rather than
+substituting this example. The minimum discriminating live gate is one fresh
+cell that previously failed: record the new first categorical terminal or
+transport failure and stop; if it completes, inspect files and the whole fixed
+round plan. Old generic SSE errors contain no reconstructable terminal body
+or usage, so the original cause remains unknown. No extra inference is
+authorized by this guide.
+
 ## Cost-bearing execution
 
 Continue with [README first-run execution](../README.md#2-run-the-task-and-generate-a-report)

@@ -3,7 +3,9 @@ import test from "node:test";
 import { createServer, request } from "node:http";
 import { RequestGuard, DeploymentAdmission, DispatchError, canRetryRequest, retryDelay } from "../src/request-policy.js";
 import { startRequestSanitizingProxy, dispatchBenchmarkWorkRequests, benchmarkWorkRequests } from "../src/runner.js";
-import { ProviderStream } from "../src/provider-stream.js";
+import { ProviderStream, ProviderTerminalError, providerTerminal } from "../src/provider-stream.js";
+import { deriveMetrics } from "../src/metrics.js";
+import { event } from "./fixtures/events.js";
 
 test("physical request recovery is only for explicit 429 rejection and honors retry headers", () => {
   assert.equal(canRetryRequest("explicitly-rejected", 429), true);
@@ -209,4 +211,104 @@ test("upstream pre-header reset and deadline retain distinct safe causes without
       else assert.equal(events[0].code, "ECONNRESET");
     } finally { await proxy.stop(); await host.close(); }
   }
+});
+
+test("terminal Responses failure categories and usage survive streaming/JSON failures without replay or private payloads", async () => {
+  const usage = { input_tokens: 100, output_tokens: 32, total_tokens: 132,
+    input_tokens_details: { cached_tokens: 40, cache_write_tokens: 10 }, output_tokens_details: { reasoning_tokens: 30 } };
+  const cases = [
+    { type: "response.incomplete", response: { id: "fixture", status: "incomplete", output: [], incomplete_details: { reason: "max_output_tokens" }, max_output_tokens: 32, usage } },
+    { type: "response.incomplete", response: { id: "fixture", status: "incomplete", output: [], incomplete_details: { reason: "content_filter" }, usage } },
+    { type: "response.failed", response: { id: "fixture", status: "failed", output: [], error: { code: "server_error", message: "PRIVATE_PROVIDER_TEXT" }, usage } },
+    { type: "error", code: "context_length_exceeded", message: "PRIVATE_PROVIDER_TEXT" },
+  ];
+  for (const streaming of [true, false]) for (const fixture of cases) {
+    let calls = 0;
+    const data = streaming ? `event: ${fixture.type}\ndata: ${JSON.stringify(fixture)}\n\n`
+      : JSON.stringify("response" in fixture ? fixture.response : { error: { code: fixture.code, message: fixture.message } });
+    const host = await upstream((req, res) => {
+      calls++;
+      const chunks: Buffer[] = [];
+      req.on("data", (chunk: Buffer) => chunks.push(chunk));
+      req.on("end", () => {
+        assert.equal(JSON.parse(Buffer.concat(chunks).toString()).max_output_tokens, 32);
+        res.writeHead(200, { "content-type": streaming ? "text/event-stream" : "application/json" }); res.end(data);
+      });
+    });
+    const guard = new RequestGuard({ maxRequests: 2, maxRequestBytes: 10000, maxTokens: 10000, maxOutputTokens: 32,
+      deadlineMs: 5000, requestsPerMinute: 10, tokensPerMinute: 10000 });
+    const captured: Array<{ type: string; data: import("../src/types.js").JsonRecord }> = [];
+    const proxy = await startRequestSanitizingProxy(host.base, (body) => body, {
+      guard, wireApi: "responses", retries: 2, capture(type, data) { captured.push({ type, data }); },
+    });
+    try {
+      await post(proxy.baseUrl).then((response) => response.text()).catch(() => undefined);
+      const first = captured.find((entry) => entry.type === "runner.provider_bridge_error")!.data;
+      assert.equal(first.phase, "provider-terminal");
+      assert.equal(first.upstreamStatus, 200); assert.equal(first.responseBytes, Buffer.byteLength(data));
+      assert.equal(first.certainty, "possibly-processed"); assert.equal(first.outputTokenLimit, 32);
+      const terminal = guard.accounting.providerTerminals?.[0].terminal;
+      assert.ok(terminal);
+      assert.equal(terminal.eventType, fixture.type === "error" && !streaming ? "provider.error" : fixture.type);
+      assert.deepEqual(first.providerTerminal, terminal);
+      assert.equal(terminal.responseStatus, "response" in fixture ? fixture.response.status : null);
+      assert.equal(terminal.usageStatus, fixture.type === "error" ? "missing" : "reported");
+      assert.equal(terminal.usage?.reasoningTokens ?? null, fixture.type === "error" ? null : 30);
+      assert.equal(terminal.usage?.outputTokens ?? null, fixture.type === "error" ? null : 32);
+      if (terminal.incompleteReason === "max_output_tokens") assert.match(String(first.reason), /includes reasoning and visible output/);
+      const normalized = captured.map((entry, index) => ({ ...event(index + 1, entry.type, "2026-10-12T00:00:00Z"), data: entry.data }));
+      const metrics = deriveMetrics(normalized, []);
+      assert.equal(metrics.inputTokens.value, fixture.type === "error" ? null : 100);
+      assert.equal(metrics.outputTokens.value, fixture.type === "error" ? null : 32);
+      assert.equal(metrics.cost.value, null);
+      assert.equal(guard.cleanlySettled(), false);
+      assert.equal((await post(proxy.baseUrl, { model: "fixture", input: "not a retry" })).status, 400);
+      assert.equal(calls, 1); assert.equal(guard.accounting.physicalRequests, 1);
+      assert.equal(guard.accounting.ambiguousRequests, 1); assert.equal(guard.accounting.rejectedRequests, 0);
+      assert.doesNotMatch(JSON.stringify(captured), /PRIVATE_PROVIDER_TEXT|authorization|accessToken/);
+    } finally { await proxy.stop(); await host.close(); }
+  }
+});
+
+test("provider terminal metadata maps unknown categories safely and never infers missing/malformed usage or doubles reasoning", () => {
+  const terminal = providerTerminal({ type: "response.incomplete", response: { status: "incomplete", output: [],
+    incomplete_details: { reason: "PRIVATE_REASON" }, error: { code: "SECRET_TOKEN", message: "PRIVATE_PROVIDER_TEXT" },
+    usage: { input_tokens: 10, output_tokens: 5, total_tokens: 15, output_tokens_details: { reasoning_tokens: 4 } } } }, true)!;
+  assert.equal(terminal.incompleteReason, "other"); assert.equal(terminal.errorCode, "other");
+  assert.equal(terminal.usage?.outputTokens, 5); assert.equal(terminal.usage?.reasoningTokens, 4);
+  assert.doesNotMatch(JSON.stringify(terminal), /PRIVATE|SECRET/);
+  for (const usage of [null, "PRIVATE_USAGE", { input_tokens: -1, output_tokens: 5 }, { input_tokens: 10, output_tokens: 5, total_tokens: 99 },
+    { input_tokens: 10, output_tokens: 5, output_tokens_details: { reasoning_tokens: 6 } }]) {
+    const evidence = providerTerminal({ type: "response.failed", response: { status: "failed", output: [], usage } }, true)!;
+    assert.equal(evidence.usage, null);
+    assert.equal(evidence.usageStatus, usage === null ? "missing" : "invalid");
+  }
+  const partial = providerTerminal({ type: "response.failed", response: { status: "failed", output: [], usage: { output_tokens: 5 } } }, true)!;
+  assert.equal(partial.usageStatus, "partial"); assert.equal(partial.usage?.inputTokens, null);
+  const unframed = new ProviderStream("/responses");
+  assert.throws(() => { unframed.push(Buffer.from('data: {"type":"response.incomplete","response":{"status":"incomplete"}}\n')); unframed.finish(); }, /inside an SSE event/);
+  const malformed = new ProviderStream("/responses");
+  assert.throws(() => malformed.push(Buffer.from('data: {"type":"response.incomplete"}\n\n')),
+    (error: unknown) => error instanceof ProviderTerminalError && !error.terminal.terminalResponse && !/allowance exhausted/i.test(error.message));
+  const headerOnly = new ProviderStream("/responses");
+  assert.throws(() => headerOnly.push(Buffer.from('event: error\ndata: {"code":"server_error","message":"PRIVATE_TEXT"}\n\n')),
+    (error: unknown) => error instanceof ProviderTerminalError && error.terminal.errorCode === "server_error" && !/PRIVATE_TEXT/.test(error.message));
+  const contradictory = new ProviderStream("/responses");
+  assert.throws(() => contradictory.push(Buffer.from('event: response.incomplete\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n')), /types disagree/);
+  const invalidSuccess = new ProviderStream("/responses");
+  assert.throws(() => invalidSuccess.push(Buffer.from('data: {"type":"response.completed","response":{"status":"completed","output":[],"error":{"code":"server_error"}}}\n\n')),
+    (error: unknown) => error instanceof ProviderTerminalError && !error.terminal.terminalResponse);
+});
+
+test("valid JSON Responses completion accepts nullable error and retains provider usage", async () => {
+  const host = await upstream((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ id: "fixture", status: "completed", error: null, output: [],
+      usage: { input_tokens: 100, output_tokens: 5, total_tokens: 105 } }));
+  });
+  const guard = new RequestGuard(), proxy = await startRequestSanitizingProxy(host.base, (body) => body, { guard, wireApi: "responses" });
+  try {
+    assert.equal((await post(proxy.baseUrl)).status, 200); assert.equal(guard.cleanlySettled(), true);
+    assert.equal(guard.accounting.providerTerminals?.[0].terminal.usage?.totalTokens, 105);
+  } finally { await proxy.stop(); await host.close(); }
 });

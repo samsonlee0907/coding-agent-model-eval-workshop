@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { immutableContractHash, comparableBaselineSignature, compareRunContractSet } from "./contract.js";
 import { candidateKey } from "./pricing.js";
 import type { BenchmarkRun, RunContract } from "./types.js";
+import { providerTerminalSchema } from "./provider-stream.js";
 
 export const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const id = z.string().min(1).max(500);
@@ -54,6 +55,7 @@ const attemptSchema = z.object({
   }).strict(),
   accounting: z.object({
     reservedTokens: optionalNumber, ambiguousRequests: optionalNumber, rejectedRequests: optionalNumber,
+    providerTerminals: z.array(z.object({ request: z.number().int().positive(), terminal: providerTerminalSchema }).strict()).optional(),
   }).strict(),
   reservation: z.object({ tokens: z.number().finite().nonnegative(), requests: z.number().finite().nonnegative(), usd: z.number().finite().nonnegative() }).strict().optional(),
   pricing: z.object({ snapshotHash: sha256Schema, refreshedAt: date, currency: z.literal("USD"),
@@ -189,7 +191,9 @@ export function assertBenchmarkRun(value: unknown): asserts value is BenchmarkRu
     outcome: z.object({ class: z.enum(["resolved", "unresolved", "empty_patch", "rate_limit", "timeout", "tool_container_failure", "harness_failure"]), category: id, detail: z.string() }),
     runnerError: z.string().nullable(),
     executionStatus: z.enum(["completed", "interrupted"]).optional(),
-    requestAccounting: z.object({ physicalRequests: count, reservedTokens: count, ambiguousRequests: count, rejectedRequests: count }).strict().optional(),
+    requestAccounting: z.object({ physicalRequests: count, reservedTokens: count, ambiguousRequests: count, rejectedRequests: count,
+      providerTerminals: z.array(z.object({ request: z.number().int().positive(), terminal: providerTerminalSchema }).strict()).optional(),
+    }).strict().optional(),
     workspaceHash: sha256Schema.optional(),
     conformance: conformanceEvidenceSchema.optional(),
     validation: z.object({ exitCode: z.number().int().nullable(), timedOut: z.boolean(), errorMessage: z.string().nullable() }).passthrough().nullable(),
@@ -198,6 +202,11 @@ export function assertBenchmarkRun(value: unknown): asserts value is BenchmarkRu
   if (run.conformance && new Set(run.conformance.checks.map((c) => c.id)).size !== run.conformance.checks.length) throw new TypeError("Duplicate conformance check IDs.");
   if (run.executionStatus === "completed" && run.runnerError !== null) throw new TypeError("Completed execution contradicts its runner error.");
   if (run.executionStatus === "completed" && run.requestAccounting?.ambiguousRequests) throw new TypeError("Completed execution contradicts ambiguous dispatch accounting.");
+  const terminals = run.requestAccounting?.providerTerminals;
+  if (terminals && (new Set(terminals.map((entry) => entry.request)).size !== terminals.length
+      || terminals.some((entry) => entry.request > run.requestAccounting!.physicalRequests))) {
+    throw new TypeError("Provider terminal metering must bind unique dispatched physical requests.");
+  }
   if (immutableContractHash(run.contract) !== run.contractHash) throw new TypeError(`Contract hash mismatch for run ${run.runId}.`);
 }
 
@@ -249,6 +258,7 @@ export function attemptFromRun(
     accounting: {
       reservedTokens: run.requestAccounting?.reservedTokens ?? null, ambiguousRequests: run.requestAccounting?.ambiguousRequests ?? null,
       rejectedRequests: run.requestAccounting?.rejectedRequests ?? null,
+      ...(run.requestAccounting?.providerTerminals ? { providerTerminals: run.requestAccounting.providerTerminals } : {}),
     },
     ...(run.recordedPricing ? { pricing: {
       snapshotHash: run.recordedPricing.snapshotHash, refreshedAt: run.recordedPricing.refreshedAt, currency: run.recordedPricing.currency,
@@ -274,7 +284,10 @@ export function loadMetadataReplay(run: BenchmarkRun): Pick<EvidenceAttempt, "re
     const metadata = event.eventType === "assistant.usage" ? {
       model: name(d.model), inputTokens: number(d.inputTokens), outputTokens: number(d.outputTokens),
       cacheReadTokens: number(d.cacheReadTokens), cacheWriteTokens: number(d.cacheWriteTokens),
-    } : event.eventType === "tool.execution_start" ? { toolName: name(d.toolName ?? d.name), toolCallId: name(d.toolCallId) }
+    } : event.eventType === "runner.provider_terminal" ? (() => {
+      const terminal = providerTerminalSchema.safeParse(d.terminal);
+      return terminal.success ? { request: number(d.request), terminal: terminal.data } : null;
+    })() : event.eventType === "tool.execution_start" ? { toolName: name(d.toolName ?? d.name), toolCallId: name(d.toolCallId) }
       : event.eventType === "tool.execution_complete" ? { toolCallId: name(d.toolCallId), success: boolean(d.success) }
       : event.eventType === "runner.validation_finished" ? { exitCode: number(d.exitCode), timedOut: boolean(d.timedOut), durationMs: number(d.durationMs) }
       : ["runner.run_started", "runner.run_finished", "assistant.turn_start", "session.idle"].includes(event.eventType) ? { event: event.eventType } : null;
