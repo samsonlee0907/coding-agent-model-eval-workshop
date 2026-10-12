@@ -147,7 +147,8 @@ test("onboarding navigation resolves existing local documentation and headings",
     join("scenarios", "in-memory-ordering-system", "task.md")];
   let checked = 0;
   for (const file of files) {
-    for (const link of readFileSync(file, "utf8").matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
+    const prose = readFileSync(file, "utf8").replace(/```[\s\S]*?```/g, "");
+    for (const link of prose.matchAll(/\[[^\]]*\]\(([^)]+)\)/g)) {
       const target = link[1];
       if (/^https?:/.test(target)) continue;
       const [path, anchor] = target.split("#");

@@ -186,6 +186,15 @@ export interface FoundryProviderConfig {
   type: FoundryProviderType;
   wireApi?: "completions" | "responses";
   auth?: FoundryAuth;
+  capacity?: {
+    source: "administrator-declared" | "azure-management-observation";
+    observedAt: string;
+    endpoint: string;
+    deployment: string;
+    wireApi: "responses" | "completions" | "messages";
+    requestsPerMinute: number;
+    tokensPerMinute: number;
+  };
 }
 
 export type FoundryAuth =
@@ -208,6 +217,7 @@ export interface FoundryProviderIdentity {
   requestAdaptation: "openai-null-refusal-sanitizer" | "strip-temperature";
   wireApi?: "completions" | "responses";
   auth?: FoundryAuth;
+  capacity?: Omit<NonNullable<FoundryProviderConfig["capacity"]>, "endpoint"> & { endpointFingerprint: string };
 }
 
 export interface BenchmarkRound {
@@ -601,6 +611,7 @@ export interface RunDiagnostics {
       | "provider_resource_not_found"
       | "azure_key_auth_disabled"
       | "permanent_quota"
+      | "provider_rate_limit"
       | "provider_output_limit"
       | "provider_content_filter"
       | "provider_terminal_failure"

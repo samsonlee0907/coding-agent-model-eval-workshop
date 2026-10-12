@@ -4,9 +4,9 @@ import { createServer, request as httpRequest } from "node:http";
 import https from "node:https";
 import { syncBuiltinESMExports } from "node:module";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { CopilotClient, RuntimeConnection, ToolSet, defineTool } from "@github/copilot-sdk";
 import { bearerTokenProvider } from "../src/auth.js";
 import { runBenchmark, startRequestSanitizingProxy, resolveCopilotCliPath, createRunDiagnostics } from "../src/runner.js";
@@ -20,6 +20,58 @@ import { deriveMetrics } from "../src/metrics.js";
 import { event } from "./fixtures/events.js";
 import type { JsonRecord } from "../src/types.js";
 
+test("public doctor measures actual initial request shape and blocks small conservative capacity without task execution", { timeout: 120000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "bt-request-fit-"));
+  try {
+    const config = fixtureConfig(root, "public-fit", "fixture-model");
+    config.contract.runtime = readRuntimeIdentity();
+    config.contract.execution.tools = ["read", "edit"];
+    config.contract.execution.sessionTimeoutMs = 900000;
+    config.contract.task.prompt = "Read input.txt and create result.txt containing OK. PRIVATE_LOCAL_PROBE_TEXT";
+    config.contract.task.validationCommand = "THIS_VALIDATOR_MUST_NEVER_RUN";
+    config.contract.foundryProvider.auth = { mode: "entra", credential: "azure-cli", subscriptionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" };
+    config.contract.foundryProvider.capacity = {
+      source: "administrator-declared", observedAt: "2026-10-13T00:00:00Z",
+      endpoint: "https://fixture.services.ai.azure.com", deployment: "fixture-model", wireApi: "responses",
+      requestsPerMinute: 12, tokensPerMinute: 12000,
+    };
+    config.requestBounds = { maxRequests: 10, maxRequestBytes: 1048576, maxTokens: 100000, maxOutputTokens: 2000,
+      deadlineMs: 900000, requestsPerMinute: 1, tokensPerMinute: 8000 };
+    writeFileSync(join(root, "input.txt"), "public fixture\n");
+    const path = join(root, "task.json"); writeFileSync(path, JSON.stringify(config));
+    const env = { ...process.env, FOUNDRY_ENDPOINT: config.contract.foundryProvider.capacity.endpoint, FOUNDRY_API_KEY: "",
+      AZURE_CONFIG_DIR: join(root, "no-real-identity") };
+    const invoke = () => execFileSync(process.execPath, [resolve("dist", "doctor-cli.js"), "--config", path, "--verify-request-fit"],
+      { encoding: "utf8", env, timeout: 60000 });
+    let output = "";
+    try { invoke(); assert.fail("Small capacity must fail the public doctor gate."); }
+    catch (error) {
+      assert.ok(error && typeof error === "object" && "status" in error && "stdout" in error);
+      assert.equal(error.status, 2); output = String(error.stdout);
+    }
+    const failed = JSON.parse(output);
+    const proof = failed.requestFitVerification;
+    assert.equal(proof.status, "blocked");
+    assert.equal(proof.reservedTokens, proof.serializedRequestBytes + 2000);
+    assert.ok(proof.reservedTokens > 12000);
+    assert.equal(proof.prospectiveTokenHeadroom, 8000 - proof.reservedTokens);
+    assert.equal(proof.runtime.cliSha256, readRuntimeIdentity().cliSha256);
+    assert.equal(proof.scope, "initial-request-only"); assert.equal(proof.estimator, "serialized-utf8-bytes-plus-output-ceiling");
+    assert.equal(proof.cloudInference, "not-dispatched"); assert.equal(proof.taskTools, "not-executed");
+    assert.equal(proof.grading, "not-performed"); assert.equal(proof.laterRequests, "not-verified");
+    assert.equal(failed.checks.find((check: { stage: string }) => check.stage === "credential-acquisition").status, "not-verified");
+    assert.equal(readFileSync(join(root, "input.txt"), "utf8"), "public fixture\n");
+    assert.equal(existsSync(join(root, "result.txt")), false);
+    assert.doesNotMatch(output, /PRIVATE_LOCAL_PROBE_TEXT|THIS_VALIDATOR|fixture\.services|local-request-fit-key/);
+    config.contract.foundryProvider.capacity.tokensPerMinute = 1000000;
+    config.requestBounds.tokensPerMinute = 1000000;
+    writeFileSync(path, JSON.stringify(config));
+    const fit = JSON.parse(invoke()).requestFitVerification;
+    assert.equal(fit.status, "fit"); assert.ok(fit.prospectiveTokenHeadroom > 0);
+    assert.equal(fit.outputTokenLimit, 2000); assert.equal(fit.liveSharedHeadroom, "unknown");
+    assert.equal(config.contract.execution.reasoningEffort, "high");
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 test("selected SDK/CLI fails closed on metered incomplete/failed/error terminals and unmetered partial 200 without cloud", { timeout: 120000 }, async () => {
   const root = mkdtempSync(join(tmpdir(), "bt-terminal-"));
   const cliPath = resolveCopilotCliPath(process.env), runtime = readRuntimeIdentity();
@@ -28,12 +80,13 @@ test("selected SDK/CLI fails closed on metered incomplete/failed/error terminals
     connection: RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined) });
   try {
     await client.start();
-    for (const mode of ["max_output_tokens", "content_filter", "failed", "error", "partial"] as const) {
+    for (const mode of ["max_output_tokens", "content_filter", "failed", "error", "rate_limit", "partial"] as const) {
       let calls = 0;
       const captured: Array<{ type: string; data: JsonRecord }> = [];
       const usage = { input_tokens: 125, output_tokens: 32, total_tokens: 157,
         input_tokens_details: { cached_tokens: 20, cache_write_tokens: 0 }, output_tokens_details: { reasoning_tokens: 24 } };
-      const terminal = mode === "error" ? { type: "error", code: "server_error", message: "PRIVATE_TERMINAL_TEXT", sequence_number: 1 }
+      const terminal = mode === "error" || mode === "rate_limit"
+        ? { type: "error", code: mode === "rate_limit" ? "rate_limit_exceeded" : "server_error", message: "PRIVATE_TERMINAL_TEXT", sequence_number: 1 }
         : { type: mode === "failed" ? "response.failed" : "response.incomplete", sequence_number: 1,
           response: { id: "fixture-terminal", object: "response", status: mode === "failed" ? "failed" : "incomplete",
             output: [], usage, max_output_tokens: 32,
@@ -74,7 +127,7 @@ test("selected SDK/CLI fails closed on metered incomplete/failed/error terminals
         assert.equal(calls, 1); assert.equal(guard.accounting.physicalRequests, 1);
         assert.equal(guard.accounting.ambiguousRequests, 1); assert.equal(guard.accounting.rejectedRequests, 0);
         assert.equal(guard.cleanlySettled(), false);
-        const metered = !["error", "partial"].includes(mode);
+        const metered = !["error", "rate_limit", "partial"].includes(mode);
         assert.equal(guard.accounting.providerTerminals?.[0].terminal.usage?.outputTokens ?? null, metered ? 32 : null);
         const normalized = captured.map((entry, index) => ({ ...event(index + 1, entry.type, "2026-10-12T00:00:00Z"), data: entry.data }));
         const metrics = deriveMetrics(normalized, []);
@@ -83,9 +136,13 @@ test("selected SDK/CLI fails closed on metered incomplete/failed/error terminals
         const diagnostics = createRunDiagnostics(normalized, runtime, [], "synthetic downstream 400 query fallout");
         assert.equal(diagnostics.providerFailure.httpStatus, 200);
         assert.deepEqual(diagnostics.providerFailure.bridge, first);
-        assert.equal(diagnostics.providerFailure.signature, mode === "max_output_tokens" ? "provider_output_limit"
+        assert.equal(diagnostics.providerFailure.signature, mode === "rate_limit" ? "provider_rate_limit" : mode === "max_output_tokens" ? "provider_output_limit"
           : mode === "content_filter" ? "provider_content_filter" : mode === "partial" ? "provider_stream_incomplete" : "provider_terminal_failure");
         if (mode === "max_output_tokens") assert.match(diagnostics.providerFailure.message!, /allowance exhausted/);
+        if (mode === "rate_limit") {
+          assert.match(diagnostics.providerFailure.message!, /RPM\/TPM.*cooldown.*unknown/);
+          assert.doesNotMatch(diagnostics.providerFailure.message!, /allowance exhausted|RBAC|definitely rejected/);
+        }
         assert.doesNotMatch(JSON.stringify(captured), /PRIVATE_TERMINAL_TEXT|fixture-only-key/);
       } finally {
         await proxy.stop();

@@ -45,7 +45,10 @@ export class DeploymentAdmission {
   constructor(private readonly clock: PolicyClock = realClock) {}
   admit(key: string, tokens: number, rpm: number, tpm: number, deadline: number): Promise<void> {
     const operation = (this.chains.get(key) ?? Promise.resolve()).then(async () => {
-      if (tokens > tpm) throw new DispatchError("Single request token reservation exceeds deployment TPM bound.", "not-dispatched");
+      if (tokens > tpm) throw new DispatchError(
+        `Single request conservative reservation ${tokens} exceeds local deployment TPM bound ${tpm}. It includes serialized request bytes (SDK system/context/tool schemas) plus the output ceiling, not billed tokens. Pacing/cooldown cannot shrink it. Review a separately declared supported request profile or sufficient deployment capacity; do not inflate TPM or use unverified tokenizer/bytes-per-token heuristics.`,
+        "not-dispatched",
+      );
       while (true) {
         const now = this.clock.now();
         if (now >= deadline) throw new DispatchError("Request admission deadline exceeded.", "not-dispatched");

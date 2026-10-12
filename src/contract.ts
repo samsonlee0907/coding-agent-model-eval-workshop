@@ -36,6 +36,7 @@ export function compareRunContracts(left: RunContract, right: RunContract): Cont
     ...diff("foundryProvider.type", left.foundryProvider?.type ?? null, right.foundryProvider?.type ?? null),
     ...diff("foundryProvider.endpointFingerprint", left.foundryProvider?.endpointFingerprint ?? null, right.foundryProvider?.endpointFingerprint ?? null),
     ...diff("foundryProvider.auth", left.foundryProvider?.auth ?? { mode: "key" }, right.foundryProvider?.auth ?? { mode: "key" }),
+    ...diff("foundryProvider.capacity", capacityComparison(left), capacityComparison(right)),
   ];
   return { strictlyComparable: drift.length === 0, drift };
 }
@@ -89,8 +90,17 @@ export function comparableBaselineSignature(contract: RunContract): string | nul
       auth: contract.foundryProvider?.auth ?? { mode: "key" },
       requestAdaptation: contract.foundryProvider?.requestAdaptation ?? "none",
       wireApi: contract.foundryProvider?.wireApi ?? "completions",
+      ...(contract.foundryProvider?.capacity ? { capacity: capacityComparison(contract) } : {}),
     },
   });
+}
+
+function capacityComparison(contract: RunContract) {
+  const capacity = contract.foundryProvider?.capacity;
+  return capacity ? {
+    endpointFingerprint: capacity.endpointFingerprint, wireApi: capacity.wireApi,
+    requestsPerMinute: capacity.requestsPerMinute, tokensPerMinute: capacity.tokensPerMinute,
+  } : null;
 }
 
 export function createComparisonContract(

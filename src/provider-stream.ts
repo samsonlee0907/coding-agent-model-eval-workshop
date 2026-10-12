@@ -48,7 +48,9 @@ export type ProviderTerminalEvidence = z.infer<typeof providerTerminalSchema>;
 
 export class ProviderTerminalError extends DispatchError {
   constructor(public readonly terminal: ProviderTerminalEvidence) {
-    const guidance = terminal.terminalResponse && terminal.incompleteReason === "max_output_tokens"
+    const guidance = terminal.errorCode === "rate_limit_exceeded"
+      ? "Provider rate limit signaled after dispatch. Review deployment-specific RPM/TPM, short-window pacing and shared traffic; allow cooldown before a separately authorized new attempt. Processing and usage may be unknown."
+      : terminal.terminalResponse && terminal.incompleteReason === "max_output_tokens"
       ? "Output allowance exhausted. maxOutputTokens includes reasoning and visible output; explicitly review a finite allowance and total token budget in a new cohort."
       : terminal.incompleteReason === "content_filter" || terminal.errorCode === "content_filter"
         ? "Provider content filtering interrupted generation."

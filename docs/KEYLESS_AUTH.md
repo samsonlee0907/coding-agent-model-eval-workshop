@@ -134,6 +134,116 @@ resource inference role through your organization; role propagation and
 private DNS/VNet connectivity can also affect access. No role-assignment or
 resource-modification commands are part of this guide.
 
+## Deployment capacity and pacing
+
+Before paid execution, confirm the actual resource deployment's assigned
+RPM/TPM, model, SKU/region and shared traffic with its administrator. Do not
+substitute subscription-wide quota, a model context limit, historic campaign
+capacity or an example policy. Capacity-unit RPM/TPM ratios vary by model/SKU;
+`sku.capacity` alone is not a universal token-rate conversion.
+
+If authorized to read that resource's management metadata, this optional
+**read-only network operation** uses the explicitly selected subscription;
+it neither performs inference nor changes `az` defaults:
+
+```powershell
+$resourceGroup = 'REPLACE_WITH_RESOURCE_GROUP'
+$resourceName = 'REPLACE_WITH_RESOURCE_NAME'
+az cognitiveservices account deployment show --subscription $subscriptionId --resource-group $resourceGroup --name $resourceName --deployment-name $deployment --query '{sku:sku,model:properties.model,rateLimits:properties.rateLimits}' --output json
+```
+
+The command/arguments exist in [Azure CLI 2.65.0](https://github.com/Azure/azure-cli/blob/azure-cli-2.65.0/src/azure-cli/azure/cli/command_modules/cognitiveservices/commands.py).
+Management read permission is separate from token acquisition and inference
+permission. Missing/empty `rateLimits` is **unknown**, not unlimited or zero;
+ask the administrator/portal for the deployment-specific values. No management
+query is performed by `doctor` or this repository's offline examples.
+
+Choose `requestBounds.requestsPerMinute` and `tokensPerMinute` within your
+approved share of both limits, leaving headroom for other clients. Set them
+before saving/preparing and mirror the policy for task `doctor` checks as in
+[README setup](../README.md#check-deployment-capacity-before-paid-execution).
+That setup attaches `foundryProvider.capacity`: an administrator declaration
+or management observation with timestamp, canonical endpoint, exact deployment,
+wire API and positive observed RPM/TPM. Campaign preparation and `doctor`
+reject mismatched bindings or local ceilings above the observation. Actual
+run admission checks the environment endpoint again before acquisition/dispatch.
+Prepared state pins the observation; run identity retains only its endpoint
+fingerprint. Observations can become stale and do not measure competing traffic.
+Existing unbound legacy configs remain supported but capacity is `not-verified`,
+not implicitly unlimited. For new paid runs, bind the reviewed observation.
+The supplied policies (including 10 RPM / 200,000 TPM in the diagnostic file)
+are finite **local examples**, not discovered quota or safe universal defaults.
+
+The controller uses pessimistic input/output reservations and a rolling
+one-minute window shared within one campaign process/deployment lane. It
+allows requests close together until a minute bound is reached; it does not
+evenly space requests, coordinate independent processes or track remaining
+Azure capacity. Azure may enforce shorter RPM windows and estimated-token
+TPM, so even limits below an allocation cannot certify freedom from throttling.
+Billing usage is not Azure's admission estimate. If one local reservation
+exceeds the chosen TPM or cannot be admitted before the finite deadline, stop;
+do not inflate the TPM setting above the allocation merely to bypass a guard.
+
+See Microsoft's [quota and rate-limit guide](https://learn.microsoft.com/azure/ai-foundry/openai/how-to/quota)
+for model-dependent ratios, short-window bursts, estimated-token admission,
+shared deployment limits and reset/retry headers. For a post-dispatch stream
+throttle, stop the lane and review capacity/traffic with the administrator.
+Allow the applicable cooldown before a separately authorized fresh attempt;
+no universal cooldown duration is inferred when reset information is absent.
+Changing pacing requires a new immutable cohort, not editing old prepared state.
+
+## Initial request-fit and capacity blockers
+
+Capacity-compatible RPM/TPM alone does not make each request admissible.
+The toolkit retains its conservative **entire serialized UTF-8 request bytes
+plus declared output ceiling** reservation. This includes SDK system/context
+and tool schemas, not just the task prompt. It is a protective estimate,
+**not** billable tokens, Azure's admission estimator or a model tokenizer.
+Reasoning still shares the declared output ceiling.
+
+After saving configuration, before paid dispatch:
+
+```powershell
+npm run doctor -- --config "$work\text-task.json" --verify-request-fit
+if ($LASTEXITCODE -ne 0) { throw 'Initial request-fit blocked/unverified; no paid gate.' }
+```
+
+The actual selected SDK/CLI serializes the **unchanged initial task** using
+production session options and request shaping to a bounded localhost peer.
+No Entra/key acquisition, task tool, validator or model inference is performed.
+The metadata-only `requestFitVerification` records runtime/backend/filter
+identity, request/prompt/instructions/policy hashes, exact serialized bytes,
+conservative reservation, effective output ceiling, local TPM and prospective
+headroom. A blocked result exits 2. Positive initial headroom is **not**
+certification of later context/tool results, relocated workspace shape or
+instantaneous live/shared capacity; real requests still face admission.
+The probe currently supports trusted-local OpenAI Responses without MCP only.
+Isolated/other-protocol shape probing is explicitly unverified, never downgraded.
+
+If a reservation is individually larger than the configured local TPM, the
+real bridge rejects it at **zero physical dispatches**, with the reservation,
+ceiling and an actionable SDK-context/request-shape explanation. Waiting,
+lower concurrency or a longer deadline cannot shrink that request. A deployment
+may serve the smaller actual tokenized input while this toolkit still blocks
+under its deliberately conservative policy.
+
+There is no supported model/protocol-specific tokenizer here. Owner
+[tiktoken mappings](https://github.com/openai/tiktoken/blob/main/tiktoken/model.py)
+are not proof that an arbitrary deployment alias uses an encoding, nor a
+complete Responses framing estimate. Do not introduce bytes/4, unchecked
+aliases or previous observed usage as optimistic calibration. If unchanged
+SDK/default-agent context cannot fit, use sufficient assigned capacity on an
+existing compatible deployment, or separately develop/review an explicit
+compact context/tool profile with real coding and request-fit acceptance.
+Replacing SDK system instructions is a behavioral change, not a hidden
+fallback. No universally runnable low-capacity profile is claimed.
+The owner [system-message types](https://github.com/github/copilot-sdk/blob/main/nodejs/src/types.ts)
+explicitly warn that full replacement removes SDK-managed guardrails.
+That option is not exposed as a quota workaround here. Pruning presentation
+sections while preserving managed safety, repository/runtime policies and
+completion instructions can still leave an individually unfit request.
+Neither strategy is silently applied to make a failing profile look runnable.
+
 ## Preflight and errors
 
 After saving the README example, run these checks separately:
@@ -162,6 +272,7 @@ Expect `credential-acquisition: pass` if acquisition works and
 | 403 | Check endpoint-specific resource inference permission and private-network access, not just subscription/project roles |
 | 404 | Check resource name, exact deployment name and selected protocol |
 | 429 | Review quota/pacing/retry diagnostics; permanent quota is not transient |
+| HTTP 200 then `provider_rate_limit` | Post-dispatch `rate_limit_exceeded`; review deployment capacity, shared traffic and cooldown. This is not RBAC/output exhaustion or an explicitly rejected retryable HTTP 429 |
 
 Do not retry ambiguous dispatch simply to test permissions. Resume follows
 the [recorded dispatch-certainty policy](CAMPAIGNS_AND_PUBLICATION.md#bounds-and-dispatch-certainty).
@@ -189,6 +300,16 @@ Do not mistake a later synthetic bridge 400/session error for the first cause.
 Neither a terminal incomplete nor a truncated transport is successful,
 explicitly rejected or eligible for automatic replay.
 
+An `error` or failed-response terminal carrying the categorical
+`rate_limit_exceeded` yields **`provider_rate_limit`**, including after HTTP
+200. It is a provider throttle signal, not evidence of output-ceiling
+exhaustion, RBAC denial or which RPM/TPM window was exceeded. It remains
+`possibly-processed`: completed earlier physical requests keep their captured
+usage, but the throttled request's missing usage stays unknown. Neither a
+`retry-after` header nor cooldown guidance makes it an explicitly rejected
+request. Only the existing certified pre-processing HTTP 429 policy permits
+bounded physical-request recovery; the stream error never triggers replay.
+
 [OpenAI's Responses parameters](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_create_params.py)
 define `max_output_tokens` as **visible output plus reasoning**.
 [Usage's reasoning count](https://github.com/openai/openai-python/blob/main/src/openai/types/responses/response_usage.py)
@@ -214,7 +335,11 @@ After README setup/auth/execution-mode steps, **before saving/preparing**, use:
 ```powershell
 # Fresh one-cell configuration only; never mutate a prepared campaign.
 $spec.id = 'first-run-diagnostic-v1'
-$spec.requestBounds = Get-Content -LiteralPath '.\examples\request-bounds.responses-diagnostic.example.json' -Raw | ConvertFrom-Json
+$diagnosticBounds = Get-Content -LiteralPath '.\examples\request-bounds.responses-diagnostic.example.json' -Raw | ConvertFrom-Json
+# Preserve the already reviewed deployment pacing; the file's values are examples.
+$diagnosticBounds.requestsPerMinute = $spec.requestBounds.requestsPerMinute
+$diagnosticBounds.tokensPerMinute = $spec.requestBounds.tokensPerMinute
+$spec.requestBounds = $diagnosticBounds
 $spec.bounds.maxRequests = $spec.requestBounds.maxRequests
 $spec.bounds.maxReservedTokens = $spec.requestBounds.maxTokens
 $spec.bounds.maxReservationUsd = 4 # At the example's declared $20/million protective rate, not an invoice.

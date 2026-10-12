@@ -7,12 +7,22 @@ import { resolveFoundryProvider } from "./runner.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
 import { executeDocker } from "./controlled-worker.js";
 import { inferenceDiagnostic } from "./auth.js";
-import { verifyRuntime } from "./runtime-verification.js";
+import { verifyRuntime, verifyRequestFit } from "./runtime-verification.js";
+import { assertCapacityPolicy, capacityIdentity } from "./deployment-capacity.js";
 
-export async function doctor(configPath: string, acquireAuth = false, verify = false, allowContainerProbe = false) {
+export async function doctor(configPath: string, acquireAuth = false, verify = false, allowContainerProbe = false, verifyFit = false) {
   const config = benchmarkConfigSchema.parse(JSON.parse(readFileSync(configPath, "utf8")));
   const workspace = resolve(dirname(configPath), config.workspacePath);
   const checks: Array<{ stage: string; status: "pass" | "fail" | "not-verified"; detail: string }> = [];
+  try {
+    assertCapacityPolicy(config, process.env.FOUNDRY_ENDPOINT);
+    checks.push({ stage: "deployment-capacity", status: config.contract.foundryProvider.capacity ? "pass" : "not-verified",
+      detail: config.contract.foundryProvider.capacity
+        ? "User-supplied endpoint/deployment/wire observation and local pacing checked. No live quota or shared headroom verified."
+        : "No deployment capacity observation bound. Example RPM/TPM is not discovered quota; obtain an approved share before paid execution." });
+  } catch (error) {
+    checks.push({ stage: "deployment-capacity", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+  }
   try {
     if (!existsSync(workspace)) throw new Error("Workspace is missing.");
     accessSync(workspace, constants.R_OK | constants.W_OK);
@@ -56,6 +66,16 @@ export async function doctor(configPath: string, acquireAuth = false, verify = f
   } else checks.push({ stage: "credential-acquisition", status: "not-verified", detail: "Not attempted. Use --acquire-auth for an explicit token-only network check." });
   checks.push({ stage: "data-plane-inference", status: "not-verified", detail: "No model call made. Token acquisition and management login do not certify inference RBAC, deployment, private network or quota." });
   let runtimeVerification: Awaited<ReturnType<typeof verifyRuntime>> | undefined;
+  let requestFitVerification: Awaited<ReturnType<typeof verifyRequestFit>> | undefined;
+  if (verifyFit) {
+    try {
+      requestFitVerification = await verifyRequestFit({ ...config, workspacePath: workspace });
+      checks.push({ stage: "initial-request-fit", status: requestFitVerification.status === "fit" ? "pass" : "fail",
+        detail: `${requestFitVerification.reservedTokens} reserved tokens versus ${requestFitVerification.localTokensPerMinute} local TPM; ${requestFitVerification.guidance}` });
+    } catch (error) {
+      checks.push({ stage: "initial-request-fit", status: "fail", detail: error instanceof Error ? error.message : String(error) });
+    }
+  } else checks.push({ stage: "initial-request-fit", status: "not-verified", detail: "Use --verify-request-fit for initial task serialization against localhost only; no task tools or cloud inference." });
   if (verify) {
     try {
       runtimeVerification = await verifyRuntime(config, allowContainerProbe);
@@ -69,6 +89,8 @@ export async function doctor(configPath: string, acquireAuth = false, verify = f
     wireApi: config.contract.foundryProvider.wireApi ?? (config.contract.foundryProvider.type === "openai" ? "completions" : "messages"),
     localChecksPassed: checks.every((check) => check.status !== "fail"), checks,
     ...(runtimeVerification ? { runtimeVerification } : {}),
+    ...(requestFitVerification ? { requestFitVerification } : {}),
+    capacity: capacityIdentity(config.contract.foundryProvider) ?? null,
     diagnostics: [401, 403, 404, 429].map((status) => ({ status, guidance: inferenceDiagnostic(status) })),
   };
 }

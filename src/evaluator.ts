@@ -28,6 +28,7 @@ import type {
 import { loadArtifactInspection, renderSourceBundle } from "./artifact-inspection.js";
 import { loadConformanceProbe } from "./conformance.js";
 import { scrubFoundryEnvironment } from "./validation.js";
+import { assertCapacityPolicy } from "./deployment-capacity.js";
 import { RequestGuard } from "./request-policy.js";
 import { evidenceHash } from "./evidence.js";
 
@@ -189,6 +190,10 @@ export class FoundryJudgeInvoker implements JudgeInvoker {
   async judge(prompt: string, config: LlmJudgeConfig): Promise<string> {
     this.requestAccounting = undefined;
     this.providerDiagnostics = [];
+    assertCapacityPolicy({
+      contract: { candidate: { provider: config.provider.type, model: config.model }, foundryProvider: config.provider },
+      requestBounds: config.requestBounds,
+    }, process.env.FOUNDRY_ENDPOINT);
     const provider = resolveFoundryProvider(config.provider, process.env);
     const identity = judgeIdentity(config);
     const guard = new RequestGuard(config.requestBounds, Date.now(), Date.now() + config.timeoutMs);

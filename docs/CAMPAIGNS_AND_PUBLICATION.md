@@ -84,6 +84,22 @@ absent. It never steals a live process's lock. No retry-until-PASS policy exists
 
 ## Bounds and dispatch certainty
 
+RPM/TPM values are configured local ceilings, not discovered Azure deployment
+capacity. The rolling one-minute admission window permits short bursts and
+cannot account for traffic outside its campaign process. Before paid execution,
+review the actual deployment allocation and an approved share of both limits;
+see [capacity and pacing](KEYLESS_AUTH.md#deployment-capacity-and-pacing).
+A post-dispatch `rate_limit_exceeded` is diagnosed as `provider_rate_limit`,
+not a certified rejected HTTP 429. It closes the lane without replay and keeps
+missing usage unknown, even when prior requests completed with valid meters.
+Optional per-candidate `foundryProvider.capacity` observations are immutable
+endpoint/deployment/wire-bound inputs; preparation rejects over-allocation
+and run admission rechecks endpoint binding. Legacy omission means unknown
+capacity. The separate offline `doctor --verify-request-fit` measures the
+initial SDK task request without inference/tools/grading. Individually unfit
+byte-plus-output reservations fail before physical dispatch; positive initial
+fit cannot certify later context growth or provider/shared headroom.
+
 Campaign bounds cover concurrency, free memory admission, absolute deadline,
 attempts, requests, reserved tokens and declared USD reservations.
 Request bounds cover body bytes, requests, reserved tokens, output ceiling,

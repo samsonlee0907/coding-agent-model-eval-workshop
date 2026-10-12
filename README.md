@@ -155,6 +155,9 @@ files. These example ceilings are protective limits, not evidence that every
 task can finish within them. See
 [bounded terminal-failure diagnosis](docs/KEYLESS_AUTH.md#bounded-terminal-failure-diagnosis)
 before interpreting an interruption or changing the allowance.
+The copied pacing limits (30 RPM / 100,000 TPM) are local examples, **not**
+discovered deployment capacity. Before paid execution, obtain the actual
+deployment's RPM/TPM and approved share of it, then configure pacing below.
 
 ### 3. Configure Foundry authentication
 
@@ -219,6 +222,45 @@ in shell history. The key is held only in the current process environment.
 Key-disabled resources require Entra. Omitted `auth` means key mode, **not**
 automatic keyless discovery.
 
+#### Check deployment capacity before paid execution
+
+Ask the resource administrator for the **specific deployment's** current
+RPM/TPM, model/SKU/region and traffic shared with other callers. Subscription
+quota is not the deployment's assigned throughput. The toolkit does not
+discover these limits or reserve Azure capacity; `doctor --acquire-auth` does
+not check them. Example policies can exceed a small deployment's quota.
+
+For a fresh paid configuration, choose approved local pacing ceilings rather
+than leaving example values unchanged:
+
+```powershell
+# onboarding:pacing
+$observedRpm = [int](Read-Host 'Observed deployment requests/minute limit from administrator or management metadata')
+$observedTpm = [int](Read-Host 'Observed deployment tokens/minute limit from administrator or management metadata')
+$approvedRpm = [int](Read-Host 'Approved local requests/minute ceiling for this deployment')
+$approvedTpm = [int](Read-Host 'Approved local reserved tokens/minute ceiling for this deployment')
+if ($observedRpm -lt 1 -or $observedTpm -lt 1 -or $approvedRpm -lt 1 -or $approvedTpm -lt 1 -or $approvedRpm -gt $observedRpm -or $approvedTpm -gt $observedTpm) { throw 'Positive local ceilings within observed deployment limits are required.' }
+$spec.candidates[0].foundryProvider | Add-Member -NotePropertyName capacity -NotePropertyValue ([pscustomobject]@{
+    source = 'administrator-declared'; observedAt = [DateTime]::UtcNow.ToString('o')
+    endpoint = $env:FOUNDRY_ENDPOINT; deployment = $deployment; wireApi = 'responses'
+    requestsPerMinute = $observedRpm; tokensPerMinute = $observedTpm
+}) -Force
+$spec.requestBounds.requestsPerMinute = $approvedRpm
+$spec.requestBounds.tokensPerMinute = $approvedTpm
+$task | Add-Member -NotePropertyName requestBounds -NotePropertyValue $spec.requestBounds -Force
+```
+
+Skip this for offline-only previews. Keep output/total/deadline/USD limits
+explicit; this step changes only local pacing. The current admission controller
+enforces rolling one-minute limits but allows short bursts and cannot see other
+processes' traffic. Azure can throttle within shorter windows even below those
+minute totals. See [capacity and cooldown guidance](docs/KEYLESS_AUTH.md#deployment-capacity-and-pacing)
+for optional read-only discovery and what these controls cannot guarantee.
+Preparation and local preflight reject pacing above the bound observation or
+an endpoint/deployment/protocol mismatch. The observation is user supplied,
+not live capacity certification. Run the initial request-fit gate below too:
+slower pacing cannot make an individually oversized SDK request fit TPM.
+
 ### 4. Select the execution mode
 
 The copied example uses **trusted-local execution** by default and requires
@@ -263,7 +305,7 @@ before using the first-run commands below.
 
 | Command | Purpose | Inference and access |
 |---|---|---|
-| `npm run doctor -- --config <task.json>` | Check configuration; `--verify-runtime` exercises actual coding tools against a local fake provider | No cloud inference; `--acquire-auth` optionally acquires an Entra token; a container coding probe requires separate consent |
+| `npm run doctor -- --config <task.json>` | Check configuration/capacity binding; `--verify-runtime` exercises coding tools, `--verify-request-fit` measures the initial task request locally | No cloud inference; `--acquire-auth` optionally acquires an Entra token; a container coding probe requires separate consent |
 | `npm run campaign -- <command> ...` | Prepare, run, status, resume, report or clean up owned workers | Prepare/status/report use saved or local evidence; run/resume require `--allow-paid`; isolated cleanup uses Docker |
 | `npm run quickstart -- ...` | Create a disposable workspace with `--bounds`; `--prepare-only` prepares offline | Otherwise paid inference immediately; trusted-local only |
 | `npm run bench -- --config <task.json>` | Execute one configured task/session | Paid inference immediately; selected task execution mode |
@@ -288,6 +330,8 @@ For an offline preview, complete only the first step below.
 npm run doctor -- --config "$work\text-task.json"
 npm run doctor -- --config "$work\text-task.json" --verify-runtime
 if ($LASTEXITCODE -ne 0) { throw 'Runtime coding probe failed; do not run inference.' }
+npm run doctor -- --config "$work\text-task.json" --verify-request-fit
+if ($LASTEXITCODE -ne 0) { throw 'Initial request does not fit or cannot be verified; review capacity/request shape before inference.' }
 npm run campaign -- prepare --spec "$work\campaign.json" --directory $state
 npm run campaign -- status --directory $state
 npm run campaign -- report --directory $state --output "$work\preview-v1" --zip
@@ -305,6 +349,17 @@ model dispatch; shell is not added to repair a read/edit contract.
 This gate currently supports explicit OpenAI-compatible Responses only.
 For a configured isolated worker use the
 [explicit actual-image probe](docs/ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference).
+
+The distinct `--verify-request-fit` gate uses the actual selected SDK/CLI,
+unchanged task prompt/instructions/read-edit filters/effort and production
+request shaping against localhost. It prints serialized bytes, conservative
+reservation, output ceiling, local TPM and prospective headroom, with hashes
+instead of prompt/body/endpoint content. No task tool or validator runs.
+It currently covers trusted-local Responses without MCP only; other modes
+remain unverified. A positive **initial** fit does not prove later growing
+context, live token estimation or shared capacity. Every real request still
+faces admission before dispatch. See
+[initial request-fit limitations and capacity blockers](docs/KEYLESS_AUTH.md#initial-request-fit-and-capacity-blockers).
 
 Preparation creates `$state\prepared.json`; status shows one
 `missing` cell and zero attempts. Open `$work\preview-v1\index.html` directly
@@ -324,7 +379,7 @@ quota. Stop on failed checks; use [keyless diagnostics](docs/KEYLESS_AUTH.md#pre
 #### 2. Run the task and generate a report
 
 **These commands may consume paid Foundry inference.** Proceed only after
-reviewing identity, deployment, bounds and the trusted-local warning above.
+reviewing identity, deployment capacity/pacing, bounds and the trusted-local warning above.
 
 ```powershell
 npm run campaign -- run --directory $state --allow-paid
@@ -516,9 +571,12 @@ acquisition still leaves `data-plane-inference: not-verified`.
 | Azure CLI selector/option conflict | Choose only one of `tenantId`/`subscriptionId` or `--tenant-id`/`--subscription-id`; both are rejected before acquisition, not silently ignored |
 | Unknown/disabled coding tool | Run `doctor --verify-runtime`; inspect selected executable/hash, backend and resolved filters. Do not add shell or remove the allowlist |
 | Quickstart/judge asks for `--bounds` | Review the supplied request policy file; this public CLI requirement preserves request/token/output/pacing/deadline limits |
+| Capacity observation/pacing mismatch | Bind the intended endpoint/deployment/wire and approved RPM/TPM before preparing; observation is not live headroom or a quota change |
+| Initial conservative reservation exceeds TPM | Inspect `doctor --verify-request-fit` bytes/reservation/headroom. Slower pacing does not shrink SDK context/tools. Use sufficient existing capacity or a separately reviewed supported profile, never an optimistic tokenizer or inflated TPM |
 | Inference returns 401/403 | Confirm token audience, deployment auth support, endpoint-specific inference role and network access; management roles alone are insufficient |
 | HTTP 200 with `provider-terminal` failure | Inspect the first bridge diagnostic's categorical event/status/reason/error code and usage; incomplete is not success or retryable rejection |
 | `provider_output_limit` | Confirm retained `max_output_tokens` terminal evidence; reasoning shares the output allowance. Review finite output/total budgets explicitly in a new cohort, not an automatic replay |
+| `provider_rate_limit` after HTTP 200 | Provider reported `rate_limit_exceeded` after dispatch. Review deployment RPM/TPM, shared traffic and cooldown; usage may be unknown. This is not a certified rejected HTTP 429 and cannot be replayed automatically |
 | Inference returns 404/429 | Check resource/deployment/protocol for 404; check quota and pacing diagnostics for 429, without treating permanent quota as transient |
 | Docker/image or worker probe fails | Review Linux daemon, approved local digest, resource controls and freezing; follow [isolation checks](docs/ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference), never disable isolation as a fallback |
 | Prepared configuration/runtime no longer matches | Prepare a new immutable campaign; do not edit state to bypass provenance checks |

@@ -2,6 +2,7 @@ import { AzureCliCredential, ManagedIdentityCredential, WorkloadIdentityCredenti
 import { z } from "zod";
 import type { ProviderConfig } from "@github/copilot-sdk";
 import type { FoundryAuth, FoundryProviderConfig } from "./types.js";
+import { deploymentCapacitySchema } from "./deployment-capacity.js";
 
 export const foundryScope = "https://ai.azure.com/.default";
 export const authSchema = z.discriminatedUnion("mode", [
@@ -23,6 +24,7 @@ export const providerSchema = z.object({
   type: z.enum(["openai", "anthropic"]),
   wireApi: z.enum(["completions", "responses"]).optional(),
   auth: authSchema.optional(),
+  capacity: deploymentCapacitySchema.optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.auth?.mode === "entra" && value.auth.subscriptionId && value.auth.credential !== "azure-cli") {
     ctx.addIssue({ code: "custom", message: "subscriptionId selects an Azure CLI account only; it does not apply to managed/workload identity." });

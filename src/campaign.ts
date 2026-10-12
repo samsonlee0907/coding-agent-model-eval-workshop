@@ -16,6 +16,7 @@ import { writeReportBundle, safeRelativePath } from "./publication.js";
 import type { BenchmarkConfig, BenchmarkRun, RunContract, RuntimeIdentity } from "./types.js";
 import { assertBenchmarkRun } from "./evidence.js";
 import { parsePricingSnapshot, estimateRunPriceUsd, type PricingSnapshot } from "./pricing.js";
+import { assertCapacityPolicy } from "./deployment-capacity.js";
 
 const identifier = z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]{0,100}$/);
 export const campaignSpecSchema = z.object({
@@ -66,7 +67,10 @@ export function prepareCampaign(specPath: string, output: string, runtime = read
   const root = dirname(resolve(specPath));
   const spec = campaignSpecSchema.parse(JSON.parse(readFileSync(specPath, "utf8")));
   unique(spec.tasks.map((t) => t.id), "task IDs"); unique(spec.candidates.map((c) => c.id), "candidate IDs");
-  for (const candidate of spec.candidates) if (candidate.candidate.provider !== candidate.foundryProvider.type) throw new TypeError("Campaign candidate/provider wire shape mismatch.");
+  for (const candidate of spec.candidates) {
+    if (candidate.candidate.provider !== candidate.foundryProvider.type) throw new TypeError("Campaign candidate/provider wire shape mismatch.");
+    assertCapacityPolicy({ contract: candidate, requestBounds: spec.requestBounds });
+  }
   const tasks: PreparedTask[] = spec.tasks.map((task) => {
     const path = resolve(root, task.config);
     const config: BenchmarkConfig = benchmarkConfigSchema.parse(JSON.parse(readFileSync(path, "utf8")));

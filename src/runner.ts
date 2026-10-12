@@ -20,6 +20,7 @@ import {
   type CopilotSession,
   type MCPServerConfig,
   type ProviderConfig,
+  type SessionConfig,
 } from "@github/copilot-sdk";
 import { immutableContractHash } from "./contract.js";
 import { EventCollector } from "./event-collector.js";
@@ -54,6 +55,50 @@ import { evidenceHash } from "./evidence.js";
 import { ProviderStream, ProviderTerminalError, providerTerminal, providerTerminalSchema } from "./provider-stream.js";
 import type { ProviderTerminalEvidence } from "./provider-stream.js";
 import { once } from "node:events";
+import { assertCapacityPolicy, capacityIdentity } from "./deployment-capacity.js";
+
+export function benchmarkSessionOptions(
+  config: BenchmarkConfig, provider: ProviderConfig, workingDirectory: string, filters: string[],
+  extra: Pick<SessionConfig, "tools" | "mcpServers"> = {},
+): SessionConfig {
+  return {
+    model: config.contract.candidate.model, workingDirectory,
+    streaming: true, enableSessionStore: false,
+    reasoningEffort: config.contract.execution.reasoningEffort,
+    systemMessage: { content: config.contract.execution.instructions },
+    availableTools: filters, ...extra,
+    onPermissionRequest: config.contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
+    provider,
+  };
+}
+
+export function boundedProviderRequest(body: Buffer, route: string, bounds: NonNullable<BenchmarkConfig["requestBounds"]>) {
+  const payload = JSON.parse(body.toString("utf8")) as Record<string, unknown>;
+  assertTextTokenReservation(payload);
+  const field = route.split("?")[0].endsWith("/responses") ? "max_output_tokens" : route.includes("messages") ? "max_tokens" : "max_completion_tokens";
+  const existing = payload[field];
+  const outputTokenLimit = typeof existing === "number" ? Math.min(existing, bounds.maxOutputTokens) : bounds.maxOutputTokens;
+  payload[field] = outputTokenLimit;
+  const serialized = Buffer.from(JSON.stringify(payload));
+  return { body: serialized, outputTokenLimit, reservedTokens: serialized.length + bounds.maxOutputTokens };
+}
+
+export function assertRuntimeBinding(config: BenchmarkConfig) {
+  const runtime = readRuntimeIdentity();
+  if (Object.entries(config.contract.runtime ?? {}).some(([key, value]) => value !== runtime[key as keyof typeof runtime])) {
+    throw new DispatchError("Selected SDK/CLI executable identity differs from the prepared runtime; no work was dispatched.", "not-dispatched");
+  }
+  return runtime;
+}
+
+function assertTextTokenReservation(value: unknown): void {
+  if (Array.isArray(value)) { value.forEach(assertTextTokenReservation); return; }
+  if (!isRecord(value)) return;
+  if (typeof value.type === "string" && ["image", "image_url", "input_image", "input_audio", "audio", "video", "input_file", "file"].includes(value.type)) {
+    throw new DispatchError("Bounded inference currently requires text-only request content; media token admission is not implemented.", "not-dispatched");
+  }
+  Object.values(value).forEach(assertTextTokenReservation);
+}
 
 export interface BenchmarkRunOptions {
   onEvent?: (event: NormalizedEvent) => void;
@@ -100,6 +145,7 @@ export function benchmarkWorkRequests(
 }
 
 export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
+  assertCapacityPolicy(config, process.env.FOUNDRY_ENDPOINT);
   const contract = materializeContract(config);
   const guardStarted = Date.now();
   const stages = 3 + config.rounds.length + (contract.task.conformanceProbe?.checks.length ?? 0)
@@ -173,19 +219,11 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
         wireApi: provider.wireApi, capture: (type, data) => collector.captureRunnerEvent(type, data),
         validateTools: (payload) => assertAdvertisedTools(payload, sdkToolAllowlist) });
     const sessionProvider = compatibilityProxy ? { ...provider, baseUrl: compatibilityProxy.baseUrl } : provider;
-    session = await client.createSession({
-      model: contract.candidate.model,
-      workingDirectory: config.isolation ? runtimeDirectory : config.workspacePath,
-      streaming: true,
-      enableSessionStore: false,
-      reasoningEffort: contract.execution.reasoningEffort,
-      systemMessage: { content: contract.execution.instructions },
-      availableTools: sdkToolAllowlist,
+    session = await client.createSession(benchmarkSessionOptions(config, sessionProvider,
+      config.isolation ? runtimeDirectory : config.workspacePath, sdkToolAllowlist, {
       ...(worker ? { tools: [worker.tool(contract.execution.tools)] } : {}),
-      onPermissionRequest: contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
-      provider: sessionProvider,
       ...(mcpServers ? { mcpServers } : {}),
-    });
+    }));
     await session.rpc.tools.initializeAndValidate();
     const effectiveTools = await session.rpc.tools.getCurrentMetadata();
     assertAdvertisedTools(effectiveTools, sdkToolAllowlist);
@@ -634,7 +672,9 @@ export function createRunDiagnostics(
     providerFailure: {
       ...(bridge ? { bridge: bridge.data } : {}),
       httpStatus: httpStatus ? Number(httpStatus) : null,
-      signature: terminal.success && terminal.data.terminalResponse && terminal.data.incompleteReason === "max_output_tokens"
+      signature: terminal.success && terminal.data.errorCode === "rate_limit_exceeded"
+        ? "provider_rate_limit"
+      : terminal.success && terminal.data.terminalResponse && terminal.data.incompleteReason === "max_output_tokens"
         ? "provider_output_limit"
       : terminal.success && (terminal.data.incompleteReason === "content_filter" || terminal.data.errorCode === "content_filter")
         ? "provider_content_filter"
@@ -743,13 +783,9 @@ async function forwardSanitizedRequest(
     let body = transform(requestBody, incoming.headers["content-type"]);
     options.validateTools?.(JSON.parse(body.toString("utf8")));
     if (guard.bounds) {
-      const payload = JSON.parse(body.toString()) as Record<string, unknown>;
-      assertTextTokenReservation(payload);
-      const field = incoming.url?.split("?")[0].endsWith("/responses") ? "max_output_tokens" : incoming.url?.includes("messages") ? "max_tokens" : "max_completion_tokens";
-      const existing = payload[field];
-      outputTokenLimit = typeof existing === "number" ? Math.min(existing, guard.bounds.maxOutputTokens) : guard.bounds.maxOutputTokens;
-      payload[field] = outputTokenLimit;
-      body = Buffer.from(JSON.stringify(payload));
+      const bounded = boundedProviderRequest(body, incoming.url ?? "/", guard.bounds);
+      outputTokenLimit = bounded.outputTokenLimit;
+      body = bounded.body;
     }
     const tokens = body.length + (guard.bounds?.maxOutputTokens ?? 0);
     const payloadHash = createHash("sha256").update(body).digest("hex");
@@ -853,14 +889,6 @@ async function forwardSanitizedRequest(
         && value.choices.every((choice) => isRecord(choice) && isRecord(choice.message) && typeof choice.finish_reason === "string");
     }
 
-    function assertTextTokenReservation(value: unknown): void {
-      if (Array.isArray(value)) { value.forEach(assertTextTokenReservation); return; }
-      if (!isRecord(value)) return;
-      if (typeof value.type === "string" && ["image", "image_url", "input_image", "input_audio", "audio", "video", "input_file", "file"].includes(value.type)) {
-        throw new DispatchError("Bounded inference currently requires text-only request content; media token admission is not implemented.", "not-dispatched");
-      }
-      Object.values(value).forEach(assertTextTokenReservation);
-    }
   } catch (error) {
     const certainty = error instanceof DispatchError ? error.certainty : dispatched ? "possibly-processed" : "not-dispatched";
     if (certainty === "possibly-processed") guard.ambiguous();
@@ -981,10 +1009,7 @@ export function executionProfile(config: BenchmarkConfig): RunContract["executio
 
 function materializeContract(config: BenchmarkConfig): RunContract {
   assertFoundryOnlyConfig(config);
-  const runtime = readRuntimeIdentity();
-  if (Object.entries(config.contract.runtime ?? {}).some(([key, value]) => value !== runtime[key as keyof typeof runtime])) {
-    throw new DispatchError("Selected SDK/CLI executable identity differs from the prepared runtime; no work was dispatched.", "not-dispatched");
-  }
+  const runtime = assertRuntimeBinding(config);
   return {
     contractVersion: 2,
     task: config.contract.task,
@@ -1032,6 +1057,7 @@ export function createFoundryProviderIdentity(
     requestAdaptation: config.type === "openai" ? "openai-null-refusal-sanitizer" : "strip-temperature",
     ...(config.wireApi ? { wireApi: config.wireApi } : {}),
     ...(config.auth ? { auth: config.auth } : {}),
+    ...(config.capacity ? { capacity: capacityIdentity(config) } : {}),
   };
 }
 

@@ -4,13 +4,105 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import { asRecord } from "./json.js";
-import { createIsolatedCopilotRuntimeDirectory, resolveCopilotCliPath, resolveSdkToolAllowlist, assertAdvertisedTools, startRequestSanitizingProxy } from "./runner.js";
+import { createIsolatedCopilotRuntimeDirectory, resolveCopilotCliPath, resolveSdkToolAllowlist, assertAdvertisedTools, startRequestSanitizingProxy,
+  benchmarkSessionOptions, boundedProviderRequest, stripNullMessageRefusals, assertRuntimeBinding } from "./runner.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
 import { ControlledWorker, collectSnapshot } from "./controlled-worker.js";
 import { RequestGuard } from "./request-policy.js";
 import { scrubFoundryEnvironment, runValidation } from "./validation.js";
 import type { BenchmarkConfig } from "./types.js";
 import { ToolSet } from "@github/copilot-sdk";
+import { assertCapacityPolicy, capacityIdentity } from "./deployment-capacity.js";
+
+/** Observe the real initial request shape, but never ask a provider or execute task tools. */
+export async function verifyRequestFit(config: BenchmarkConfig) {
+  if (config.isolation || config.contract.execution.mcpServers
+      || config.contract.foundryProvider.type !== "openai" || config.contract.foundryProvider.wireApi !== "responses") {
+    throw new TypeError("Initial request-fit probing covers trusted-local OpenAI Responses without MCP only. Other boundaries/protocols remain unverified; no fallback or inference.");
+  }
+  const bounds = config.requestBounds;
+  if (!bounds) throw new TypeError("Request-fit probing requires finite requestBounds.");
+  assertCapacityPolicy(config, process.env.FOUNDRY_ENDPOINT);
+  assertRuntimeBinding(config);
+  const root = createIsolatedCopilotRuntimeDirectory(), cliPath = resolveCopilotCliPath(process.env);
+  const client = new CopilotClient({
+    baseDirectory: root, workingDirectory: config.workspacePath, useLoggedInUser: false, logLevel: "none",
+    env: scrubFoundryEnvironment(process.env), connection: RuntimeConnection.forStdio(cliPath ? { path: cliPath } : undefined),
+  });
+  let filters: string[] = [], sessionId: string | null = null;
+  const measurements: Array<{ serializedRequestBytes: number; reservedTokens: number; outputTokenLimit: number; requestHash: string }> = [];
+  const failures: string[] = [];
+  const server = createServer((req, res) => {
+    const chunks: Buffer[] = [];
+    let size = 0;
+    req.on("data", (chunk: Buffer) => {
+      size += chunk.length;
+      if (size > 10 * 1024 * 1024) req.destroy(new Error("Local request-fit byte bound exceeded."));
+      else chunks.push(chunk);
+    });
+    req.on("error", () => failures.push("Local request-fit input failed or exceeded its finite byte bound."));
+    req.on("end", () => {
+      try {
+        if (req.method !== "POST" || req.url !== "/responses" || measurements.length) throw new Error("Unexpected local request-fit dispatch.");
+        const body = stripNullMessageRefusals(Buffer.concat(chunks), req.headers["content-type"]);
+        assertAdvertisedTools(JSON.parse(body.toString("utf8")), filters);
+        const bounded = boundedProviderRequest(body, req.url, bounds);
+        measurements.push({ serializedRequestBytes: bounded.body.length, reservedTokens: bounded.reservedTokens,
+          outputTokenLimit: bounded.outputTokenLimit, requestHash: createHash("sha256").update(bounded.body).digest("hex") });
+        respond(res, 1, null);
+      } catch {
+        failures.push("Local request-fit shape/route/tools could not be certified.");
+        res.writeHead(400, { "content-type": "application/json" }); res.end('{"error":{"message":"Local request-fit probe failed."}}');
+      }
+    });
+  });
+  try {
+    await client.start();
+    const catalog = await client.rpc.tools.list({ model: config.contract.candidate.model });
+    filters = resolveSdkToolAllowlist(config.contract.execution.tools, undefined, catalog.tools.map((tool) => tool.name));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("Local request-fit peer did not start.");
+    const session = await client.createSession(benchmarkSessionOptions(config, {
+      type: "openai", wireApi: "responses", baseUrl: `http://127.0.0.1:${address.port}`, apiKey: "local-request-fit-key",
+    }, config.workspacePath, filters));
+    sessionId = session.sessionId;
+    await session.rpc.tools.initializeAndValidate();
+    assertAdvertisedTools(await session.rpc.tools.getCurrentMetadata(), filters);
+    await session.sendAndWait({ prompt: config.contract.task.prompt, mode: "immediate" },
+      Math.min(60000, config.contract.execution.sessionTimeoutMs, bounds.deadlineMs));
+    if (failures.length || measurements.length !== 1) throw new Error(failures.join(" ") || "Local initial request-fit measurement is missing.");
+    const measurement = measurements[0];
+    const headroom = bounds.tokensPerMinute - measurement.reservedTokens;
+    const fit = headroom >= 0 && measurement.serializedRequestBytes <= bounds.maxRequestBytes && measurement.reservedTokens <= bounds.maxTokens;
+    const backend = (await session.getEvents()).find((event) => event.type === "session.start");
+    return {
+      schemaVersion: 1, status: fit ? "fit" : "blocked", scope: "initial-request-only", estimator: "serialized-utf8-bytes-plus-output-ceiling",
+      ...measurement, localTokensPerMinute: bounds.tokensPerMinute, prospectiveTokenHeadroom: headroom,
+      capacity: capacityIdentity(config.contract.foundryProvider) ?? null,
+      runtime: readRuntimeIdentity(), reportedBackendVersion: backend ? asRecord(backend.data).copilotVersion : null, filters,
+      promptHash: createHash("sha256").update(config.contract.task.prompt).digest("hex"),
+      instructionsHash: createHash("sha256").update(config.contract.execution.instructions).digest("hex"),
+      policyHash: createHash("sha256").update(JSON.stringify(bounds)).digest("hex"),
+      configurationHash: createHash("sha256").update(JSON.stringify(config)).digest("hex"),
+      guidance: fit ? "Initial request fits local conservative bounds only. Later context/tool results must still pass admission; live/shared headroom is unknown."
+        : "Initial SDK system/context/tool request does not fit conservative TPM/request/token bounds. Pacing cannot shrink it. Use sufficient deployment capacity or a separately reviewed supported request profile; no optimistic tokenizer fallback.",
+      cloudInference: "not-dispatched", taskTools: "not-executed", grading: "not-performed",
+      laterRequests: "not-verified", liveSharedHeadroom: "unknown",
+    };
+  } finally {
+    try { if (sessionId) await client.deleteSession(sessionId); }
+    finally {
+      try { await client.stop(); }
+      finally {
+        try {
+          await new Promise<void>((resolve, reject) => server.close((error) =>
+            error && "code" in error && error.code !== "ERR_SERVER_NOT_RUNNING" ? reject(error) : resolve()));
+        } finally { rmSync(root, { recursive: true, force: true }); }
+      }
+    }
+  }
+}
 
 /**
  * A deterministic local Responses peer directs real tools; no Azure identity,

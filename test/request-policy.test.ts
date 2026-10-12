@@ -2,10 +2,11 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { createServer, request } from "node:http";
 import { RequestGuard, DeploymentAdmission, DispatchError, canRetryRequest, retryDelay } from "../src/request-policy.js";
-import { startRequestSanitizingProxy, dispatchBenchmarkWorkRequests, benchmarkWorkRequests } from "../src/runner.js";
+import { startRequestSanitizingProxy, dispatchBenchmarkWorkRequests, benchmarkWorkRequests, createRunDiagnostics } from "../src/runner.js";
 import { ProviderStream, ProviderTerminalError, providerTerminal } from "../src/provider-stream.js";
 import { deriveMetrics } from "../src/metrics.js";
 import { event } from "./fixtures/events.js";
+import { fixtureRuntime } from "./fixtures/revamp.js";
 
 test("physical request recovery is only for explicit 429 rejection and honors retry headers", () => {
   assert.equal(canRetryRequest("explicitly-rejected", 429), true);
@@ -31,6 +32,24 @@ test("guard distinguishes physical dispatch, protective reservations and ambiguo
   guard.reserve(300, 150); guard.ambiguous();
   assert.deepEqual(guard.accounting, { physicalRequests: 1, reservedTokens: 150, ambiguousRequests: 1, rejectedRequests: 0 });
   assert.throws(() => guard.reserve(1, 1), /closed/);
+});
+test("individually unfit conservative request reports shape/capacity before any physical dispatch", async () => {
+  let calls = 0;
+  const host = await upstream((_req, res) => { calls++; res.end(); });
+  const guard = new RequestGuard({ maxRequests: 10, maxRequestBytes: 1048576, maxTokens: 100000, maxOutputTokens: 2000,
+    deadlineMs: 900000, requestsPerMinute: 1, tokensPerMinute: 8000 });
+  const captured: Array<import("../src/types.js").JsonRecord> = [];
+  const proxy = await startRequestSanitizingProxy(host.base, (body) => body, {
+    guard, retries: 3, capture(type, data) { if (type === "runner.provider_bridge_error") captured.push(data); },
+  });
+  try {
+    const reply = await post(proxy.baseUrl, { model: "fixture", input: "x".repeat(24000) });
+    assert.equal(reply.status, 400);
+    assert.match(await reply.text(), /conservative reservation \d+ exceeds.*8000.*SDK system\/context\/tool schemas.*Pacing\/cooldown cannot shrink/);
+    assert.equal(calls, 0); assert.equal(guard.accounting.physicalRequests, 0);
+    assert.equal(guard.accounting.reservedTokens, 0); assert.equal(guard.accounting.ambiguousRequests, 0);
+    assert.equal(captured[0].certainty, "not-dispatched"); assert.equal(captured[0].phase, "admission");
+  } finally { await proxy.stop(); await host.close(); }
 });
 test("whole work requests never retry, even when a downstream call was explicitly rejected", async () => {
   let sent = 0;
@@ -221,6 +240,8 @@ test("terminal Responses failure categories and usage survive streaming/JSON fai
     { type: "response.incomplete", response: { id: "fixture", status: "incomplete", output: [], incomplete_details: { reason: "content_filter" }, usage } },
     { type: "response.failed", response: { id: "fixture", status: "failed", output: [], error: { code: "server_error", message: "PRIVATE_PROVIDER_TEXT" }, usage } },
     { type: "error", code: "context_length_exceeded", message: "PRIVATE_PROVIDER_TEXT" },
+    { type: "error", code: "rate_limit_exceeded", message: "PRIVATE_PROVIDER_TEXT" },
+    { type: "response.failed", response: { id: "fixture", status: "failed", output: [], error: { code: "rate_limit_exceeded", message: "PRIVATE_PROVIDER_TEXT" }, usage } },
   ];
   for (const streaming of [true, false]) for (const fixture of cases) {
     let calls = 0;
@@ -268,6 +289,48 @@ test("terminal Responses failure categories and usage survive streaming/JSON fai
       assert.doesNotMatch(JSON.stringify(captured), /PRIVATE_PROVIDER_TEXT|authorization|accessToken/);
     } finally { await proxy.stop(); await host.close(); }
   }
+});
+
+test("post-200 rate-limit error retains prior meters and unknown failed usage without rejected-429 replay", async () => {
+  let calls = 0;
+  const host = await upstream((_req, res) => {
+    calls++;
+    const terminal = calls <= 3 ? { type: "response.completed", response: { status: "completed", output: [],
+      usage: { input_tokens: 100, output_tokens: 32, total_tokens: 132, output_tokens_details: { reasoning_tokens: 30 } } } }
+      : { type: "error", code: "rate_limit_exceeded", message: "PRIVATE_THROTTLE_TEXT" };
+    res.writeHead(200, { "content-type": "text/event-stream", "retry-after-ms": "1" });
+    res.end(`data: ${JSON.stringify(terminal)}\n\n`);
+  });
+  const guard = new RequestGuard();
+  const captured: Array<{ type: string; data: import("../src/types.js").JsonRecord }> = [];
+  const proxy = await startRequestSanitizingProxy(host.base, (body) => body, {
+    guard, retries: 3, capture(type, data) { captured.push({ type, data }); },
+  });
+  try {
+    for (let i = 0; i < 3; i++) await (await post(proxy.baseUrl, { model: "fixture", input: `Public round ${i}` })).text();
+    await post(proxy.baseUrl, { model: "fixture", input: "Public fourth round" }).then((response) => response.text()).catch(() => undefined);
+    const first = captured.find((entry) => entry.type === "runner.provider_bridge_error")!.data;
+    const normalized = captured.map((entry, index) => ({ ...event(index + 1, entry.type, "2026-10-13T00:00:00Z"), data: entry.data }));
+    const diagnostics = createRunDiagnostics(normalized, fixtureRuntime, [], "later synthetic HTTP 400");
+    assert.equal(diagnostics.providerFailure.signature, "provider_rate_limit");
+    assert.equal(diagnostics.providerFailure.httpStatus, 200);
+    assert.equal(first.phase, "provider-terminal"); assert.equal(first.certainty, "possibly-processed");
+    assert.match(diagnostics.providerFailure.message!, /RPM\/TPM.*cooldown.*unknown/);
+    assert.equal(canRetryRequest("possibly-processed", 429), false);
+    assert.equal(canRetryRequest("possibly-processed", 200), false);
+    const terminal = guard.accounting.providerTerminals?.[3].terminal;
+    assert.equal(terminal?.errorCode, "rate_limit_exceeded");
+    assert.equal(terminal?.terminalResponse, false);
+    assert.equal(terminal?.usageStatus, "missing"); assert.equal(terminal?.usage, null);
+    const metrics = deriveMetrics(normalized, []);
+    assert.equal(metrics.inputTokens.value, 300); assert.equal(metrics.outputTokens.value, 96);
+    assert.equal(metrics.inputTokens.value! + metrics.outputTokens.value!, 396); assert.equal(metrics.cost.value, null);
+    assert.equal(guard.cleanlySettled(), false);
+    assert.equal((await post(proxy.baseUrl, { model: "fixture", input: "Not a replay" })).status, 400);
+    assert.equal(calls, 4); assert.equal(guard.accounting.physicalRequests, 4);
+    assert.equal(guard.accounting.ambiguousRequests, 1); assert.equal(guard.accounting.rejectedRequests, 0);
+    assert.doesNotMatch(JSON.stringify(captured), /PRIVATE_THROTTLE_TEXT|authorization|accessToken/);
+  } finally { await proxy.stop(); await host.close(); }
 });
 
 test("provider terminal metadata maps unknown categories safely and never infers missing/malformed usage or doubles reasoning", () => {
