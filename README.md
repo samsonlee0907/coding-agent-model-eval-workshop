@@ -1,16 +1,56 @@
-# Coding Agent Model Evaluation Workshop
+# Coding Agent Model Evaluation Toolkit
 
-A TypeScript/npm toolkit for user-defined, single- or multi-task coding-agent
-benchmarks. It drives persistent GitHub Copilot SDK sessions through existing
-Microsoft Foundry deployments, pins task and evaluator evidence, supports
-resumable campaigns, and publishes portable offline reports. Task types and
-categories are optional user metadata, not a bundled benchmark dataset.
+A local TypeScript/npm toolkit for comparing coding-agent deployments against
+user-defined tasks and a recorded execution policy. It drives persistent
+GitHub Copilot SDK sessions through existing Microsoft Foundry deployments,
+records execution and evaluator evidence, supports resumable campaigns, and
+generates portable offline comparison reports.
 
-## Choose your workflow
+The toolkit is for engineers, task authors and platform teams evaluating agent
+quality, reliability, time and estimated cost. It supports single-task and
+multi-task evaluations with arbitrary candidate counts. Tasks, acceptance
+checks and optional categories are supplied by the user; no fixed benchmark
+dataset or model ranking is bundled.
 
-**Docker is not required to use this repository.** It is required only when
-you explicitly configure container isolation. Choose the execution boundary
-before running candidate code:
+## Contents
+
+- [Expected outcomes](#expected-outcomes)
+- [Prerequisites](#prerequisites)
+- [Installation and configuration](#installation-and-configuration)
+- [Toolkit commands and usage](#toolkit-commands-and-usage)
+- [Reading a generated report](#reading-a-generated-report)
+- [Known limitations and troubleshooting](#known-limitations-and-troubleshooting)
+- [Supporting documentation](#supporting-documentation)
+
+## Expected outcomes
+
+A completed evaluation retains local evidence and produces a shareable
+**Coding Agent Model Benchmark** report. Results may be PASS, content FAIL,
+missing, interrupted or ungraded; completing a workflow does not guarantee
+that a candidate meets the task's acceptance criteria.
+
+| Output | Purpose and expected artifacts |
+|---|---|
+| Prepared campaign and execution history | Immutable task, candidate, evaluator and runtime bindings in `prepared.json`; append-safe attempt history in `journal.ndjson` |
+| Per-attempt local evidence | `runs\<attempt-id>\run.json`, `grade.json` and retained workspace output; sensitive evidence, not a publication bundle |
+| Portable report folder and optional ZIP | Offline `index.html`, `evidence.json`, `selected-results.json/.csv`, `task-types.json/.csv` and `integrity.json` |
+| Comparison views | Task-by-model matrix, provenance, metadata replay and data-derived findings; comparable task-type charts where coverage permits |
+| Additional saved-run outputs | Optional Markdown portfolio, official-price what-if snapshot and independent LLM-judge evaluation |
+
+Default publication includes reviewed metadata only, not raw prompts, logs,
+source or output content. Content previews require an explicit hash-bound
+publication manifest. Reports open directly in a browser without a server,
+CDN or network access. See [report interpretation](#reading-a-generated-report)
+for selection, comparability and pricing semantics.
+
+## Prerequisites
+
+For installation and CLI use, install **Node.js 20.19+ with npm** and **Git**.
+Network access is required to clone the repository and install dependencies.
+The walkthrough uses **PowerShell 7+**; its masked API-key prompt requires
+7.1+. A generated offline report needs only a browser.
+
+Additional requirements depend on the operation:
 
 | Operation | Prerequisites after installation | Docker / Azure authentication |
 |---|---|---|
@@ -27,19 +67,29 @@ does not enforce isolation. Use only trusted tasks/code on a suitable disposable
 host, or follow [Docker isolation, step by step](docs/ISOLATED_EXECUTION.md).
 An isolated configuration fails closed; it never falls back to local execution.
 
-Navigation: [first run](#first-run-one-task-one-deployment) |
-[keyless setup](docs/KEYLESS_AUTH.md) |
-[Docker path](docs/ISOLATED_EXECUTION.md) |
-[task design](docs/TASK_AUTHORING_GUIDE.md) |
-[campaign/recovery/publication reference](docs/CAMPAIGNS_AND_PUBLICATION.md).
+**Docker is optional**, not a global prerequisite. Azure CLI is required only
+for the `azure-cli` keyless credential; managed/workload identities require
+their own configured host. Azure Developer CLI (`azd`), a Copilot subscription
+and a standalone Copilot CLI are not required.
 
-## First run: one task, one deployment
+## Installation and configuration
 
-This **PowerShell 7+** walkthrough uses the supplied text artifact task: read
-`input.txt`, create `result.txt` containing `OK`, then run a deterministic
-task-owned evaluator. It needs no task-specific packages or Docker. Run the
-steps in the **same shell, from the repository root**. For an offline preview,
-skip step 3 and stop after step 4; deployment placeholders can remain.
+This repository installs and runs as a **local toolkit**, not a deployed cloud
+service. It does not provision Foundry resources, deploy models, configure
+Azure hosts or assign roles. Live evaluation uses an existing supported
+deployment and an authorized identity or API key. Docker worker setup and
+supported-host identity prerequisites are documented in the
+[isolation](docs/ISOLATED_EXECUTION.md) and
+[keyless authentication](docs/KEYLESS_AUTH.md#managed-and-workload-identities-on-configured-hosts)
+guides.
+
+The following setup prepares the supplied text task: read `input.txt`, create
+`result.txt` containing `OK`, then run a deterministic task-owned evaluator.
+It uses one task, one deployment and one repeat, with no task-specific packages.
+Continue through [first-run usage](#first-run-one-task-one-deployment) to preview
+or execute it. Keep all steps in the **same PowerShell shell**, from the
+repository root after cloning. For an offline-only preview, skip authentication;
+deployment placeholders can remain.
 
 ### 1. Install the toolkit
 
@@ -65,7 +115,7 @@ can override the bundled runtime; see [runtime binding](docs/CAMPAIGNS_AND_PUBLI
 Contributors can run `npm test` separately; browser checks need an installed
 Edge/Chrome or `BENCHMARK_BROWSER_EXECUTABLE`, not Docker or Azure.
 
-### 2. Make a personal, single-cell example
+### 2. Prepare a first-run configuration
 
 This copies the example and its inputs/evaluators into ignored local storage,
 without modifying the repository examples. Use a new `$work` for another run.
@@ -94,7 +144,9 @@ checks. Per-attempt limits are 10 physical requests, 100,000 reserved tokens,
 declared protective rate, **not an invoice or guaranteed spend cap**. Adjust
 bounds to your deployment/task before preparing; no automatic retry-until-PASS.
 
-### 3. Choose authentication (skip for offline preview)
+### 3. Configure Foundry authentication
+
+Skip this step for an offline-only preview.
 
 Use an **existing** deployment supporting OpenAI-compatible **Responses** and
 the requested reasoning setting. Get its exact deployment name and resource
@@ -144,7 +196,21 @@ in shell history. The key is held only in the current process environment.
 Key-disabled resources require Entra. Omitted `auth` means key mode, **not**
 automatic keyless discovery.
 
-### 4. Save, check and preview without inference
+### 4. Select the execution mode
+
+The copied example uses **trusted-local execution** by default and requires
+no Docker. Review the [host-exposure warning](#prerequisites) before executing
+candidate code.
+
+For container isolation or private grading, follow the
+[Docker setup guide](docs/ISOLATED_EXECUTION.md) now, before saving or preparing.
+It covers Linux daemon/resource/freezer requirements, review of an
+offline-capable image, actual repository digest pinning and an optional
+no-inference worker probe. Docker Desktop installation alone is not acceptance,
+and this toolkit supplies no published or reviewed worker image. Isolation is
+configured on each task, not selected by a campaign command-line flag.
+
+### 5. Save the configuration
 
 ```powershell
 # onboarding:save
@@ -159,6 +225,40 @@ Use PowerShell 7+ for these JSON-writing commands (UTF-8 without a BOM).
 Candidate auth lives in campaign JSON; task auth is mirrored for `doctor`.
 Campaign commands have no `--auth` override. Set auth/isolation **before**
 preparing, because preparation pins configuration and runtime.
+
+For macOS/Linux, use [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)
+to follow the same configuration steps, with native paths; `npm`/`az` commands
+are unchanged. In Bash, set the endpoint/key with `export NAME='value'` instead
+of `$env:NAME`, use `/` path separators and your platform's
+[Azure CLI installer](https://learn.microsoft.com/cli/azure/install-azure-cli).
+
+## Toolkit commands and usage
+
+Run npm commands from the repository root. The scripts build the toolkit
+before execution. Complete [installation and configuration](#installation-and-configuration)
+before using the first-run commands below.
+
+| Command | Purpose | Inference and access |
+|---|---|---|
+| `npm run doctor -- --config <task.json>` | Check local configuration, runtime and prerequisites | No inference; `--acquire-auth` optionally acquires an Entra token; isolated configs inspect Docker/image metadata |
+| `npm run campaign -- <command> ...` | Prepare, run, status, resume, report or clean up owned workers | Prepare/status/report use saved or local evidence; run/resume require `--allow-paid`; isolated cleanup uses Docker |
+| `npm run quickstart -- ...` | Create a disposable task workspace and run an exploratory session | Paid inference immediately; trusted-local only |
+| `npm run bench -- --config <task.json>` | Execute one configured task/session | Paid inference immediately; selected task execution mode |
+| `npm run report:html -- --runs <runs> ...` | Export saved runs to HTML or a portable folder/ZIP | Offline; no inference |
+| `npm run portfolio -- --runs <runs>` | Generate a Markdown comparison from saved runs | Offline; no inference |
+| `npm run prices:refresh -- --runs <runs>` | Save an explicit official-price what-if snapshot | Public pricing-page requests, not model inference |
+| `npm run evaluate -- ...` | Attach an optional fixed-rubric LLM-judge evaluation | Paid inference immediately; selected key/Entra auth |
+
+Campaign run/resume have a paid-operation gate; `quickstart`, `bench` and
+`evaluate` do **not** have an `--allow-paid` gate. Do not treat those commands
+as preflight checks.
+
+### First run: one task, one deployment
+
+Use the `$work`, `$spec`, `$task` and `$state` saved in the setup section.
+For an offline preview, complete only the first step below.
+
+#### 1. Check, prepare and preview without inference
 
 ```powershell
 # onboarding:offline
@@ -184,7 +284,7 @@ In key mode it checks only that a key is present. Even a successful check does
 not verify deployment support, inference RBAC, private-network reachability or
 quota. Stop on failed checks; use [keyless diagnostics](docs/KEYLESS_AUTH.md#preflight-and-errors).
 
-### 5. Run the task (cost-bearing), then report
+#### 2. Run the task and generate a report
 
 **These commands may consume paid Foundry inference.** Proceed only after
 reviewing identity, deployment, bounds and the trusted-local warning above.
@@ -195,13 +295,14 @@ npm run campaign -- status --directory $state
 npm run campaign -- report --directory $state --output "$work\completed-v1" --zip
 ```
 
-The result may be PASS, content FAIL, interrupted or ungraded; none is
-guaranteed. Retained evidence includes `$state\journal.ndjson`,
+Retained evidence includes `$state\journal.ndjson`,
 `$state\runs\<attempt-id>\run.json`, `grade.json` and workspace output. These
 are sensitive local artifacts. Publish only the reviewed
 `completed-v1` folder/ZIP: `index.html`, `evidence.json`,
 `selected-results.json/.csv`, `task-types.json/.csv` and `integrity.json`.
 Default publication excludes raw prompts, logs and source/output content.
+
+#### 3. Resume an interrupted campaign
 
 If interrupted, fix the prerequisite and use the same state:
 
@@ -214,18 +315,19 @@ ambiguous dispatch or reruns a completed content FAIL. It can finalize retained
 outputs without inference. Choose a new report destination, e.g. `completed-v2`,
 after resume: existing folder/ZIP targets are never overwritten.
 
-For macOS/Linux, use [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell)
-to follow the same configuration steps, with native paths; `npm`/`az` commands
-are unchanged. In Bash, set the endpoint/key with `export NAME='value'` instead
-of `$env:NAME`, use `/` path separators and your platform's
-[Azure CLI installer](https://learn.microsoft.com/cli/azure/install-azure-cli).
-
-## Next workflows
+### Multi-task campaigns
 
 To compare more tasks/deployments/repeats, keep both tasks/candidates in the
 [custom campaign](examples/custom-campaign/campaign.json), replace deployment
 names and review aggregate bounds. No fixed task count or category vocabulary
 exists. See [campaign recovery, grading, pricing and publication](docs/CAMPAIGNS_AND_PUBLICATION.md).
+
+Use `npm run campaign -- --help` for the implemented command forms.
+Preparation binds inputs, prompts, rounds, evaluators and runtime; changes
+require a new campaign. Resume the existing state for eligible unfinished
+work, not to select a newer PASS or bypass ambiguous dispatch.
+
+### Exploratory quickstart and saved-run reports
 
 For a disposable exploratory coding task after configuring authentication:
 
@@ -246,13 +348,42 @@ npm run report:html -- --runs $runs --bundle '.\.benchmark-runs\exploration-v1\r
 npm run report:html -- --runs $runs --output '.\.benchmark-runs\exploration-v1\report.html'
 ```
 
-`bench --config` also executes immediately and defaults to trusted local.
+### Controlled tasks and optional analysis
+
+`bench --config` executes immediately and defaults to trusted local unless
+the task config specifies isolation.
 Advanced controlled-run templates and clean baseline instructions are in
 [task authoring](docs/TASK_AUTHORING_GUIDE.md#connect-the-task-file-to-a-controlled-config);
-never reuse a mutated workspace for another candidate. `portfolio` consumes
-saved runs; optional `prices:refresh` fetches official public prices, while
-optional `evaluate` sends **paid** judge requests. Neither is needed for the
-first report.
+never reuse a mutated workspace for another candidate.
+
+For the saved `$runs` from the quickstart example, optional analysis is:
+
+```powershell
+npm run portfolio -- --runs $runs
+npm run prices:refresh -- --runs $runs
+```
+
+These write `$runs\model-selection-report.md` and
+`$runs\pricing-snapshot.json`. Pricing refresh makes public network requests
+and is not required for reporting. Optional `evaluate` sends **paid** judge
+requests; its [keyless command example](docs/KEYLESS_AUTH.md#cost-bearing-execution)
+uses the actual supported flags. Judge scores never replace required
+deterministic acceptance checks.
+
+### Task design and supported configuration
+
+Use [task authoring](docs/TASK_AUTHORING_GUIDE.md) for public requirements,
+probes, a fixed multi-turn plan and the runnable
+[in-memory ordering scenario](scenarios/in-memory-ordering-system/task.md).
+[`benchmark.example.json`](benchmark.example.json) is an advanced controlled
+template, not an already filled first-run configuration.
+
+Tools default to `read`, `edit`, `shell`. Optional
+[MCP](https://modelcontextprotocol.io) servers are part of the immutable local
+execution contract and are disallowed in isolated mode. Environment secret
+placeholders expand only at launch; never store credentials in config files.
+Task/dependency/network policy, rounds, runtime and evaluators must match for
+strictly comparable runs.
 
 ## Reading a generated report
 
@@ -282,13 +413,9 @@ hash-bound [publication manifest](examples/publication.example.json).
 Raw logs, run/check/grade JSON, per-run Markdown, workspaces, patches and full
 judge output are sensitive local evidence requiring separate review.
 
-## Task design and compatibility
+## Known limitations and troubleshooting
 
-Use [task authoring](docs/TASK_AUTHORING_GUIDE.md) for public requirements,
-probes, a fixed multi-turn plan and the runnable
-[in-memory ordering scenario](scenarios/in-memory-ordering-system/task.md).
-[`benchmark.example.json`](benchmark.example.json) is an advanced controlled
-template, not an already filled first-run configuration.
+### Supported endpoints and execution boundaries
 
 The provider is a wire shape, not a model brand: `openai` derives
 `https://<resource>.openai.azure.com/openai/v1`; `anthropic` derives
@@ -296,20 +423,52 @@ The provider is a wire shape, not a model brand: `openai` derives
 OpenAI completions; Responses is explicit and deployment-dependent.
 See [endpoint and authentication constraints](docs/KEYLESS_AUTH.md#endpoint-and-token-audience).
 
-Tools default to `read`, `edit`, `shell`. Optional
-[MCP](https://modelcontextprotocol.io) servers are part of the immutable local
-execution contract and are disallowed in isolated mode. Environment secret
-placeholders expand only at launch; never store credentials in config files.
-Task/dependency/network policy, rounds, runtime and evaluators must match for
-strictly comparable runs.
+Entra authentication requests the fixed `https://ai.azure.com/.default`
+scope; other audiences and automatic credential fallback are unsupported.
+Azure CLI login/token acquisition does not grant or verify data-plane
+inference permission. Managed/workload identities work only on configured
+supported hosts. Trusted-local execution does not isolate credentials or
+processes; isolated execution requires the documented Linux worker boundary.
 
-## Acceptance limits
+### Verification and publication limits
 
 Tests use fake transport/tokens/clocks and deidentified fixtures. Actual
-pinned SDK/CLI acceptance used localhost fake inference and offline Edge.
+pinned SDK/CLI integration checks use localhost fake inference and offline
+browser checks.
+
 **Live Azure key/Entra/RBAC/deployment/network and real Docker enforcement were
-not verified.** The isolation path needs separately authorized live acceptance;
-Docker command construction/export/ownership was injected-executor tested.
-No command provisions Azure resources or assigns roles.
+not verified.** Docker command construction, export and ownership are tested
+with injected executors; actual host/container enforcement needs separate
+acceptance. No command provisions Azure resources or assigns roles.
 Bounded media-token admission, PDF/OCR and independent workbook recalculation
 are unsupported; see [publication limits](docs/CAMPAIGNS_AND_PUBLICATION.md).
+
+### Troubleshooting
+
+Start with `doctor --config` and inspect the recorded stage/dispatch status
+before attempting another paid run. A successful local check or token
+acquisition still leaves `data-plane-inference: not-verified`.
+
+| Symptom | Recommended check or action |
+|---|---|
+| Configuration or endpoint check fails | Replace example placeholders; use the canonical resource root, exact deployment name and supported provider/protocol |
+| Entra credential acquisition fails | Check Azure CLI installation, selected account/tenant and login, or configured host identity; see [keyless diagnostics](docs/KEYLESS_AUTH.md#preflight-and-errors) |
+| Inference returns 401/403 | Confirm token audience, deployment auth support, endpoint-specific inference role and network access; management roles alone are insufficient |
+| Inference returns 404/429 | Check resource/deployment/protocol for 404; check quota and pacing diagnostics for 429, without treating permanent quota as transient |
+| Docker/image or worker probe fails | Review Linux daemon, approved local digest, resource controls and freezing; follow [isolation checks](docs/ISOLATED_EXECUTION.md#4-check-prerequisites-then-test-the-actual-boundary-without-inference), never disable isolation as a fallback |
+| Prepared configuration/runtime no longer matches | Prepare a new immutable campaign; do not edit state to bypass provenance checks |
+| A campaign is interrupted or dispatch is ambiguous | Inspect status and retained evidence; use [recovery rules](docs/CAMPAIGNS_AND_PUBLICATION.md#prepare-run-resume), not an unconditional rerun |
+| Report destination already exists | Choose a new versioned folder/ZIP target; publication does not overwrite a previous report |
+| Report contains missing/ungraded cells or unavailable metrics | Inspect task coverage and evaluator evidence; absence is not PASS or zero, and sparse data does not justify routing claims |
+
+## Supporting documentation
+
+| Reference | Contents |
+|---|---|
+| [Keyless authentication](docs/KEYLESS_AUTH.md) | Azure CLI onboarding, endpoint roles/audience, token-only preflight, managed/workload identities and refresh |
+| [Docker isolation](docs/ISOLATED_EXECUTION.md) | Optional Linux worker setup, image review/digest pinning, feasibility probe and isolated run/report flow |
+| [Campaigns and publication](docs/CAMPAIGNS_AND_PUBLICATION.md) | Immutable preparation, bounds, recovery, owned cleanup, evaluators, comparability, pricing and publication policy |
+| [Task authoring](docs/TASK_AUTHORING_GUIDE.md) | Task requirements, input baselines, deterministic checks, fixed multi-turn plans and configuration examples |
+| [Custom campaign example](examples/custom-campaign/campaign.json) | Runnable text/JSON tasks with task-owned evaluators and replaceable deployments |
+| [Publication manifest example](examples/publication.example.json) | Explicit approval of hash-bound source/output previews |
+| [In-memory ordering scenario](scenarios/in-memory-ordering-system/task.md) | A more detailed exploratory/controlled coding task |

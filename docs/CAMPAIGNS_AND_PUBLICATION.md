@@ -6,7 +6,8 @@ its task/evaluator JSON files use only Node standard-library checks and public
 requirements. Replace deployment placeholders and review bounds before
 inference. No command provisions Azure, grants roles or merges branches.
 
-New users: follow the [single-cell first-run walkthrough](../README.md#first-run-one-task-one-deployment)
+New users: follow [installation and configuration](../README.md#installation-and-configuration),
+then the [single-cell first-run walkthrough](../README.md#first-run-one-task-one-deployment)
 instead of assembling configuration fragments here. Docker is **not** a core
 prerequisite: saved reporting, preparation and trusted-local runs work without
 it. For supported keyless configuration see [Entra onboarding](KEYLESS_AUTH.md);

@@ -159,7 +159,7 @@ run configurations. There are two ways to run it:
 
 Both commands below start **paid inference** immediately and use trusted-local
 execution by default, with no credential/process isolation. Docker is not
-required for them. Follow the [README onboarding](../../README.md#first-run-one-task-one-deployment)
+required for them. Follow the [README onboarding](../../README.md#installation-and-configuration)
 for install, endpoint and key/Entra setup; use
 [explicit container configuration](../../docs/ISOLATED_EXECUTION.md) for
 isolated execution. A clean workspace or a task instruction is not a sandbox.

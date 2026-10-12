@@ -48,6 +48,32 @@ test("new command flag handling rejects unsupported, missing and duplicate optio
   assert.throws(() => assertCliArguments(["--zip", "--zip"], flags), /Duplicate/);
 });
 
+test("public README presents outcomes, setup, commands and limitations in order", () => {
+  const readme = readFileSync(resolve("README.md"), "utf8");
+  const sections = ["Expected outcomes", "Prerequisites", "Installation and configuration",
+    "Toolkit commands and usage", "Reading a generated report", "Known limitations and troubleshooting",
+    "Supporting documentation"];
+  assert.match(readme, /^# Coding Agent Model Evaluation Toolkit\r?\n\r?\nA local TypeScript\/npm toolkit/);
+  assert.deepEqual([...readme.matchAll(/^## (.+)$/gm)].map((heading) => heading[1].trim()),
+    ["Contents", ...sections]);
+  for (const section of sections) {
+    assert.ok(readme.includes(`](#${section.toLowerCase().replaceAll(" ", "-")})`));
+  }
+  const setup = readme.slice(readme.indexOf("## Installation and configuration"), readme.indexOf("## Toolkit commands and usage"));
+  assert.deepEqual([...setup.matchAll(/^### \d\. (.+)$/gm)].map((heading) => heading[1].trim()),
+    ["Install the toolkit", "Prepare a first-run configuration", "Configure Foundry authentication",
+      "Select the execution mode", "Save the configuration"]);
+  for (const marker of ["copy", "save", "offline"]) {
+    assert.equal([...readme.matchAll(new RegExp(`# onboarding:${marker}\\r?\\n`, "g"))].length, 1);
+  }
+  assert.ok(setup.includes("# onboarding:copy") && setup.includes("# onboarding:save"));
+  const usage = readme.slice(readme.indexOf("## Toolkit commands and usage"), readme.indexOf("## Reading a generated report"));
+  assert.ok(usage.includes("# onboarding:offline"));
+  for (const command of ["doctor", "campaign", "quickstart", "bench", "report:html", "portfolio", "prices:refresh", "evaluate"]) {
+    assert.ok(usage.includes(`| \`npm run ${command} -- `), `Missing command reference: ${command}`);
+  }
+});
+
 test("onboarding auth/isolation fragments and immediate-run commands match implemented parsers", () => {
   const readme = readFileSync(resolve("README.md"), "utf8");
   const keyless = readFileSync(resolve("docs", "KEYLESS_AUTH.md"), "utf8");

@@ -1,9 +1,11 @@
 # Keyless Microsoft Entra authentication
 
-Start with the [README first-run walkthrough](../README.md#first-run-one-task-one-deployment).
-It includes the actual example, saving configuration, offline preview and paid
-run/report commands. This guide explains the authentication steps and boundaries
-in more detail. Docker is unrelated to choosing key versus keyless authentication.
+Start with [README installation and configuration](../README.md#installation-and-configuration),
+then continue to [first-run usage](../README.md#first-run-one-task-one-deployment).
+Together they cover the actual example, saving configuration, offline preview
+and paid run/report commands. This guide explains the authentication steps and
+boundaries in more detail. Docker is unrelated to choosing key versus keyless
+authentication.
 
 ## Local developer setup
 
@@ -66,7 +68,8 @@ in more detail. Docker is unrelated to choosing key versus keyless authenticatio
    **each candidate's** `foundryProvider` in campaign JSON. In the README,
    `$spec.candidates[0].foundryProvider.auth` is set then mirrored into the
    task for `doctor`. Candidate configuration overrides the task's provider
-   during campaign execution. Save both files as in README step 4.
+   during campaign execution. Save both files as in
+   [README configuration step 5](../README.md#5-save-the-configuration).
    `candidate.model`/quickstart `--model` must be the exact deployment name.
 
    Omitted auth remains key mode; merely running `az login` does not select
@@ -144,7 +147,8 @@ editing immutable state.
 
 ## Cost-bearing execution
 
-Continue with README step 5 for the bounded single-cell campaign:
+Continue with [README first-run execution](../README.md#2-run-the-task-and-generate-a-report)
+for the bounded single-cell campaign:
 
 ```powershell
 # Paid inference: state was prepared only after auth/configuration was saved.

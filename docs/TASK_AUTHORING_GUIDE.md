@@ -34,7 +34,7 @@ tool implements another harness.
 All quickstart examples are **cost-bearing trusted-local execution**, not
 sandboxed/Docker execution. They need an existing deployment, reachable
 `FOUNDRY_ENDPOINT`, selected **key or Entra** authentication and the matching
-`--provider` value. Follow the [first-run guide](../README.md#first-run-one-task-one-deployment)
+`--provider` value. Follow [installation and configuration](../README.md#installation-and-configuration)
 and [keyless instructions](KEYLESS_AUTH.md) first. Docker is optional except
 for [explicitly isolated configurations](ISOLATED_EXECUTION.md); quickstart
 has no isolation flag. Add `--source
