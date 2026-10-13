@@ -342,6 +342,7 @@ export interface ValidationResult {
   errorMessage: string | null;
   stdout: string;
   stderr: string;
+  failures?: Array<{ phase: "spawn" | "process" | "stdin" | "stdout" | "stderr" | "cleanup"; code: string | null }>;
 }
 
 export type MetricStatus = "available" | "unavailable";

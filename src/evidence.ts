@@ -20,6 +20,13 @@ const checkSchema = z.object({
   id, requirementId: id, category: id, expectedType: id,
   severity: z.enum(["required", "advisory"]),
   status: z.enum(["pass", "fail", "weak", "error"]),
+  diagnostic: z.object({
+    stage: z.enum(["setup", "check"]), exitCode: z.number().int().nullable(), timedOut: z.boolean(),
+    failures: z.array(z.object({
+      phase: z.enum(["spawn", "process", "stdin", "stdout", "stderr", "cleanup"]),
+      code: z.string().regex(/^(?:E[A-Z0-9_]+|ERR_[A-Z0-9_]+)$/).max(64).nullable(),
+    }).strict()).max(6).optional(),
+  }).strict().optional(),
 }).strict();
 export const gradeSchema = z.object({
   schemaVersion: z.literal(1), runId: id, contractHash: sha256Schema,

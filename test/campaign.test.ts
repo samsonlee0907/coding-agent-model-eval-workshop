@@ -2,13 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { existsSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, appendFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { spawnSync } from "node:child_process";
+import { randomUUID, createHash } from "node:crypto";
 import { prepareCampaign, runCampaign, campaignStatus, campaignEvidence, loadPreparedCampaign } from "../src/campaign.js";
 import { atomicJson, acquireOwnership, appendJournal, readJournal } from "../src/durable.js";
 import { EventCollector } from "../src/event-collector.js";
 import { fixtureConfig, fixtureRun, fixtureRuntime } from "./fixtures/revamp.js";
 import { evidenceHash, selectReportCells } from "../src/evidence.js";
-import { collectSnapshot, snapshotHash } from "../src/controlled-worker.js";
+import { collectSnapshot, snapshotHash, writeSnapshot } from "../src/controlled-worker.js";
+import { readRuntimeIdentity } from "../src/runtime-identity.js";
+import { runValidation } from "../src/validation.js";
 import type { BenchmarkConfig, BenchmarkRun } from "../src/types.js";
 import type { BenchmarkRunOptions } from "../src/runner.js";
 
@@ -37,6 +41,95 @@ function fakeRunner(onRun: () => void = () => undefined, verdict: "pass" | "fail
     return run;
   };
 }
+
+test("compiled public campaign resume grades retained outputs under long state roots without provider dispatch", async (t) => {
+  const publicTask = JSON.parse(readFileSync(join("examples", "custom-campaign", "json-task.json"), "utf8"));
+  const publicPolicy = JSON.parse(readFileSync(join("examples", "custom-campaign", "json-evaluator.json"), "utf8"));
+  for (const control of ["public-pass", "setup-spawn-error"]) {
+    const root = mkdtempSync(join(tmpdir(), "bt-public-grade-"));
+    try {
+      mkdirSync(join(root, "json-input"));
+      writeFileSync(join(root, "json-input", "numbers.json"), '{"numbers":[3,5,8]}\n');
+      atomicJson(join(root, "task.json"), publicTask);
+      atomicJson(join(root, "policy.json"), control === "public-pass" ? publicPolicy : { ...publicPolicy, setupCommand: "node\u0000" });
+      const spec = {
+        schemaVersion: 1, id: "offline-public-grading",
+        tasks: [{ id: publicTask.contract.task.id, config: "task.json", evaluator: "policy.json" }],
+        candidates: [{ id: "saved-local-fixture", candidate: { provider: "openai", model: "saved-local-fixture" },
+          foundryProvider: { type: "openai", wireApi: "responses" } }],
+        repeats: 1, inputBounds: { maxFiles: 100, maxBytes: 1024 * 1024 },
+        requestBounds: { maxRequests: 1, maxRequestBytes: 1024 * 1024, maxTokens: 10000, maxOutputTokens: 100,
+          deadlineMs: 30000, requestsPerMinute: 1, tokensPerMinute: 10000 },
+        bounds: { concurrency: 1, minFreeMemoryMb: 0, maxAttemptsPerCell: 1, deadlineMs: 60000,
+          maxRequests: 1, maxReservedTokens: 10000, maxReservationUsd: 1, reservationUsdPerMillionTokens: 1 },
+      };
+      atomicJson(join(root, "spec.json"), spec);
+      const directory = join(root, "s".repeat(Math.max(1, 173 - root.length - 1)));
+      const prepared = prepareCampaign(join(root, "spec.json"), directory, readRuntimeIdentity());
+      const attemptId = randomUUID();
+      const config = structuredClone(prepared.tasks[0].config);
+      config.contract.candidate = prepared.spec.candidates[0].candidate;
+      config.contract.foundryProvider = prepared.spec.candidates[0].foundryProvider;
+      config.workspacePath = join(directory, "attempts", attemptId, "input");
+      config.artifactsDirectory = join(directory, "runs");
+      writeSnapshot(config.workspacePath, prepared.tasks[0].files, 100, 1024 * 1024);
+      writeFileSync(join(config.workspacePath, "answer.json"), '{"sum":16}\r\n');
+      assert.equal(config.workspacePath.length, 225);
+      const validation = await runValidation(publicTask.contract.task.validationCommand, config.workspacePath, 10000);
+      assert.equal(validation.exitCode, 0);
+      const oldGradingCopy = join(directory, "runs", attemptId, `grading-input-${randomUUID()}`);
+      assert.equal(oldGradingCopy.length, 266);
+      writeSnapshot(oldGradingCopy, collectSnapshot(config.workspacePath, 100, 1024 * 1024), 100, 1024 * 1024);
+      const oldSpawn = spawnSync(process.execPath, ["-e", "process.exit(0)"], { cwd: oldGradingCopy, timeout: 10000, encoding: "utf8" });
+      if (process.platform === "win32") { assert.equal(oldSpawn.status, null); assert.equal(oldSpawn.error?.code, "ENOENT"); }
+      const oldValidation = await runValidation(publicPolicy.checks[0].command, oldGradingCopy, 5000);
+      if (process.platform === "win32") {
+        assert.equal(oldValidation.exitCode, null);
+        assert.ok(oldValidation.failures?.some((failure) => failure.phase === "spawn" && failure.code === "ENOENT"));
+      } else assert.equal(oldValidation.exitCode, 0);
+      rmSync(oldGradingCopy, { recursive: true });
+      const run = fixtureRun(attemptId, config, "ungraded");
+      run.validation = validation; run.workspaceHash = snapshotHash(collectSnapshot(config.workspacePath, 100, 1024 * 1024));
+      run.requestAccounting = { physicalRequests: 0, reservedTokens: 0, ambiguousRequests: 0, rejectedRequests: 0 };
+      atomicJson(join(run.artifacts.directory, "run.json"), run);
+      const pair = JSON.stringify([publicTask.contract.task.id, "saved-local-fixture", 0]);
+      appendJournal(join(directory, "journal.ndjson"), { schemaVersion: 1, sequence: 1, at: new Date().toISOString(),
+        pair, attemptId, state: "finalizing", phase: "grading" });
+      const before = readFileSync(join(run.artifacts.directory, "run.json"));
+      const cli = spawnSync(process.execPath, [resolve("dist", "campaign-cli.js"), "resume", "--directory", directory, "--allow-paid"],
+        { encoding: "utf8", timeout: 30000, maxBuffer: 65536,
+          env: { ...process.env, FOUNDRY_API_KEY: "", FOUNDRY_ENDPOINT: "" } });
+      assert.equal(cli.error, undefined); assert.equal(cli.status, 0, cli.stderr);
+      assert.doesNotMatch(cli.stderr, /Unhandled|ENOTCONN/);
+      const grade = JSON.parse(readFileSync(join(run.artifacts.directory, "grade.json"), "utf8"));
+      assert.equal(grade.checks[0].status, control === "public-pass" ? "pass" : "error");
+      if (control === "setup-spawn-error") assert.deepEqual(grade.checks[0].diagnostic, {
+        stage: "setup", exitCode: null, timedOut: false, failures: [{ phase: "spawn", code: "ERR_INVALID_ARG_VALUE" }],
+      });
+      assert.equal(grade.workspaceHash, run.workspaceHash);
+      assert.equal(campaignEvidence(directory).attempts[0].metrics.physicalRequests, 0);
+      assert.equal(campaignStatus(directory).cells[0].status, control === "public-pass" ? "pass" : "error");
+      assert.equal(readJournal(join(directory, "journal.ndjson"), (value) => {
+        assert.ok(value !== null && typeof value === "object" && "state" in value);
+        return value.state;
+      }).at(-1), "completed");
+      assert.deepEqual(readFileSync(join(run.artifacts.directory, "run.json")), before);
+      assert.equal(snapshotHash(collectSnapshot(config.workspacePath, 100, 1024 * 1024)), run.workspaceHash);
+      assert.equal(createHash("sha256").update(readFileSync(join(config.workspacePath, "answer.json"))).digest("hex"),
+        "2cf63b303bd261432bc7bd5a0c8412c4f5341c0e96c306f08a49e193ee183118");
+      assert.ok(readdirSync(run.artifacts.directory).every((path) => !path.startsWith("grading-input-")));
+      t.diagnostic(JSON.stringify({ control, node: process.version, platform: process.platform,
+        originalCwdCharacters: config.workspacePath.length, originalValidationExit: validation.exitCode,
+        oldGradingCwdCharacters: oldGradingCopy.length, oldSpawnErrorCode: oldSpawn.error?.code ?? null,
+        handledLongCwdFailures: oldValidation.failures ?? [],
+        publicResumeExit: cli.status, persistedGradeStatus: grade.checks[0].status,
+        publicRequiredCheck: grade.checks[0].id, policyHash: grade.policyHash,
+        originalWorkspaceUnchanged: true, savedExecutionPhysicalRequests: 0,
+      }));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+
 test("custom campaign pins inputs and skips clean completed content FAILs on resume", async () => {
   const root = mkdtempSync(join(tmpdir(), "benchmark-campaign-"));
   try {

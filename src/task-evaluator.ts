@@ -1,8 +1,11 @@
 import { z } from "zod";
 import { gradeSchema, evidenceHash, type EvaluatorGrade } from "./evidence.js";
-import { collectSnapshot, snapshotHash } from "./controlled-worker.js";
+import { collectSnapshot, snapshotHash, writeSnapshot, type SnapshotFile } from "./controlled-worker.js";
 import { runValidation } from "./validation.js";
 import type { BenchmarkRun } from "./types.js";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 export const evaluatorPolicySchema = z.object({
   schemaVersion: z.literal(1), version: z.string().min(1),
@@ -24,6 +27,7 @@ export const calibrationSchema = z.object({
     workspaceHash: z.string().regex(/^[a-f0-9]{64}$/),
     expected: z.record(z.string(), z.enum(["pass", "fail"])),
     observed: z.record(z.string(), z.enum(["pass", "fail", "error"])),
+    diagnostics: z.record(z.string(), gradeSchema.shape.checks.element.shape.diagnostic.unwrap()).optional(),
   }).strict()),
 }).strict();
 export type EvaluatorCalibration = z.infer<typeof calibrationSchema>;
@@ -64,9 +68,24 @@ async function evaluateChecks(policy: EvaluatorPolicy, workspace: string, execut
     const status = !result || result.exitCode === null || result.errorMessage || result.timedOut ? "error"
       : result.exitCode === 0 ? "pass" : !(check.failureExitCodes ?? [1]).includes(result.exitCode) ? "error"
       : check.severity === "advisory" ? "weak" : "fail";
-    checks.push({ id: check.id, requirementId: check.requirementId, category: check.category, expectedType: check.expectedType, severity: check.severity, status } as const);
+    const failure = setupFailed ? setup : result;
+    checks.push({ id: check.id, requirementId: check.requirementId, category: check.category, expectedType: check.expectedType, severity: check.severity, status,
+      ...(status === "error" && failure ? { diagnostic: {
+        stage: setupFailed ? "setup" as const : "check" as const, exitCode: failure.exitCode, timedOut: failure.timedOut,
+        ...(failure.failures?.length ? { failures: failure.failures } : {}),
+      } } : {}),
+    } as const);
   }
   return checks;
+}
+
+async function withGradingWorkspace<T>(files: SnapshotFile[], operation: (workspace: string) => Promise<T>): Promise<T> {
+  const root = mkdtempSync(join(tmpdir(), "bt-grade-"));
+  try {
+    const workspace = join(root, "input");
+    writeSnapshot(workspace, files, 100000, 512 * 1024 * 1024);
+    return await operation(workspace);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 }
 
 export async function gradeSavedRun(
@@ -77,12 +96,13 @@ export async function gradeSavedRun(
   const policy = parseEvaluatorPolicy(policyInput);
   if (policy.graderInputsHash !== graderInputsHash) throw new TypeError("Private grader input binding mismatch.");
   if (!run.artifacts.workspace || run.workspaceHash !== workspaceHash) throw new TypeError("Saved run must bind the exact graded workspace.");
-  if (snapshotHash(collectSnapshot(run.artifacts.workspace, 100000, 512 * 1024 * 1024)) !== workspaceHash) throw new TypeError("Graded workspace bytes changed after the saved output binding.");
+  const files = collectSnapshot(run.artifacts.workspace, 100000, 512 * 1024 * 1024);
+  if (snapshotHash(files) !== workspaceHash) throw new TypeError("Graded workspace bytes changed after the saved output binding.");
   const calibration = calibrationInput ? verifyCalibration(policy, calibrationInput) : null;
   return gradeSchema.parse({
     schemaVersion: 1, runId: run.runId, contractHash: run.contractHash, workspaceHash,
     policyHash: evidenceHash(policy), evaluatorVersion: policy.version,
-    checks: await evaluateChecks(policy, run.artifacts.workspace, execute, deadlineAt),
+    checks: await withGradingWorkspace(files, (workspace) => evaluateChecks(policy, workspace, execute, deadlineAt)),
     calibrated: calibration?.calibrated ?? false, createdAt: new Date().toISOString(),
   });
 }
@@ -97,11 +117,14 @@ export async function calibrateEvaluator(
   if (policy.graderInputsHash !== graderInputsHash) throw new TypeError("Private grader input binding mismatch.");
   const records = [];
   for (const reference of references) {
-    const workspaceHash = snapshotHash(collectSnapshot(reference.workspace, 10000, 64 * 1024 * 1024));
-    const checks = await evaluateChecks(policy, reference.workspace, execute);
+    const files = collectSnapshot(reference.workspace, 10000, 64 * 1024 * 1024);
+    const workspaceHash = snapshotHash(files);
+    const checks = await withGradingWorkspace(files, (workspace) => evaluateChecks(policy, workspace, execute));
+    const diagnostics = Object.fromEntries(checks.flatMap((check) => check.diagnostic ? [[check.id, check.diagnostic]] : []));
     records.push({
       id: reference.id, kind: reference.kind, expected: reference.expected, workspaceHash,
       observed: Object.fromEntries(checks.map((c) => [c.id, c.status === "weak" ? "fail" : c.status])),
+      ...(Object.keys(diagnostics).length ? { diagnostics } : {}),
     });
   }
   const base = { schemaVersion: 1 as const, policyHash: evidenceHash(policy), calibrated: false, references: records };

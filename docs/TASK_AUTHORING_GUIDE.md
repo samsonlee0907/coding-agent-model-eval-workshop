@@ -90,6 +90,21 @@ a genuinely required source ID, numeric type, set membership or ordering rule.
 exact policy hash. A calibration flag alone is not evidence.
 
 Saved grades bind the run, contract, workspace byte hash, policy and version.
+Trusted-local grading and calibration run setup/checks in compact, uniquely
+owned temporary copies of those bounded snapshots, not nested copies under
+long campaign paths or the original reference files. Copies are removed on
+success and error; setup changes do not mutate retained output/reference
+bytes. Prepare dependencies with an explicit setup command rather than
+depending on omitted host `node_modules` or a reference's parent directory.
+Isolated grading still executes in its controlled worker with private `/grader`
+assets; a compact host copy is not a credential-isolation boundary.
+
+Child spawn/stdio errors and timeouts produce evaluator ERROR, not a model
+quality FAIL. New error checks retain categorical `diagnostic` fields
+(setup/check stage, exit code, timeout and available subprocess error codes),
+never child stderr or environment in the grade. Calibration references retain
+the same optional per-check diagnostics alongside their observed ERROR.
+Earlier grades/calibrations remain unchanged and may lack these diagnostics.
 To fix a grader, version the policy and apply it uniformly to all relevant
 saved outputs in a separately declared report cohort. Resume never regrades
 one failed candidate until it passes or silently changes immutable grades.

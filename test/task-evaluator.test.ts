@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync, existsSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { calibrateEvaluator, gradeSavedRun, verifyCalibration, parseEvaluatorPolicy } from "../src/task-evaluator.js";
@@ -8,6 +8,7 @@ import { evidenceHash } from "../src/evidence.js";
 import { collectSnapshot, snapshotHash } from "../src/controlled-worker.js";
 import { fixtureConfig, fixtureRun } from "./fixtures/revamp.js";
 import type { ValidationResult } from "../src/types.js";
+import { runValidation } from "../src/validation.js";
 
 const policy = { schemaVersion: 1, version: "uniform-v1", timeoutMs: 1000, checks: [
   { id: "requirement", requirementId: "R1", category: "semantic", expectedType: "text", severity: "required", command: "uniform-private-check" },
@@ -64,5 +65,45 @@ test("calibration requires positives, intentional negatives and equivalent-valid
     assert.equal(calibration.calibrated, true);
     assert.equal((await calibrateEvaluator(policy, references.slice(0, 1), async () => result(0))).calibrated, false);
     assert.throws(() => verifyCalibration(parseEvaluatorPolicy({ ...policy, version: "changed" }), calibration), /policy hash/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test("grading and calibration use compact owned copies, preserve original bytes and clean up after errors", async () => {
+  const root = mkdtempSync(join(tmpdir(), "bt-long-grader-"));
+  const publicPolicy = JSON.parse(readFileSync(join("examples", "custom-campaign", "json-evaluator.json"), "utf8"));
+  const gradingPolicy = { ...publicPolicy,
+    setupCommand: 'node -e "require(\'node:fs\').writeFileSync(\'grader-only.txt\',\'transient\')"' };
+  const workingCopies: string[] = [];
+  const execute: typeof runValidation = async (command, cwd, timeout) => {
+    workingCopies.push(cwd); assert.ok(cwd.length < 240); assert.ok(!cwd.startsWith(root));
+    return runValidation(command, cwd, timeout);
+  };
+  try {
+    const referenceRoot = join(root, "long".repeat(40), "reference".repeat(10));
+    const references = ["positive", "negative", "equivalent"].map((kind) => {
+      const workspace = join(referenceRoot, kind); mkdirSync(workspace, { recursive: true });
+      writeFileSync(join(workspace, "answer.json"), kind === "negative" ? '{"sum":0}\r\n'
+        : kind === "equivalent" ? '{ "sum": 16, "extra": true }\n' : '{"sum":16}\r\n');
+      return { id: kind, kind: kind as "positive" | "negative" | "equivalent", workspace,
+        expected: { "public-sum": kind === "negative" ? "fail" as const : "pass" as const } };
+    });
+    const hashes = references.map((ref) => snapshotHash(collectSnapshot(ref.workspace, 100, 10000)));
+    const calibration = await calibrateEvaluator(gradingPolicy, references, execute);
+    assert.equal(calibration.calibrated, true);
+    const run = fixtureRun("long", fixtureConfig(references[0].workspace)); run.workspaceHash = hashes[0];
+    const grade = await gradeSavedRun(run, gradingPolicy, run.workspaceHash, calibration, execute);
+    assert.equal(grade.checks[0].status, "pass"); assert.equal(grade.workspaceHash, hashes[0]);
+    assert.ok(workingCopies.length > 0); assert.ok(workingCopies.every((cwd) => !existsSync(cwd)));
+    assert.deepEqual(references.map((ref) => snapshotHash(collectSnapshot(ref.workspace, 100, 10000))), hashes);
+    assert.equal(readFileSync(join(references[0].workspace, "answer.json"), "utf8"), '{"sum":16}\r\n');
+    const failedCalibration = await calibrateEvaluator({ ...publicPolicy, setupCommand: "node\u0000" }, references, execute);
+    assert.equal(failedCalibration.calibrated, false);
+    assert.deepEqual(failedCalibration.references[0].diagnostics?.["public-sum"], {
+      stage: "setup", exitCode: null, timedOut: false, failures: [{ phase: "spawn", code: "ERR_INVALID_ARG_VALUE" }],
+    });
+    assert.ok(workingCopies.every((cwd) => !existsSync(cwd)));
+    await assert.rejects(() => gradeSavedRun(run, publicPolicy, run.workspaceHash!, undefined, async (_cmd, cwd) => {
+      workingCopies.push(cwd); throw new Error("explicit executor failure");
+    }), /explicit executor failure/);
+    assert.ok(workingCopies.every((cwd) => !existsSync(cwd)));
   } finally { rmSync(root, { recursive: true, force: true }); }
 });

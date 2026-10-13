@@ -90,6 +90,35 @@ none was ambiguous, and immutable attempt/budget limits permit a new attempt.
 `--recover-lock` only recovers a same-host lock whose PID is demonstrably
 absent. It never steals a live process's lock. No retry-until-PASS policy exists.
 
+### Windows grading working directories
+
+Saved-output grading and reference calibration use short owned folders under
+the operating system's temporary directory, with the existing bounded
+snapshot/hash checks and cleanup on both success and error. They no longer
+create `grading-input-UUID` inside a potentially long run directory. Original
+outputs/references and immutable grade bindings are preserved.
+
+Windows filesystem support for a long path does **not** imply that a child
+process/shell can use it as its working directory. On the observed
+Node 26.5.1 Windows host, an existing 266-character directory failed subprocess
+spawn with `ENOENT`; an unhandled pipe `ENOTCONN` previously hid that first
+actionable spawn failure. Shared validation now handles child and all stdio
+error events with finite cleanup/output bounds and categorical diagnostics.
+These are infrastructure errors, not provider failures or incorrect content.
+The temp root must itself be usable by the selected shell/executable; no
+registry toggle, shared defaults or automatic user-directory relocation is
+performed. Task validation outside grading keeps its declared working
+directory and now reports a spawn failure instead of an unhandled pipe crash.
+
+See the owner documentation for
+[Node child-process error/close events](https://nodejs.org/docs/v26.5.1/api/child_process.html#event-error),
+[owned temporary directories](https://nodejs.org/docs/v26.5.1/api/fs.html#fsmkdtempsyncprefix-options)
+and [Windows path limitations](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
+Retained-output resume can finish grading without new inference, but the CLI
+still requires `--allow-paid`: that flag is not a grading-only guarantee for
+other cells. Inspect status and the retained checkpoint before approving a
+resume; do not use it to automatically continue a stopped acceptance campaign.
+
 ## Bounds and dispatch certainty
 
 RPM/TPM values are configured local ceilings, not discovered Azure deployment

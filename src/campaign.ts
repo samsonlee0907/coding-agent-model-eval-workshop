@@ -268,13 +268,7 @@ export async function runCampaign(directory: string, options: CampaignRunOptions
               if (config.isolation) grader = await ControlledWorker.create(config.isolation,
                 files,
                 join(directory, "runs", attemptId, `private-grader-${randomUUID()}.json`), undefined, cell.task.graderFiles, operationDeadline);
-              let gradingRun = run;
-              if (!config.isolation) {
-                const workspace = join(directory, "runs", attemptId, `grading-input-${randomUUID()}`);
-                writeSnapshot(workspace, files, prepared.spec.inputBounds.maxFiles, prepared.spec.inputBounds.maxBytes);
-                gradingRun = { ...run, artifacts: { ...run.artifacts, workspace } };
-              }
-              const grade = await gradeSavedRun(gradingRun, cell.task.evaluator, run.workspaceHash, cell.task.calibration,
+              const grade = await gradeSavedRun(run, cell.task.evaluator, run.workspaceHash, cell.task.calibration,
                 grader ? (command, _cwd, timeout) => grader!.validate(command, timeout) : undefined, cell.task.evaluator.graderInputsHash, operationDeadline);
               atomicJson(gradePath, grade);
             } finally { await grader?.dispose(); }
