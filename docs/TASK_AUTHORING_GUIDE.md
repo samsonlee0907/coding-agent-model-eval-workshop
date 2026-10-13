@@ -202,8 +202,12 @@ finite bounds and its [final required evaluator](../examples/custom-campaign/exa
 then run `doctor --verify-runtime` and
 `doctor --verify-request-fit` before preparation. With the flag, the runtime
 probe reports `textEditSemantics.scope: exact-utf8-control`, `resultBytes: 2`
-and `terminalNewline: false`; without it, the existing newline-terminated
-control does **not** certify newline removal. The flag, tool schema and any
+and `terminalNewline: false`. This public doctor probe uses its own disposable
+fixture: it natively creates `FIRST` with a terminal newline, then uses the
+declared exact writer to produce final two-byte `OK`. It does not execute the
+authored two-phase task or assert initial `OK` plus exactly one LF.
+Without the flag, the existing newline-terminated control does **not** certify
+newline removal. The flag, tool schema and any
 instruction changes affect request size and immutable comparison identity.
 Use a **new cohort**, never change a prepared run, relax its required checks
 or retry a content failure until PASS.
@@ -211,9 +215,14 @@ In a copied campaign manifest, add a task with `id: exact-text-result`,
 `config` pointing to your saved exact task and `evaluator` pointing to the
 exact evaluator; leave the existing optional-newline task/evaluator unchanged.
 The final evaluator checks retained final bytes, not initial-phase history;
-the local runtime control separately asserts the initial LF and final two-byte
-edit. A model's ability to choose the declared tool still needs a bounded live
-gate; deterministic fake-provider instructions are not model-quality evidence.
+it cannot establish that the model completed both phases in order. The separate
+original-prompt fake-provider regression/reproduction checks initial three-byte
+`OK` plus LF and final two-byte `OK`; this is not the shipped public doctor
+probe. A read-only live phase observer can retain initial-phase byte evidence
+before the fixed follow-up without changing candidate output; that observer is
+acceptance-session instrumentation, not a toolkit doctor feature. A model's
+ability to choose the declared tool still needs a bounded live gate;
+deterministic fake-provider instructions are not model-quality evidence.
 
 ### Blueprint: CSV parser regression
 
