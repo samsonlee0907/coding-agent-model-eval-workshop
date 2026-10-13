@@ -14,6 +14,8 @@ it. For supported keyless configuration see [Entra onboarding](KEYLESS_AUTH.md);
 for the optional isolated boundary see [Docker setup and feasibility](ISOLATED_EXECUTION.md).
 Preparation can pin an isolation policy offline without a daemon; actually
 executing/grading it requires the Linux daemon and approved local image.
+For the full ordered workflow, including stricter manual admission/stop rules,
+use the [systematic operator guide](RUNNING_THE_TOOLKIT.md).
 
 ## Prepare, run, resume
 
@@ -215,6 +217,13 @@ not reset it. Explicit resume gives retained-output finalization a fresh
 bounded window, without renewing permission for ambiguous inference.
 Cleanup has its own bounded window. Systemic failures stop new admission and
 drain independent active lanes before releasing ownership.
+This is not a guarantee that every unsafe interruption, missing grade or
+evaluator ERROR automatically halts other scheduled cells. If your acceptance
+policy requires that stronger boundary, use reviewed sequential one-cell
+campaigns with external aggregate inspection/cooldowns and stop operator
+admission on those states, as in the
+[operator guide](RUNNING_THE_TOOLKIT.md#operator-admission-and-stop-policy).
+Do not invent a `--cell` flag or treat `resume --allow-paid` as grading-only.
 
 ## Trusted local versus credential-isolated execution
 

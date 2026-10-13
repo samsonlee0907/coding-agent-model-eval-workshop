@@ -19,6 +19,12 @@ work. Microsoft Foundry supplies model inference through the SDK's BYOK
 provider; this toolkit supplies task policy, accounting, evaluators and reports.
 BYOK runs do not require a GitHub Copilot subscription or Copilot login.
 
+**Start with [Running the toolkit smoothly](docs/RUNNING_THE_TOOLKIT.md):**
+one systematic path from task choice, keyless identity/capacity and offline
+gates to a bounded one-cell run, acceptance inspection and safe report sharing.
+It also covers custom suites, report-only use, operator stop points and the
+limits learned from real runs.
+
 ## Contents
 
 - [Expected outcomes](#expected-outcomes)
@@ -403,16 +409,24 @@ A clean content FAIL remains a completed result, never an excuse to retry until 
 
 #### 3. Resume an interrupted campaign
 
-If interrupted, fix the prerequisite and use the same state:
+Inspect retained checkpoints and all pending cells before approving resume.
+If the prerequisite can be fixed without changing immutable source/runtime,
+task or policy bindings, eligible unfinished work can use the same state:
 
 ```powershell
 npm run campaign -- resume --directory $state --allow-paid
 ```
 
-Resume is also cost-bearing for not-yet-run cells; it never silently replays
+**Resume is not grading-only:** it is also cost-bearing for not-yet-run cells.
+Do not resume an old multi-cell record just to obtain a missing grade.
+It never silently replays
 ambiguous dispatch or reruns a completed content FAIL. It can finalize retained
 outputs without inference. Choose a new report destination, e.g. `completed-v2`,
 after resume: existing folder/ZIP targets are never overwritten.
+Changed source/runtime/profile requires a new declared cohort, not hidden
+rebinding of prepared state. See the [operator stop policy](docs/RUNNING_THE_TOOLKIT.md#operator-admission-and-stop-policy);
+the multi-cell runner does not automatically stop on every unsafe interruption
+or evaluator ERROR.
 
 ### Multi-task campaigns
 
@@ -601,6 +615,7 @@ acquisition still leaves `data-plane-inference: not-verified`.
 
 | Reference | Contents |
 |---|---|
+| [Running the toolkit smoothly](docs/RUNNING_THE_TOOLKIT.md) | Ordered first-run/operator workflow, public/custom task paths, offline reporting, acceptance and stop rules, accounting and safe sharing |
 | [Keyless authentication](docs/KEYLESS_AUTH.md) | Azure CLI onboarding, endpoint roles/audience, token-only preflight, managed/workload identities and refresh |
 | [Docker isolation](docs/ISOLATED_EXECUTION.md) | Optional Linux worker setup, image review/digest pinning, feasibility probe and isolated run/report flow |
 | [Campaigns and publication](docs/CAMPAIGNS_AND_PUBLICATION.md) | Immutable preparation, bounds, recovery, owned cleanup, evaluators, comparability, pricing and publication policy |
