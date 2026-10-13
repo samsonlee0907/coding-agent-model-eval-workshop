@@ -100,6 +100,12 @@ test("worker candidate tools are confined and cleanup verifies exact ownership",
     const tool = worker.tool(["read", "edit"]);
     await assert.rejects(async () => tool.handler!({ operation: "command", command: "cat /host" }, { sessionId: "s", toolCallId: "t", toolName: tool.name }), /denied/);
     await assert.rejects(async () => tool.handler!({ operation: "read", path: "../host" }, { sessionId: "s", toolCallId: "t", toolName: tool.name }), /relative/);
+    await assert.rejects(async () => tool.handler!({ operation: "write", path: "result.txt" }, { sessionId: "s", toolCallId: "t", toolName: tool.name }), /content is required/);
+    await assert.rejects(async () => tool.handler!({ operation: "write", path: "result.txt", content: "\u2603".repeat(400000) },
+      { sessionId: "s", toolCallId: "t", toolName: tool.name }), /byte bound/);
+    await tool.handler!({ operation: "write", path: "result.txt", content: "OK" }, { sessionId: "s", toolCallId: "t", toolName: tool.name });
+    assert.ok(calls.at(-1)?.includes("write"));
+    assert.ok(calls.at(-1)?.some((arg) => arg.includes("fs.writeFileSync(p,s)")));
     const before = calls.length; owner = "someone-else";
     await assert.rejects(() => worker.dispose(), /ownership mismatch/);
     assert.ok(calls.slice(before).every((args) => args[0] !== "rm"));

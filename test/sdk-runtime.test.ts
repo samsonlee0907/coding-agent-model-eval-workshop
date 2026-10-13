@@ -70,6 +70,13 @@ test("public doctor measures actual initial request shape and blocks small conse
     assert.equal(fit.status, "fit"); assert.ok(fit.prospectiveTokenHeadroom > 0);
     assert.equal(fit.outputTokenLimit, 2000); assert.equal(fit.liveSharedHeadroom, "unknown");
     assert.equal(config.contract.execution.reasoningEffort, "high");
+    config.contract.execution.exactContentEdits = true;
+    writeFileSync(path, JSON.stringify(config));
+    const exactFit = JSON.parse(invoke()).requestFitVerification;
+    assert.ok(exactFit.filters.includes("custom:write_file_exact"));
+    assert.equal(exactFit.status, "fit");
+    assert.ok(!exactFit.filters.some((filter: string) => /shell|powershell|bash/.test(filter)));
+    assert.equal(existsSync(join(root, "result.txt")), false);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 test("selected SDK/CLI fails closed on metered incomplete/failed/error terminals and unmetered partial 200 without cloud", { timeout: 120000 }, async () => {
@@ -184,6 +191,14 @@ test("pinned SDK uses refreshed bearer, large multi-round Responses and controll
   let token = "fixture-token-one";
   const codingWorkspace = join(root, "production-coding");
   let codingCursor = 0;
+  const exactWorkspace = join(root, "production-exact");
+  let exactCursor = 0;
+  const exactActions = [
+    { name: "view", arguments: { path: join(exactWorkspace, "input.txt") } },
+    { name: "create", arguments: { path: join(exactWorkspace, "result.txt"), file_text: "OK\n" } }, null,
+    { name: "write_file_exact", arguments: { path: "result.txt", content: "OK" } },
+    { name: "view", arguments: { path: join(exactWorkspace, "result.txt") } }, null,
+  ];
   const codingActions = [
     { name: "view", arguments: { path: join(codingWorkspace, "input.txt") } },
     { name: "create", arguments: { path: join(codingWorkspace, "result.txt"), file_text: "FIRST\n" } },
@@ -214,12 +229,14 @@ test("pinned SDK uses refreshed bearer, large multi-round Responses and controll
         } })}\n\n`);
         return;
       }
-      if (JSON.stringify(body.input).includes("PRODUCTION_CODING_FIXTURE")) {
-        const action = codingActions[codingCursor++];
+      if (JSON.stringify(body.input).includes("PRODUCTION_CODING_FIXTURE") || JSON.stringify(body.input).includes("PRODUCTION_EXACT_FIXTURE")) {
+        const exact = JSON.stringify(body.input).includes("PRODUCTION_EXACT_FIXTURE");
+        const action = exact ? exactActions[exactCursor++] : codingActions[codingCursor++];
         if (action) {
-          const call = `coding-${codingCursor}`;
+          const index = exact ? exactCursor : codingCursor;
+          const call = `coding-${index}`;
           const item = { id: call, call_id: call, type: "function_call", name: action.name, arguments: JSON.stringify(action.arguments), status: "completed" };
-          const response = { id: `coding-response-${codingCursor}`, object: "response", status: "completed", output: [item], model: "fixture-model" };
+          const response = { id: `coding-response-${index}`, object: "response", status: "completed", output: [item], model: "fixture-model" };
           res.writeHead(200, { "content-type": "text/event-stream" });
           for (const event of [
             { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
@@ -360,6 +377,25 @@ test("pinned SDK uses refreshed bearer, large multi-round Responses and controll
       assert.match(readFileSync(join(codingWorkspace, "result.txt"), "utf8"), /^OK\r?\n$/);
       assert.equal(JSON.parse(readFileSync(join(codingWorkspace, "answer.json"), "utf8")).sum, 16);
       assert.deepEqual(codingRun.diagnostics.configuredToolFilters, ["builtin:view", "builtin:glob", "builtin:create", "builtin:edit"]);
+      mkdirSync(exactWorkspace); writeFileSync(join(exactWorkspace, "input.txt"), "public exact control\n");
+      const exactConfig = fixtureConfig(exactWorkspace, "exact-fixture", "fixture-model");
+      exactConfig.contract.runtime = readRuntimeIdentity();
+      exactConfig.contract.execution.tools = ["read", "edit"];
+      exactConfig.contract.execution.exactContentEdits = true;
+      exactConfig.contract.task.prompt = "PRODUCTION_EXACT_FIXTURE: create result.txt with OK and one LF.";
+      exactConfig.contract.task.validationCommand = `node -e "if(require('node:fs').readFileSync('result.txt','utf8')!=='OK')process.exit(1)"`;
+      exactConfig.rounds = [{ prompt: "PRODUCTION_EXACT_FIXTURE: remove the terminal newline.", mode: "enqueue" }];
+      exactConfig.requestBounds = codingConfig.requestBounds;
+      exactConfig.artifactsDirectory = join(root, "exact-artifacts");
+      const exactRun = await runBenchmark(exactConfig);
+      assert.equal(exactRun.runnerError, null); assert.equal(exactRun.executionStatus, "completed");
+      assert.equal(exactRun.contract.execution.exactContentEdits, true);
+      assert.equal(exactRun.validation?.exitCode, 0);
+      assert.deepEqual(readFileSync(join(exactWorkspace, "result.txt")), Buffer.from("OK"));
+      assert.equal(exactRun.requestAccounting?.physicalRequests, 6);
+      assert.equal(exactRun.requestAccounting?.ambiguousRequests, 0);
+      assert.deepEqual(exactRun.diagnostics.configuredToolFilters,
+        ["builtin:view", "builtin:glob", "builtin:create", "builtin:edit", "custom:write_file_exact"]);
       const terminalConfig = fixtureConfig(workspace, "terminal-fixture", "fixture-model");
       terminalConfig.contract.runtime = readRuntimeIdentity();
       terminalConfig.contract.task.prompt = "PRODUCTION_TERMINAL_FIXTURE";

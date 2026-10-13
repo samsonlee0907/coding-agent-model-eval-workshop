@@ -217,8 +217,22 @@ conservative reservation, effective output ceiling, local TPM and prospective
 headroom. A blocked result exits 2. Positive initial headroom is **not**
 certification of later context/tool results, relocated workspace shape or
 instantaneous live/shared capacity; real requests still face admission.
+Growing fixed-round context can exceed the **local** ceiling even when the
+deployment observation is higher and earlier requests completed cleanly.
+An admission failure with `certainty: not-dispatched`, no upstream status and
+zero response bytes is a prospective local refusal, not another streamed
+throttle, output exhaustion or unknown-usage request. Retain the completed
+requests' meters and interrupted work-plan status. Do not auto-raise TPM or
+rewrite an immutable profile: any reviewed new local ceiling must stay within
+the approved deployment share, with finite cumulative tokens/requests/deadlines
+and explicit shared-traffic headroom. Initial-fit proof is not a full-plan guarantee.
 The probe currently supports trusted-local OpenAI Responses without MCP only.
 Isolated/other-protocol shape probing is explicitly unverified, never downgraded.
+Tasks requiring no terminal newline should also follow the
+[exact UTF-8 editing gate](TASK_AUTHORING_GUIDE.md#exact-utf-8-editing-without-shell).
+The opt-in writer adds a tool schema and changes request shape; rerun both
+offline gates before immutable preparation. It does not change reasoning,
+output allowance, credentials or quota automatically.
 
 If a reservation is individually larger than the configured local TPM, the
 real bridge rejects it at **zero physical dispatches**, with the reservation,

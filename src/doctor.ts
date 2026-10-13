@@ -79,7 +79,8 @@ export async function doctor(configPath: string, acquireAuth = false, verify = f
   if (verify) {
     try {
       runtimeVerification = await verifyRuntime(config, allowContainerProbe);
-      checks.push({ stage: "runtime-coding-probe", status: "pass", detail: "Actual runtime created and edited two files over fixed local fake-provider rounds, including >192 KiB input, then validated exact content. No Azure inference." });
+      checks.push({ stage: "runtime-coding-probe", status: "pass",
+        detail: `Actual runtime created and edited two files over fixed local fake-provider rounds, including >192 KiB input; ${runtimeVerification.textEditSemantics.scope} validated. ${runtimeVerification.textEditSemantics.guidance} No Azure inference.` });
     } catch (error) {
       checks.push({ stage: "runtime-coding-probe", status: "fail", detail: error instanceof Error ? error.message : String(error) });
     }

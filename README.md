@@ -486,6 +486,13 @@ Tools default to `read`, `edit`, `shell`. The selected runtime's catalog maps
 edit to native `create` plus `edit`, or `apply_patch` when that catalog supplies
 patch editing. Requested capabilities and actual session/wire tools are checked
 before inference; neither shell widening nor a blind CLI downgrade is a repair.
+Native line patches may retain/add a terminal newline. For byte-exact UTF-8
+tasks, explicitly declare `execution.exactContentEdits: true` with `edit`;
+this adds a bounded workspace-relative SDK custom writer, not shell.
+See [exact editing and its separate two-phase control](docs/TASK_AUTHORING_GUIDE.md#exact-utf-8-editing-without-shell).
+The runtime probe reports whether it checked exact two-byte output or only
+newline-terminated edits; use the declared exact mode and a new cohort when
+your requirements need it.
 Optional
 [MCP](https://modelcontextprotocol.io) servers are part of the immutable local
 execution contract and are disallowed in isolated mode. Environment secret
@@ -573,6 +580,7 @@ acquisition still leaves `data-plane-inference: not-verified`.
 | Quickstart/judge asks for `--bounds` | Review the supplied request policy file; this public CLI requirement preserves request/token/output/pacing/deadline limits |
 | Capacity observation/pacing mismatch | Bind the intended endpoint/deployment/wire and approved RPM/TPM before preparing; observation is not live headroom or a quota change |
 | Initial conservative reservation exceeds TPM | Inspect `doctor --verify-request-fit` bytes/reservation/headroom. Slower pacing does not shrink SDK context/tools. Use sufficient existing capacity or a separately reviewed supported profile, never an optimistic tokenizer or inflated TPM |
+| Native patch succeeds but exact text check fails | Patch tools may add/preserve a newline. Declare `execution.exactContentEdits` and verify actual bytes before a new cohort; do not relax the check or add shell |
 | Inference returns 401/403 | Confirm token audience, deployment auth support, endpoint-specific inference role and network access; management roles alone are insufficient |
 | HTTP 200 with `provider-terminal` failure | Inspect the first bridge diagnostic's categorical event/status/reason/error code and usage; incomplete is not success or retryable rejection |
 | `provider_output_limit` | Confirm retained `max_output_tokens` terminal evidence; reasoning shares the output allowance. Review finite output/total budgets explicitly in a new cohort, not an automatic replay |

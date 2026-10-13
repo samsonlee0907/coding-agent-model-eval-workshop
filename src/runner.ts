@@ -56,17 +56,21 @@ import { ProviderStream, ProviderTerminalError, providerTerminal, providerTermin
 import type { ProviderTerminalEvidence } from "./provider-stream.js";
 import { once } from "node:events";
 import { assertCapacityPolicy, capacityIdentity } from "./deployment-capacity.js";
+import { assertExactContentPolicy, exactContentTool, exactContentToolName } from "./exact-content.js";
 
 export function benchmarkSessionOptions(
   config: BenchmarkConfig, provider: ProviderConfig, workingDirectory: string, filters: string[],
   extra: Pick<SessionConfig, "tools" | "mcpServers"> = {},
 ): SessionConfig {
+  assertExactContentPolicy(config.contract.execution);
   return {
     model: config.contract.candidate.model, workingDirectory,
     streaming: true, enableSessionStore: false,
     reasoningEffort: config.contract.execution.reasoningEffort,
     systemMessage: { content: config.contract.execution.instructions },
     availableTools: filters, ...extra,
+    ...(config.contract.execution.exactContentEdits && !config.isolation
+      ? { tools: [...(extra.tools ?? []), exactContentTool(workingDirectory)] } : {}),
     onPermissionRequest: config.contract.execution.permissionMode === "approve-all" ? approveAll : undefined,
     provider,
   };
@@ -210,7 +214,8 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
     await client.start();
     const catalog = await client.rpc.tools.list({ model: contract.candidate.model });
     const sdkToolAllowlist = worker ? new ToolSet().addCustom("controlled_workspace").toArray()
-      : resolveSdkToolAllowlist(contract.execution.tools, contract.execution.mcpServers, catalog.tools.map((tool) => tool.name));
+      : resolveSdkToolAllowlist(contract.execution.tools, contract.execution.mcpServers, catalog.tools.map((tool) => tool.name),
+        contract.execution.exactContentEdits);
     collector.captureRunnerEvent("runner.tools_resolved", { filters: sdkToolAllowlist });
     compatibilityProxy = await startRequestSanitizingProxy(provider.baseUrl,
       contract.foundryProvider?.requestAdaptation === "strip-temperature" ? stripTemperature : stripNullMessageRefusals,
@@ -517,7 +522,9 @@ export function resolveSdkToolAllowlist(
   capabilities: readonly ToolCapability[],
   mcpServers?: Record<string, McpServerSpec>,
   available?: readonly string[],
+  exactContentEdits = false,
 ): string[] {
+  assertExactContentPolicy({ tools: [...capabilities], exactContentEdits });
   const builtInTools = [...new Set(capabilities.flatMap((capability) =>
     capability === "edit" && available?.includes("apply_patch") ? ["apply_patch"] : sdkToolsByCapability[capability]))];
   if (available) {
@@ -529,6 +536,7 @@ export function resolveSdkToolAllowlist(
     );
   }
   const toolSet = new ToolSet().addBuiltIn(builtInTools);
+  if (exactContentEdits) toolSet.addCustom(exactContentToolName);
   if (mcpServers && Object.keys(mcpServers).length > 0) {
     toolSet.addMcp("*");
   }
@@ -1023,6 +1031,7 @@ function materializeContract(config: BenchmarkConfig): RunContract {
 }
 
 function assertSupportedPolicy(contract: RunContract): void {
+  assertExactContentPolicy(contract.execution);
   if (contract.execution.concurrency !== 1) {
     throw new RangeError("This MVP executes one persistent session at a time; set execution.concurrency to 1.");
   }

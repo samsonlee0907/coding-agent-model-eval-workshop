@@ -178,7 +178,7 @@ export function assertBenchmarkRun(value: unknown): asserts value is BenchmarkRu
       task: z.object({ id, prompt: z.string(), validationCommand: z.string(), repository: z.object({ commitSha: id, containerFingerprint: id }).passthrough() }).passthrough(),
       candidate: z.object({ provider: id, model: id, deployment: id.optional() }),
       execution: z.object({ instructions: z.string(), tools: z.array(z.enum(["read", "edit", "shell"])), retries: count,
-        sessionTimeoutMs: z.number().positive(), reasoningEffort: id }).passthrough(),
+        sessionTimeoutMs: z.number().positive(), reasoningEffort: id, exactContentEdits: z.boolean().optional() }).passthrough(),
       runtime: z.object({ sdkVersion: id, cliVersion: id, nodeVersion: id, cliSha256: sha256Schema.optional() }),
       rounds: z.array(z.object({ prompt: z.string(), mode: z.enum(["enqueue", "immediate"]).optional() })).optional(),
     }).passthrough(),

@@ -31,8 +31,13 @@ export const benchmarkConfigSchema = z.object({
       instructions: z.string(), tools: z.array(z.enum(["read", "edit", "shell"])), permissionMode: z.enum(["approve-all", "manual"]),
       concurrency: z.literal(1), retries: z.number().int().min(0).max(10), sessionTimeoutMs: z.number().int().positive(),
       streaming: z.literal(true), cachePolicy: z.literal("default"), reasoningEffort: z.enum(["low", "medium", "high", "xhigh", "max"]),
+      exactContentEdits: z.boolean().optional(),
       mcpServers: z.record(z.string(), mcpSchema).optional(),
-    }).strict(),
+    }).strict().superRefine((execution, ctx) => {
+      if (execution.exactContentEdits && !execution.tools.includes("edit")) ctx.addIssue({
+        code: "custom", path: ["exactContentEdits"], message: "exactContentEdits requires the edit capability; no read-only widening.",
+      });
+    }),
     runtime: z.object({ sdkVersion: z.string(), cliVersion: z.string(), nodeVersion: z.string(),
       cliSha256: z.string().regex(/^[a-f0-9]{64}$/) }).partial().optional(),
     foundryProvider: providerSchema,

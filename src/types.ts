@@ -151,6 +151,8 @@ export type McpServerSpec = McpStdioServerSpec | McpHttpServerSpec;
 export interface ExecutionPolicy {
   instructions: string;
   tools: ToolCapability[];
+  /** Explicitly add workspace-scoped exact UTF-8 writes without granting shell. */
+  exactContentEdits?: boolean;
   permissionMode: "approve-all" | "manual";
   concurrency: number;
   retries: number;

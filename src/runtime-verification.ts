@@ -13,6 +13,7 @@ import { scrubFoundryEnvironment, runValidation } from "./validation.js";
 import type { BenchmarkConfig } from "./types.js";
 import { ToolSet } from "@github/copilot-sdk";
 import { assertCapacityPolicy, capacityIdentity } from "./deployment-capacity.js";
+import { exactContentToolName } from "./exact-content.js";
 
 /** Observe the real initial request shape, but never ask a provider or execute task tools. */
 export async function verifyRequestFit(config: BenchmarkConfig) {
@@ -59,7 +60,8 @@ export async function verifyRequestFit(config: BenchmarkConfig) {
   try {
     await client.start();
     const catalog = await client.rpc.tools.list({ model: config.contract.candidate.model });
-    filters = resolveSdkToolAllowlist(config.contract.execution.tools, undefined, catalog.tools.map((tool) => tool.name));
+    filters = resolveSdkToolAllowlist(config.contract.execution.tools, undefined, catalog.tools.map((tool) => tool.name),
+      config.contract.execution.exactContentEdits);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Local request-fit peer did not start.");
@@ -161,10 +163,15 @@ export async function verifyRuntime(config: BenchmarkConfig, allowContainer = fa
   const edit = (path: string, before: string, after: string) => worker ? invoke("controlled_workspace", { operation: "write", path, content: after + "\n" })
     : filters.includes("builtin:apply_patch") ? invoke("apply_patch", `*** Begin Patch\n*** Update File: ${path}\n@@\n-${before}\n+${after}\n*** End Patch\n`)
       : invoke("edit", { path: join(workspace, path), old_str: before, new_str: after });
+  const exact = config.contract.execution.exactContentEdits === true;
+  const editResult = () => exact
+    ? worker ? invoke("controlled_workspace", { operation: "write", path: "result.txt", content: "OK" })
+      : invoke(exactContentToolName, { path: "result.txt", content: "OK" })
+    : edit("result.txt", "FIRST", "OK");
   const actions = [
     () => read("input.txt"),
     () => create("result.txt", "FIRST\n"), () => create("answer.json", '{"sum":0}\n'), () => null,
-    () => edit("result.txt", "FIRST", "OK"), () => edit("answer.json", '{"sum":0}', '{"sum":16}'),
+    editResult, () => edit("answer.json", '{"sum":0}', '{"sum":16}'),
     () => read("result.txt"), () => null,
     () => worker ? invoke("controlled_workspace", { operation: "list", path: "." }) : invoke("glob", { pattern: "*.txt", paths: workspace }),
     () => null,
@@ -186,18 +193,18 @@ export async function verifyRuntime(config: BenchmarkConfig, allowContainer = fa
     await client.start();
     const catalog = await client.rpc.tools.list({ model: config.contract.candidate.model });
     filters = worker ? new ToolSet().addCustom("controlled_workspace").toArray()
-      : resolveSdkToolAllowlist(config.contract.execution.tools, undefined, catalog.tools.map((tool) => tool.name));
+      : resolveSdkToolAllowlist(config.contract.execution.tools, undefined, catalog.tools.map((tool) => tool.name),
+        config.contract.execution.exactContentEdits);
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     const address = server.address();
     if (!address || typeof address === "string") throw new Error("Local coding peer did not start.");
     proxy = await startRequestSanitizingProxy(`http://127.0.0.1:${address.port}`, (body) => body,
       { guard, wireApi: "responses", validateTools: (payload) => assertAdvertisedTools(payload, filters) });
     const session = await client.createSession({
-      model: config.contract.candidate.model, workingDirectory: worker ? root : workspace,
-      availableTools: filters, ...(worker ? { tools: [worker.tool(config.contract.execution.tools)] } : {}),
-      streaming: true, enableSessionStore: false, reasoningEffort: config.contract.execution.reasoningEffort,
+      ...benchmarkSessionOptions(config, {
+        type: "openai", wireApi: "responses", baseUrl: proxy.baseUrl, apiKey: "local-fixture-key",
+      }, worker ? root : workspace, filters, worker ? { tools: [worker.tool(config.contract.execution.tools)] } : {}),
       onPermissionRequest: approveAll, systemMessage: { mode: "replace", content: "Execute the deterministic public fixture tools in this disposable workspace only." },
-      provider: { type: "openai", wireApi: "responses", baseUrl: proxy.baseUrl, apiKey: "local-fixture-key" },
     });
     sessionId = session.sessionId;
     await session.rpc.tools.initializeAndValidate();
@@ -213,14 +220,15 @@ export async function verifyRuntime(config: BenchmarkConfig, allowContainer = fa
       }
     } finally { unsubscribe(); }
     if (!guard.cleanlySettled() || failures.length || cursor !== actions.length) throw new Error(`Runtime coding probe failed: ${failures.join(" ") || "Incomplete work or transport."}`);
-    const command = `node -e "const f=require('node:fs');if(!/^OK\\r?\\n$/.test(f.readFileSync('result.txt','utf8'))||JSON.parse(f.readFileSync('answer.json','utf8')).sum!==16)process.exit(1)"`;
+    const expected = exact ? "f.readFileSync('result.txt','utf8')==='OK'" : "/^OK\\r?\\n$/.test(f.readFileSync('result.txt','utf8'))";
+    const command = `node -e "const f=require('node:fs');if(!(${expected})||JSON.parse(f.readFileSync('answer.json','utf8')).sum!==16)process.exit(1)"`;
     const validation = worker ? await worker.validate(command, 5000) : await runValidation(command, workspace, 5000);
     if (validation.exitCode !== 0 || validation.timedOut || validation.errorMessage) throw new Error("Deterministic coding-probe validation failed.");
     let exported = workspace;
     if (worker) { exported = join(root, "export"); await worker.snapshot(exported); }
     const resultText = readFileSync(join(exported, "result.txt"), "utf8");
     const answerText = readFileSync(join(exported, "answer.json"), "utf8");
-    if (!/^OK\r?\n$/.test(resultText) || JSON.parse(answerText).sum !== 16) {
+    if (!(exact ? resultText === "OK" : /^OK\r?\n$/.test(resultText)) || JSON.parse(answerText).sum !== 16) {
       throw new Error(`Actual file creation/multi-round editing did not produce the required public fixture bytes: ${JSON.stringify({ resultText, answerText })}.`);
     }
     return {
@@ -231,6 +239,13 @@ export async function verifyRuntime(config: BenchmarkConfig, allowContainer = fa
         path, sha256: createHash("sha256").update(readFileSync(join(exported, path))).digest("hex"),
       })),
       fixedRounds: 3, modes: ["immediate", "enqueue", "immediate"], validation: "pass",
+      textEditSemantics: {
+        exactContentEdits: exact, resultBytes: Buffer.byteLength(resultText),
+        terminalNewline: /[\r\n]$/.test(resultText),
+        scope: exact ? "exact-utf8-control" : "newline-terminated-control",
+        guidance: exact ? "The declared exact-content writer produced two-byte OK without shell; native editing remains available."
+          : "This control verifies newline-terminated edits, not terminal-newline removal. For exact UTF-8 writes, declare execution.exactContentEdits and rerun before preparing a new cohort.",
+      },
       maximumRequestBytes: Math.max(...sizes), requestAccounting: guard.accounting,
       cloudInference: "not-dispatched", liveAuthDeployment: "not-verified",
     };

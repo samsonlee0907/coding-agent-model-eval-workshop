@@ -48,6 +48,14 @@ large request bodies. For an isolated configuration, explicitly approve the
 No model brand determines the tool allowlist: the runtime catalog supplies
 supported identifiers, and missing declared capabilities fail before physical
 dispatch. The gate never adds shell to a read/edit-only contract.
+Native line-patch success does not certify no-terminal-newline semantics.
+For exact UTF-8 tasks, declare `execution.exactContentEdits: true` before
+preparation and use the
+[exact-content runtime control](TASK_AUTHORING_GUIDE.md#exact-utf-8-editing-without-shell).
+Trusted-local sessions add only the bounded `custom:write_file_exact` writer
+alongside native tools; isolated sessions retain worker-only exact writes,
+never a host writer. The flag is immutable comparison provenance, not a
+per-model repair or permission to normalize away required bytes.
 Catalog discovery/initialization uses the pinned SDK's
 [experimental tool RPC surface](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/nodejs/src/generated/rpc.ts).
 An SDK/CLI upgrade needs a new runtime gate and immutable cohort, not a promise
@@ -99,6 +107,11 @@ capacity. The separate offline `doctor --verify-request-fit` measures the
 initial SDK task request without inference/tools/grading. Individually unfit
 byte-plus-output reservations fail before physical dispatch; positive initial
 fit cannot certify later context growth or provider/shared headroom.
+If a later reservation exceeds the local TPM bound, the request is
+`not-dispatched` even if the observed deployment ceiling is larger. Earlier
+completed requests remain known/metered; the unfinished task/round remains
+interrupted. A newly reviewed allocation within the approved deployment share
+requires a fresh finite profile/cohort, not an automatic bound increase.
 
 Campaign bounds cover concurrency, free memory admission, absolute deadline,
 attempts, requests, reserved tokens and declared USD reservations.

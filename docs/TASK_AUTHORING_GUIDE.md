@@ -164,6 +164,57 @@ stable operating policy. `rounds[]` contain follow-up messages only; prompt
 text, order, count, and `enqueue`/`immediate` mode are immutable comparison
 inputs.
 
+### Exact UTF-8 editing without shell
+
+`edit` is a capability, not a promise that every native editor preserves
+arbitrary bytes. The selected CLI's line-oriented `apply_patch` can report
+success while adding/preserving a terminal newline (CRLF on the tested Windows
+runtime). `*** End of File` positions a patch at EOF; it is not a no-newline
+flag. Owner [patch grammar](https://github.com/openai/codex/blob/main/codex-rs/apply-patch/src/parser.rs)
+and [trailing-newline behavior](https://github.com/openai/codex/blob/main/codex-rs/apply-patch/src/text_file.rs)
+provide format context, not proof that Copilot ships that exact implementation.
+The toolkit's regression drives the selected Copilot CLI itself and checks
+actual file bytes, including EOF-positioned updates and delete/recreate.
+Do not equate successful tool execution with passing a byte-exact requirement.
+
+For a task requiring exact UTF-8 output, explicitly set
+`contract.execution.exactContentEdits: true` alongside the `edit` capability.
+Trusted-local sessions retain their native tools and additionally advertise
+`custom:write_file_exact`, implemented through the pinned SDK's supported
+[custom-tool API](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/getting-started.md#step-4-add-a-custom-tool)
+and [tool types](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/nodejs/src/types.ts).
+It creates/replaces a workspace-relative file with the supplied UTF-8 text,
+adding **no** newline/BOM. It supports empty text and a 1 MiB UTF-8 byte bound,
+rejects invalid Unicode, traversal, alternate streams, reserved/metadata paths,
+symlinks/junctions and nonregular targets, and returns only byte count/hash.
+It cannot execute commands; neither shell nor additional host access is granted.
+Trusted-local execution is **still not credential isolation**. In isolated mode,
+the existing `controlled_workspace` write operation already preserves exact
+UTF-8 text inside the worker; the flag never registers a host writer there.
+
+The separate [exact-text control](../examples/custom-campaign/exact-text-task.json)
+declares initial `OK` plus one LF, then an enqueued fixed-round edit to exactly
+two-byte `OK`. Its final validator does not trim whitespace. It is not included
+in the default campaign and does not change the original
+[optional-newline text task](../examples/custom-campaign/text-task.json).
+Copy it into your own configuration, supply the deployment/auth, reviewed
+finite bounds and its [final required evaluator](../examples/custom-campaign/exact-text-evaluator.json),
+then run `doctor --verify-runtime` and
+`doctor --verify-request-fit` before preparation. With the flag, the runtime
+probe reports `textEditSemantics.scope: exact-utf8-control`, `resultBytes: 2`
+and `terminalNewline: false`; without it, the existing newline-terminated
+control does **not** certify newline removal. The flag, tool schema and any
+instruction changes affect request size and immutable comparison identity.
+Use a **new cohort**, never change a prepared run, relax its required checks
+or retry a content failure until PASS.
+In a copied campaign manifest, add a task with `id: exact-text-result`,
+`config` pointing to your saved exact task and `evaluator` pointing to the
+exact evaluator; leave the existing optional-newline task/evaluator unchanged.
+The final evaluator checks retained final bytes, not initial-phase history;
+the local runtime control separately asserts the initial LF and final two-byte
+edit. A model's ability to choose the declared tool still needs a bounded live
+gate; deterministic fake-provider instructions are not model-quality evidence.
+
 ### Blueprint: CSV parser regression
 
 **Context and baseline:** use a prepared TypeScript parser starter whose

@@ -8,6 +8,7 @@ import { atomicJson } from "./durable.js";
 import { evidenceHash } from "./evidence.js";
 import { safeRelativePath } from "./publication.js";
 import type { BenchmarkConfig, ToolCapability, ValidationResult } from "./types.js";
+import { exactUtf8Bytes } from "./exact-content.js";
 
 export const isolationSchema = z.object({
   mode: z.literal("container"),
@@ -198,13 +199,17 @@ export class ControlledWorker {
   }
   tool(capabilities: readonly ToolCapability[]): Tool {
     return defineTool("controlled_workspace", {
-      description: "Read/write/list files or run a shell command inside the network-disabled isolated task container. Paths are workspace-relative. No host access or cloud credentials.",
+      description: "Read/write/list files or run a declared shell command inside the network-disabled isolated task container. Writes use exact UTF-8 content, adding no newline or BOM, up to 1 MiB. Paths are workspace-relative. No host access or cloud credentials.",
       parameters: z.toJSONSchema(workspaceToolSchema),
       handler: async (input) => {
         const request = workspaceToolSchema.parse(input);
         if (this.sealed || this.closed) throw new Error("Controlled workspace is sealed or stopped.");
         const capability = request.operation === "command" ? "shell" : request.operation === "write" ? "edit" : "read";
         if (!capabilities.includes(capability)) throw new Error("Task tool capability denied.");
+        if (request.operation === "write") {
+          if (request.content === undefined) throw new TypeError("content is required for an exact UTF-8 write; supply an empty string explicitly for an empty file.");
+          exactUtf8Bytes(request.content);
+        }
         if (request.operation === "command") {
           if (!request.command) throw new TypeError("command is required.");
           try {
