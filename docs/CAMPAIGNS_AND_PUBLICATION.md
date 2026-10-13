@@ -333,6 +333,33 @@ metrics stay null. Task/round/runtime/policy variants cannot masquerade as
 matching evidence; task-type analysis excludes unequal comparison signatures
 or incomplete graded coverage and never supplies hardcoded routing advice.
 
+Execution completion is separate from acceptance. A completed run whose
+declared campaign evaluator has no `grade.json` is **UNGRADED**, with normalized
+phase `grading-pending` and zero inferred check errors; absence alone is not
+proof of grader failure. Phase `graded` means required-check evidence is
+recorded, not that it passed: evaluator ERROR and required content FAIL remain
+distinct from PASS. A candidate-only flow without required acceptance evidence
+is `finalized`, not `graded`. Interrupted execution is never upgraded by a
+passing validator. CLI exit 0 or a completed journal job certifies orchestration
+completion only, not acceptance. The recorded `outcome` remains candidate
+validation/runtime evidence; an ERROR grade is neither content PASS nor FAIL.
+Existing historical artifacts are not rewritten.
+
+The HTML clean-completion count measures execution, not grading/comparison
+completion. Selected CSV/JSON include `execution`, `phase`, `status` and
+separate `validation` fields. Use `campaign status/report` or
+`report:html --evidence <normalized-campaign-evidence.json>` for the declared
+campaign's policies, grades and missing cells.
+The legacy `portfolio --runs` summarizes retained candidate-validation
+outcomes only; `resolved` means that validator passed after clean execution.
+It does not load campaign declarations or external `grade.json`, so required
+acceptance is explicitly **Not assessed**, even when its runtime-harness count
+is zero. Its sufficiency gate remains candidate-validation-only, not a claim
+of fully graded comparison or production acceptance.
+Similarly, `report:html --runs` imports run-level validation/legacy conformance
+evidence, not the external campaign plan; use normalized campaign evidence
+rather than assuming that run-only imports prove campaign grading.
+
 Optional campaign `pricing` pins a validated official snapshot and an explicit
 scenario ID for every candidate. Recorded estimates retain snapshot hash,
 retrieval time, scenario and accounting assumption. Later `prices:refresh`

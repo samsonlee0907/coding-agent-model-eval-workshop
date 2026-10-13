@@ -46,7 +46,7 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     (candidate) => candidate.runs.filter(cleanlyResolvedRun).length >= minimumComparableRepeats,
   );
   const costAvailableForEveryCandidate = candidates.every(hasCostEvidenceForResolvedRuns);
-  const productionDecisionReady = allCandidatesHaveResolvedRun && enoughComparableRepeats && costAvailableForEveryCandidate;
+  const candidateValidationReady = allCandidatesHaveResolvedRun && enoughComparableRepeats && costAvailableForEveryCandidate;
 
   return [
     "# Model-selection evidence report",
@@ -55,27 +55,29 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     `**Completed runs:** ${runs.filter(cleanlyCompletedRun).length}  `,
     `**Interrupted runs:** ${runs.filter((run) => !cleanlyCompletedRun(run)).length}  `,
     `**Candidates:** ${candidates.length}  `,
-    `**Decision status:** ${productionDecisionReady ? "Candidate selection evidence is sufficient" : "No-go: collect more evidence before selecting a production route"}`,
+    "**Evidence scope:** Candidate validation only. Campaign-required acceptance grades and planned/missing cells are not assessed by this legacy portfolio.",
+    `**Decision status:** ${candidateValidationReady ? "Candidate-validation evidence is sufficient; independent acceptance is not assessed" : "No-go: collect more evidence before selecting a production route"}`,
     "",
     "## Executive decision view",
     "",
     "| Gate | Status | Evidence |",
     "|---|---|---|",
-    `| Deterministic correctness | ${allCandidatesHaveResolvedRun ? "Pass, provisionally" : "Fail"} | Every candidate has at least one resolved run only when the gate passes. |`,
+    `| Candidate validation | ${allCandidatesHaveResolvedRun ? "Pass, provisionally" : "Fail"} | Every candidate has at least one validation-resolved run only when the gate passes. |`,
+    "| Required acceptance grading | Not assessed | Use campaign status/report for declared evaluator grades and missing cells; candidate validation is not independent acceptance. |",
     `| Strictly comparable baseline | ${hasStrictBaseline ? "Pass" : "Fail"} | ${baselineEvidence} |`,
     `| Repeatability | ${enoughComparableRepeats ? "Pass" : "Fail"} | Require at least ${minimumComparableRepeats} resolved repetitions per candidate from one pinned baseline. |`,
     `| Monetary cost evidence | ${costAvailableForEveryCandidate ? "Present" : "Missing"} | Every resolved sample for every candidate must report a non-zero provider cost before cost-per-resolved-task is valid. |`,
     "| Code-quality breadth | Missing | Deterministic build/test is captured; coverage, lint, security, accessibility, and human-review evidence are not. |",
     "",
-    "## Candidate reliability and outcome history",
+    "## Candidate-validation reliability and outcome history",
     "",
-    "| Candidate | Runs | Resolved | Unresolved | Harness | Rate limit | Timeout | Tool/container | Empty patch |",
+    "| Candidate | Runs | Validation resolved | Validation unresolved | Runtime harness | Rate limit | Timeout | Tool/container | Empty patch |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...candidates.map(renderOutcomeRow),
     "",
-    "Failures remain included here. A candidate with one successful run but recurring harness or evaluator failures is not production-ready.",
+    "Resolved means the recorded candidate validation passed after clean execution, not that required acceptance grading completed. Zero runtime harness failures does not certify grading. Missing grades are pending/ungraded, not invented model, provider or harness failures.",
     "",
-    "## Observed efficiency on resolved runs",
+    "## Observed efficiency on validation-resolved runs",
     "",
     "| Candidate | Resolved samples | Median E2E | Median input + output tokens | Median turns | Median tool calls | Median TTFT | Median validation time |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -89,7 +91,7 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     "|---|---:|---|---|",
     ...candidates.map(renderQualityRow),
     "",
-    "The current evidence proves only that the recorded deterministic validators passed. It does not establish maintainability, security, accessibility, coverage, or subjective code quality.",
+    "The current evidence proves only that the recorded deterministic validators passed. It does not establish independent required acceptance, maintainability, security, accessibility, coverage, or subjective code quality.",
     "",
     "## Operational and integration risks",
     "",
@@ -169,7 +171,7 @@ function renderFailureEvidence(candidates: readonly CandidateSummary[]): string[
   const entries = candidates.flatMap((candidate) => candidate.runs
     .filter((run) => !cleanlyResolvedRun(run))
     .map((run) => `- **${candidate.label} — ${cleanlyCompletedRun(run) ? run.outcome.class : "interrupted"}:** ${escapeCell(redactUrls(run.runnerError ?? run.outcome.detail))}`));
-  return entries.length === 0 ? ["No non-resolved outcomes were recorded."] : entries;
+  return entries.length === 0 ? ["No non-resolved candidate-validation outcomes were recorded. Acceptance grading was not assessed."] : entries;
 }
 
 function cleanlyResolvedRun(run: BenchmarkRun): boolean {

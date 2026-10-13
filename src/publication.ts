@@ -121,6 +121,7 @@ export function selectedResultRows(evidence: ReportEvidence) {
     task: cell.task, candidate: cell.candidate, repeat: cell.repeat, status: cell.status,
     runId: cell.selected?.id ?? null, selectionReason: cell.reason, attempts: cell.attempts.length,
     validation: cell.selected?.validation ?? null, requiredFailed: cell.selected?.requiredFailed ?? null,
+    execution: cell.selected?.execution ?? null, phase: cell.selected?.phase ?? null,
     advisoryFailed: cell.selected?.advisoryFailed ?? null, checkErrors: cell.selected?.checkErrors ?? null,
     wallMs: cell.selected?.metrics.wallMs ?? null, inputTokens: cell.selected?.metrics.inputTokens ?? null,
     outputTokens: cell.selected?.metrics.outputTokens ?? null, recordedUsd: cell.selected?.metrics.recordedUsd ?? null,

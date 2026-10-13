@@ -45,18 +45,24 @@ function fakeRunner(onRun: () => void = () => undefined, verdict: "pass" | "fail
 test("compiled public campaign resume grades retained outputs under long state roots without provider dispatch", async (t) => {
   const publicTask = JSON.parse(readFileSync(join("examples", "custom-campaign", "json-task.json"), "utf8"));
   const publicPolicy = JSON.parse(readFileSync(join("examples", "custom-campaign", "json-evaluator.json"), "utf8"));
-  for (const control of ["public-pass", "setup-spawn-error"]) {
+  for (const control of ["public-pass", "setup-spawn-error", "public-content-fail", "candidate-only", "partial-grade-absent"]) {
     const root = mkdtempSync(join(tmpdir(), "bt-public-grade-"));
     try {
       mkdirSync(join(root, "json-input"));
       writeFileSync(join(root, "json-input", "numbers.json"), '{"numbers":[3,5,8]}\n');
-      atomicJson(join(root, "task.json"), publicTask);
-      atomicJson(join(root, "policy.json"), control === "public-pass" ? publicPolicy : { ...publicPolicy, setupCommand: "node\u0000" });
+      const task = structuredClone(publicTask);
+      if (control === "public-content-fail") task.contract.task.validationCommand = 'node -e "process.exit(0)"';
+      atomicJson(join(root, "task.json"), task);
+      atomicJson(join(root, "policy.json"), control === "setup-spawn-error" ? { ...publicPolicy, setupCommand: "node\u0000" } : publicPolicy);
       const spec = {
         schemaVersion: 1, id: "offline-public-grading",
-        tasks: [{ id: publicTask.contract.task.id, config: "task.json", evaluator: "policy.json" }],
+        tasks: [{ id: publicTask.contract.task.id, config: "task.json",
+          ...(control === "candidate-only" ? {} : { evaluator: "policy.json" }) }],
         candidates: [{ id: "saved-local-fixture", candidate: { provider: "openai", model: "saved-local-fixture" },
-          foundryProvider: { type: "openai", wireApi: "responses" } }],
+          foundryProvider: { type: "openai", wireApi: "responses" } },
+          ...(control === "partial-grade-absent" ? ["missing-a", "missing-b", "missing-c"].map((id) => ({
+            id, candidate: { provider: "openai", model: id }, foundryProvider: { type: "openai", wireApi: "responses" },
+          })) : [])],
         repeats: 1, inputBounds: { maxFiles: 100, maxBytes: 1024 * 1024 },
         requestBounds: { maxRequests: 1, maxRequestBytes: 1024 * 1024, maxTokens: 10000, maxOutputTokens: 100,
           deadlineMs: 30000, requestsPerMinute: 1, tokensPerMinute: 10000 },
@@ -73,9 +79,10 @@ test("compiled public campaign resume grades retained outputs under long state r
       config.workspacePath = join(directory, "attempts", attemptId, "input");
       config.artifactsDirectory = join(directory, "runs");
       writeSnapshot(config.workspacePath, prepared.tasks[0].files, 100, 1024 * 1024);
-      writeFileSync(join(config.workspacePath, "answer.json"), '{"sum":16}\r\n');
+      const output = control === "public-content-fail" ? '{"sum":0}\r\n' : '{"sum":16}\r\n';
+      writeFileSync(join(config.workspacePath, "answer.json"), output);
       assert.equal(config.workspacePath.length, 225);
-      const validation = await runValidation(publicTask.contract.task.validationCommand, config.workspacePath, 10000);
+      const validation = await runValidation(config.contract.task.validationCommand, config.workspacePath, 10000);
       assert.equal(validation.exitCode, 0);
       const oldGradingCopy = join(directory, "runs", attemptId, `grading-input-${randomUUID()}`);
       assert.equal(oldGradingCopy.length, 266);
@@ -86,7 +93,7 @@ test("compiled public campaign resume grades retained outputs under long state r
       if (process.platform === "win32") {
         assert.equal(oldValidation.exitCode, null);
         assert.ok(oldValidation.failures?.some((failure) => failure.phase === "spawn" && failure.code === "ENOENT"));
-      } else assert.equal(oldValidation.exitCode, 0);
+      } else assert.equal(oldValidation.exitCode, control === "public-content-fail" ? 1 : 0);
       rmSync(oldGradingCopy, { recursive: true });
       const run = fixtureRun(attemptId, config, "ungraded");
       run.validation = validation; run.workspaceHash = snapshotHash(collectSnapshot(config.workspacePath, 100, 1024 * 1024));
@@ -96,34 +103,99 @@ test("compiled public campaign resume grades retained outputs under long state r
       appendJournal(join(directory, "journal.ndjson"), { schemaVersion: 1, sequence: 1, at: new Date().toISOString(),
         pair, attemptId, state: "finalizing", phase: "grading" });
       const before = readFileSync(join(run.artifacts.directory, "run.json"));
-      const cli = spawnSync(process.execPath, [resolve("dist", "campaign-cli.js"), "resume", "--directory", directory, "--allow-paid"],
+      const initial = campaignEvidence(directory).attempts[0];
+      assert.equal(initial.acceptance, "ungraded"); assert.equal(initial.checkErrors, 0);
+      assert.equal(initial.phase, control === "candidate-only" ? "finalized" : "grading-pending");
+      assert.equal(existsSync(join(run.artifacts.directory, "grade.json")), false);
+      const initialReport = spawnSync(process.execPath, [resolve("dist", "campaign-cli.js"), "report", "--directory", directory,
+        "--output", join(root, "pending-report")], { encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+      assert.equal(initialReport.status, 0, initialReport.stderr);
+      const pendingRows = JSON.parse(readFileSync(join(root, "pending-report", "selected-results.json"), "utf8"));
+      assert.equal(pendingRows[0].status, "ungraded");
+      assert.equal(pendingRows[0].phase, initial.phase);
+      if (control === "partial-grade-absent") assert.deepEqual(pendingRows.map((row: { status: string }) => row.status),
+        ["ungraded", "missing", "missing", "missing"]);
+      assert.match(readFileSync(join(root, "pending-report", "selected-results.csv"), "utf8"), new RegExp(`"completed","${initial.phase}"`));
+      assert.equal(existsSync(join(run.artifacts.directory, "grade.json")), false);
+      if (control === "public-pass") {
+        const pendingPortfolio = spawnSync(process.execPath, [resolve("dist", "portfolio-cli.js"), "--runs", run.artifacts.directory,
+          "--output", join(root, "pending-portfolio.md")], { encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+        assert.equal(pendingPortfolio.status, 0, pendingPortfolio.stderr);
+        assert.match(readFileSync(join(root, "pending-portfolio.md"), "utf8"), /\| Required acceptance grading \| Not assessed \|/);
+        const pendingHtml = spawnSync(process.execPath, [resolve("dist", "html-report-cli.js"), "--evidence",
+          join(root, "pending-report", "evidence.json"), "--output", join(root, "pending.html")],
+          { encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+        assert.equal(pendingHtml.status, 0, pendingHtml.stderr);
+        const pendingData = JSON.parse(readFileSync(join(root, "pending.html"), "utf8")
+          .match(/<script id="report-data" type="application\/json">(.*?)<\/script>/s)![1]);
+        assert.deepEqual(pendingData.rows, pendingRows);
+        assert.equal(pendingData.evidence.attempts[0].phase, "grading-pending");
+      }
+      const cli = control === "partial-grade-absent" ? null : spawnSync(process.execPath, [resolve("dist", "campaign-cli.js"), "resume", "--directory", directory, "--allow-paid"],
         { encoding: "utf8", timeout: 30000, maxBuffer: 65536,
           env: { ...process.env, FOUNDRY_API_KEY: "", FOUNDRY_ENDPOINT: "" } });
-      assert.equal(cli.error, undefined); assert.equal(cli.status, 0, cli.stderr);
-      assert.doesNotMatch(cli.stderr, /Unhandled|ENOTCONN/);
-      const grade = JSON.parse(readFileSync(join(run.artifacts.directory, "grade.json"), "utf8"));
-      assert.equal(grade.checks[0].status, control === "public-pass" ? "pass" : "error");
+      if (cli) {
+        assert.equal(cli.error, undefined); assert.equal(cli.status, 0, cli.stderr);
+        assert.doesNotMatch(cli.stderr, /Unhandled|ENOTCONN/);
+      }
+      const expectedStatus = control === "public-pass" ? "pass" : control === "public-content-fail" ? "fail"
+        : ["candidate-only", "partial-grade-absent"].includes(control) ? "ungraded" : "error";
+      const expectedPhase = control === "candidate-only" ? "finalized" : control === "partial-grade-absent" ? "grading-pending" : "graded";
+      const grade = ["candidate-only", "partial-grade-absent"].includes(control) ? null : JSON.parse(readFileSync(join(run.artifacts.directory, "grade.json"), "utf8"));
+      if (grade) assert.equal(grade.checks[0].status, expectedStatus);
+      else assert.equal(existsSync(join(run.artifacts.directory, "grade.json")), false);
       if (control === "setup-spawn-error") assert.deepEqual(grade.checks[0].diagnostic, {
         stage: "setup", exitCode: null, timedOut: false, failures: [{ phase: "spawn", code: "ERR_INVALID_ARG_VALUE" }],
       });
-      assert.equal(grade.workspaceHash, run.workspaceHash);
+      if (grade) assert.equal(grade.workspaceHash, run.workspaceHash);
       assert.equal(campaignEvidence(directory).attempts[0].metrics.physicalRequests, 0);
-      assert.equal(campaignStatus(directory).cells[0].status, control === "public-pass" ? "pass" : "error");
+      assert.equal(campaignStatus(directory).cells[0].status, expectedStatus);
+      const statusCli = spawnSync(process.execPath, [resolve("dist", "campaign-cli.js"), "status", "--directory", directory],
+        { encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+      assert.equal(statusCli.status, 0, statusCli.stderr);
+      assert.equal(JSON.parse(statusCli.stdout).cells[0].status, expectedStatus);
+      if (control === "partial-grade-absent") assert.deepEqual(JSON.parse(statusCli.stdout).cells.map((cell: { status: string }) => cell.status),
+        ["ungraded", "missing", "missing", "missing"]);
+      const reportCli = spawnSync(process.execPath, [resolve("dist", "campaign-cli.js"), "report", "--directory", directory,
+        "--output", join(root, "final-report")], { encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+      assert.equal(reportCli.status, 0, reportCli.stderr);
+      const rows = JSON.parse(readFileSync(join(root, "final-report", "selected-results.json"), "utf8"));
+      const exported = JSON.parse(readFileSync(join(root, "final-report", "evidence.json"), "utf8"));
+      assert.equal(rows[0].status, expectedStatus); assert.equal(rows[0].validation, "pass");
+      assert.equal(rows[0].phase, expectedPhase); assert.equal(rows[0].execution, "completed");
+      assert.equal(exported.attempts[0].phase, expectedPhase);
+      assert.match(readFileSync(join(root, "final-report", "selected-results.csv"), "utf8"), new RegExp(`"completed","${expectedPhase}"`));
+      const reportHtml = readFileSync(join(root, "final-report", "index.html"), "utf8");
+      const embedded = JSON.parse(reportHtml.match(/<script id="report-data" type="application\/json">(.*?)<\/script>/s)![1]);
+      assert.deepEqual(embedded.rows, rows);
+      assert.match(reportHtml, /count execution completion, not completed grading/);
+      const portfolioCli = spawnSync(process.execPath, [resolve("dist", "portfolio-cli.js"), "--runs", run.artifacts.directory,
+        "--output", join(root, "portfolio.md")], { encoding: "utf8", timeout: 30000, maxBuffer: 65536 });
+      assert.equal(portfolioCli.status, 0, portfolioCli.stderr);
+      const portfolio = readFileSync(join(root, "portfolio.md"), "utf8");
+      assert.match(portfolio, /Evidence scope:\*\* Candidate validation only/);
+      assert.match(portfolio, /\| Required acceptance grading \| Not assessed \|/);
+      assert.match(portfolio, /Validation resolved/);
+      assert.match(portfolio, /not that required acceptance grading completed/);
+      assert.doesNotMatch(portfolio, /Candidate selection evidence is sufficient|No non-resolved outcomes were recorded/);
       assert.equal(readJournal(join(directory, "journal.ndjson"), (value) => {
         assert.ok(value !== null && typeof value === "object" && "state" in value);
         return value.state;
-      }).at(-1), "completed");
+      }).at(-1), control === "partial-grade-absent" ? "finalizing" : "completed");
       assert.deepEqual(readFileSync(join(run.artifacts.directory, "run.json")), before);
       assert.equal(snapshotHash(collectSnapshot(config.workspacePath, 100, 1024 * 1024)), run.workspaceHash);
       assert.equal(createHash("sha256").update(readFileSync(join(config.workspacePath, "answer.json"))).digest("hex"),
-        "2cf63b303bd261432bc7bd5a0c8412c4f5341c0e96c306f08a49e193ee183118");
+        createHash("sha256").update(output).digest("hex"));
       assert.ok(readdirSync(run.artifacts.directory).every((path) => !path.startsWith("grading-input-")));
       t.diagnostic(JSON.stringify({ control, node: process.version, platform: process.platform,
         originalCwdCharacters: config.workspacePath.length, originalValidationExit: validation.exitCode,
         oldGradingCwdCharacters: oldGradingCopy.length, oldSpawnErrorCode: oldSpawn.error?.code ?? null,
         handledLongCwdFailures: oldValidation.failures ?? [],
-        publicResumeExit: cli.status, persistedGradeStatus: grade.checks[0].status,
-        publicRequiredCheck: grade.checks[0].id, policyHash: grade.policyHash,
+        publicResumeExit: cli?.status ?? null, persistedGradeStatus: grade?.checks[0].status ?? "absent",
+        publicRequiredCheck: grade?.checks[0].id ?? null, policyHash: grade?.policyHash ?? null,
+        initialAcceptance: initial.acceptance, initialPhase: initial.phase,
+        exportedStatus: rows[0].status, exportedPhase: rows[0].phase, portfolioScope: "candidate-validation-only",
+        declaredCellStatuses: rows.map((row: { status: string }) => row.status),
         originalWorkspaceUnchanged: true, savedExecutionPhysicalRequests: 0,
       }));
     } finally { rmSync(root, { recursive: true, force: true }); }

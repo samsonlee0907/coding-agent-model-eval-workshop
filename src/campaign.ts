@@ -275,7 +275,9 @@ export async function runCampaign(directory: string, options: CampaignRunOptions
           }
         }
         const state = run.executionStatus === "interrupted" ? "interrupted" : "completed";
-        append({ pair: cell.pair, attemptId, state, phase: cell.task.evaluator ? "graded" : "finalized", runPath: join("runs", attemptId, "run.json") });
+        const phase = state === "interrupted" ? "execution" : cell.task.evaluator
+          ? existsSync(join(directory, "runs", attemptId, "grade.json")) ? "graded" : "grading-pending" : "finalized";
+        append({ pair: cell.pair, attemptId, state, phase, runPath: join("runs", attemptId, "run.json") });
         if (run.diagnostics.providerFailure.httpStatus === 401 || run.diagnostics.providerFailure.httpStatus === 403
             || /Entra .* acquisition failed/.test(run.runnerError ?? "")) {
           halt = true; errors.push("Authentication/inference permission failure stopped new admission. The selected identity was not changed.");
@@ -355,6 +357,7 @@ export function campaignEvidence(directory: string): ReportEvidence {
     if (prepared.tasks.find((t) => t.id === task)?.evaluator && !grade) {
       attempt.acceptance = "ungraded"; attempt.policyHash = null; attempt.evaluatorVersion = null;
       attempt.requiredPassed = 0; attempt.requiredFailed = 0; attempt.advisoryFailed = 0; attempt.checkErrors = 0; attempt.requiredErrors = 0;
+      if (attempt.execution === "completed") attempt.phase = "grading-pending";
     }
     attempts.push(attempt);
   }

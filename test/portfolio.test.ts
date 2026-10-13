@@ -128,6 +128,15 @@ test("portfolio accepts an identical version-2 cohort", () => {
   assert.match(report, /\| Strictly comparable baseline \| Pass \| 1 baseline\/task\/environment variants are present\. \|/);
 });
 
+test("candidate-only portfolio sufficiency is not required acceptance or completed comparison", () => {
+  const runs = ["one", "two", "three"].map((id) => run(id, "candidate", 0.5));
+  const report = renderModelSelectionReport(runs);
+  assert.match(report, /Candidate-validation evidence is sufficient; independent acceptance is not assessed/);
+  assert.match(report, /\| Required acceptance grading \| Not assessed \|/);
+  assert.match(report, /Zero runtime harness failures does not certify grading/);
+  assert.doesNotMatch(report, /Candidate selection evidence is sufficient/);
+});
+
 test("portfolio distinguishes retained interruptions from completed content failures", () => {
   const interrupted = run("interrupted", "candidate-a", null);
   interrupted.executionStatus = "interrupted";
@@ -143,7 +152,7 @@ test("portfolio distinguishes retained interruptions from completed content fail
   assert.match(report, /No-go/);
   interrupted.outcome = { class: "resolved", category: "deterministic-evaluator", detail: "stale validation" };
   const stale = renderModelSelectionReport([interrupted]);
-  assert.match(stale, /\| Deterministic correctness \| Fail/);
+  assert.match(stale, /\| Candidate validation \| Fail/);
   assert.match(stale, /— interrupted:/);
   assert.match(stale, /No resolved deterministic validation/);
 });

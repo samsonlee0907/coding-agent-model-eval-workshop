@@ -79,14 +79,16 @@ test("active validator stdin/stdout/stderr errors terminate only the owned proce
         spawn(command, options) {
           child = cp.spawn(command, options);
           child.stdin ??= new PassThrough();
-          child.once('spawn', () => child[${JSON.stringify(phase)}].emit('error',
+          // Wait for the validator, not merely its shell, to be running.
+          child.stdout.once('data', () => child[${JSON.stringify(phase)}].emit('error',
             Object.assign(new Error('private stream payload'), {code:'ENOTCONN'})));
           return child;
         }
       }});
       const { runValidation } = await import(${JSON.stringify(moduleUrl)});
-      const result = await runValidation('node -e "setInterval(()=>{},1000)"', process.cwd(), 5000);
+      const result = await runValidation(${JSON.stringify('node -e "process.stdout.write(\'READY\');setInterval(()=>{},1000)"')}, process.cwd(), 5000);
       assert.equal(result.exitCode, null); assert.equal(result.timedOut, false);
+      assert.equal(result.stdout, 'READY');
       assert.deepEqual(result.failures, [{phase:${JSON.stringify(phase)},code:'ENOTCONN'}]);
       assert.match(result.errorMessage, /^Validator ${phase} failed.*ENOTCONN/);
       assert.doesNotMatch(JSON.stringify(result), /private/);

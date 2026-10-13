@@ -310,7 +310,7 @@ before using the first-run commands below.
 | `npm run quickstart -- ...` | Create a disposable workspace with `--bounds`; `--prepare-only` prepares offline | Otherwise paid inference immediately; trusted-local only |
 | `npm run bench -- --config <task.json>` | Execute one configured task/session | Paid inference immediately; selected task execution mode |
 | `npm run report:html -- --runs <runs> ...` | Export saved runs to HTML or a portable folder/ZIP | Offline; no inference |
-| `npm run portfolio -- --runs <runs>` | Generate a Markdown comparison from saved runs | Offline; no inference |
+| `npm run portfolio -- --runs <runs>` | Generate a candidate-validation Markdown summary, not campaign acceptance | Offline; no inference |
 | `npm run prices:refresh -- --runs <runs>` | Save an explicit official-price what-if snapshot | Public pricing-page requests, not model inference |
 | `npm run evaluate -- ...` | Attach an optional fixed-rubric judge with explicit `--bounds` | Paid inference immediately; selected key/Entra auth |
 
@@ -468,7 +468,12 @@ npm run prices:refresh -- --runs $runs
 ```
 
 These write `$runs\model-selection-report.md` and
-`$runs\pricing-snapshot.json`. Pricing refresh makes public network requests
+`$runs\pricing-snapshot.json`. The legacy portfolio's `resolved` counts mean
+candidate validation passed after clean execution, not that required campaign
+grading completed. Use campaign status/report for required grades and missing
+cells; an absent required grade is UNGRADED/pending, not an inferred failure.
+See [evidence semantics](docs/CAMPAIGNS_AND_PUBLICATION.md#evidence-pricing-and-publication).
+Pricing refresh makes public network requests
 and is not required for reporting. Optional `evaluate` sends **paid** judge
 requests; its [keyless command example](docs/KEYLESS_AUTH.md#cost-bearing-execution)
 uses the actual supported flags. Judge scores never replace required

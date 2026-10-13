@@ -245,6 +245,8 @@ export function attemptFromRun(
     ? "error" : run.validation.exitCode === 0 ? "pass" : "fail";
   const acceptance = requiredErrors ? "error" : failed ? "fail" : required.length && required.every((c) => c.status === "pass")
     ? "pass" : errors ? "error" : "ungraded";
+  const phase = !completed ? "execution" : required.length ? "graded"
+    : run.contract.task.conformanceProbe?.checks.some((check) => check.severity !== "advisory") ? "grading-pending" : "finalized";
   const number = (name: keyof BenchmarkRun["metrics"]) => run.metrics[name].status === "available" ? run.metrics[name].value : null;
   return {
     id: run.runId, task, candidate, repeat, contractHash: run.contractHash,
@@ -252,7 +254,7 @@ export function attemptFromRun(
     roundsHash: evidenceHash(run.contract.rounds ?? null), cohortHash: cohortHash(run.contract),
     workspaceHash: run.workspaceHash ?? null, startedAt: run.startedAt, completedAt: run.completedAt,
     comparisonHash: comparableBaselineSignature(run.contract) ? evidenceHash(comparableBaselineSignature(run.contract)) : null,
-    execution: completed ? "completed" : "interrupted", phase: completed ? "graded" : "execution",
+    execution: completed ? "completed" : "interrupted", phase,
     validation, acceptance, requiredPassed: required.filter((c) => c.status === "pass").length,
     requiredFailed: failed, advisoryFailed: checks.filter((c) => c.severity === "advisory" && ["fail", "weak"].includes(c.status)).length,
     checkErrors: errors, requiredErrors, policyHash: grade?.policyHash ?? (run.contract.task.conformanceProbe ? evidenceHash(run.contract.task.conformanceProbe) : null),
@@ -322,6 +324,7 @@ export function evidenceFromRuns(runs: readonly BenchmarkRun[], campaignId = "im
   }
   const caveats: string[] = ["Latest cleanly completed execution is selected, including content FAILs. Interrupted recovery does not replace completed work.",
     "Candidate-owned validation is separate from independent acceptance. Ungraded is not PASS.",
+    "Imported runs alone do not assess external campaign evaluator policies/grades or declared missing cells; use campaign status/report or normalized campaign evidence for that scope.",
     "SDK cost multipliers are not currency or invoices; unavailable spend is not zero. Single samples do not establish reliability."];
   if (runs.some((r) => r.contract.executionProfile?.mode !== "container")) caveats.push("Trusted-local executions can access host files, resources and identity caches. They are not credential-isolated.");
   for (const task of tasks.keys()) {

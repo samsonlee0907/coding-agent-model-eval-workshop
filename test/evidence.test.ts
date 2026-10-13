@@ -64,6 +64,22 @@ test("declared missing, interrupted and ungraded cells are not PASS", () => {
   evidence.attempts[0].execution = "interrupted";
   assert.equal(selectReportCells(evidence)[0].status, "interrupted");
 });
+test("normalized phases distinguish recorded required checks, pending checks and candidate-only finalization", () => {
+  assert.equal(attemptFromRun(fixtureRun("required-pass"), "task", "candidate").phase, "graded");
+  const absent = fixtureRun("no-grader", fixtureConfig(), "ungraded");
+  assert.equal(attemptFromRun(absent, "task", "candidate").phase, "finalized");
+  absent.contract.task.conformanceProbe = { checks: [{ id: "R1", description: "Required control", command: "node --version" }] };
+  absent.contractHash = immutableContractHash(absent.contract);
+  const pending = attemptFromRun(absent, "task", "candidate");
+  assert.equal(pending.phase, "grading-pending"); assert.equal(pending.acceptance, "ungraded");
+  assert.equal(pending.checkErrors, 0); assert.equal(pending.outcome, "resolved");
+  const advisory = fixtureRun("advisory-only");
+  advisory.conformance!.checks[0].severity = "advisory";
+  assert.equal(attemptFromRun(advisory, "task", "candidate").phase, "finalized");
+  assert.equal(attemptFromRun(advisory, "task", "candidate").acceptance, "ungraded");
+  absent.executionStatus = "interrupted"; absent.runnerError = "fixture interruption";
+  assert.equal(attemptFromRun(absent, "task", "candidate").phase, "execution");
+});
 test("changed task/execution/round/runtime cohorts cannot collapse into comparable cells", () => {
   const a = fixtureRun("a"), b = fixtureRun("b");
   b.contract.rounds = [{ prompt: "Changed follow-up." }]; b.contractHash = immutableContractHash(b.contract);
