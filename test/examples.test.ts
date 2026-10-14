@@ -86,11 +86,12 @@ test("public README leads with bounded inline-task provider quickstarts and offl
   const readme = readFileSync(resolve("README.md"), "utf8");
   const guide = readFileSync(resolve("docs", "RUNNING_THE_TOOLKIT.md"), "utf8");
   assert.match(readme, /^# Coding Agent Model Evaluation Toolkit\r?\n\r?\nA local TypeScript\/npm toolkit/);
-  assert.ok(readme.split(/\r?\n/).length <= 260, "Keep advanced reference detail out of README.");
+  assert.ok(readme.split(/\r?\n/).length < 480, "Keep README an onboarding overview, not the full operator reference.");
   assert.deepEqual([...readme.matchAll(/^## (.+)$/gm)].map((heading) => heading[1].trim()),
     ["Prerequisites", "1. Install the reviewed version", "2. Review bounds and choose one simple task",
-      "3. Prepare and run each provider", "4. Generate, open and share the report", "More detail"]);
-  for (const marker of ["setup", "openai", "anthropic", "report"]) {
+      "3. Prepare and run each provider", "4. Generate, open and share the report",
+      "How grading works", "Usage and optional pricing", "Optional model-based rubric review", "More detail"]);
+  for (const marker of ["setup", "auth", "openai", "anthropic", "report"]) {
     assert.equal([...readme.matchAll(new RegExp(`# first-run:${marker}(?:[^\\r\\n]*)\\r?\\n`, "g"))].length, 1);
   }
   const tasks = [...readme.matchAll(/^\$task = '(.+)'$/gm)].map((match) => match[1]);
@@ -103,6 +104,21 @@ test("public README leads with bounded inline-task provider quickstarts and offl
   }
   assert.match(readme, /required\s+acceptance stays UNGRADED/);
   assert.match(readme, /Anthropic runtime\/initial-fit doctor controls are currently unsupported/);
+  assert.match(readme, /### Keyless setup \(preferred\)/);
+  assert.match(readme, /az account show --subscription \$subscriptionId/);
+  assert.match(readme, /account\.tenantId -ne \$tenantId/);
+  assert.match(readme, /SDK cost multipliers are not USD/);
+  assert.match(readme, /seven integer dimensions, 1-5/);
+  assert.match(readme, /campaign `grade\.json` automatically/);
+  for (const marker of ["openai", "anthropic"]) {
+    const block = new RegExp(`# first-run:${marker}\\r?\\n([\\s\\S]*?)\\r?\\n\`\`\``).exec(readme);
+    assert.ok(block);
+    assert.match(block[1], /--auth entra --credential azure-cli --subscription-id \$subscriptionId/);
+    assert.doesNotMatch(block[1], /--tenant-id|--auth key/);
+    assert.ok(block[1].indexOf("--acquire-auth") > block[1].indexOf("--prepare-only"));
+    if (marker === "openai") assert.ok(block[1].indexOf("--acquire-auth") > block[1].indexOf("--verify-request-fit"));
+    else assert.doesNotMatch(block[1], /--verify-runtime|--verify-request-fit|--wire-api/);
+  }
 });
 
 test("onboarding auth/isolation fragments and immediate-run commands match implemented parsers", () => {
@@ -122,19 +138,22 @@ test("onboarding auth/isolation fragments and immediate-run commands match imple
   config.isolation.image = `owner/fixture@sha256:${"a".repeat(64)}`;
   assert.equal(isolationSchema.parse(config.isolation).mode, "container");
   const commands = [...(readme + keyless).matchAll(/^npm run (quickstart|evaluate) -- (.+)$/gm)];
-  assert.equal(commands.length, 4);
+  assert.equal(commands.length, 5);
   for (const command of commands) {
     const args = (command[2].match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((arg) => {
       if (arg === "$deployment") return "fixture-deployment";
       if (arg === "$task") return "Common inline task";
       if (arg === "$tenantId") return "11111111-2222-4333-8444-555555555555";
       if (arg === "$subscriptionId") return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-      if (arg === '"$root\\openai-bounds.json"' || arg === '"$root\\anthropic-bounds.json"') return resolve("examples", "request-bounds.example.json");
+      if (/^"\$root\\(?:openai|anthropic|judge)-bounds\.json"$/.test(arg)) return resolve("examples", "request-bounds.example.json");
       return arg.replace(/^['"]|['"]$/g, "");
     });
 
     const options = command[1] === "quickstart" ? parseQuickstartOptions(args) : parseEvaluationOptions(args);
-    assert.equal(options.auth?.mode, args.includes("--prepare-only") ? "key" : "entra");
+    assert.ok(options.auth?.mode === "entra");
+    assert.equal(options.auth.credential, "azure-cli");
+    assert.equal(options.auth.subscriptionId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+    assert.equal(options.auth.tenantId, undefined);
     assert.equal(options.wireApi, options.provider === "anthropic" ? undefined : "responses");
     assert.ok(options.requestBounds);
   }

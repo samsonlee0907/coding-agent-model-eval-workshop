@@ -169,9 +169,9 @@ refresh/caching behavior; there is no scope override. Token success does not
 prove resource inference RBAC, model availability, tool use or coding quality.
 Other endpoint families need their own verified support.
 
-For the supported **key** alternative, follow the
-[README provider setup](../README.md#3-prepare-and-run-each-provider), or set
-the copied campaign's key mode before saving:
+Keyless is the recommended first-run path in the
+[README setup](../README.md#keyless-setup-preferred). For the supported **key**
+alternative, set the copied campaign's key mode before saving:
 
 ```powershell
 $env:FOUNDRY_API_KEY = Read-Host 'API key for the selected Foundry resource' -MaskInput
@@ -533,7 +533,7 @@ mechanism; this is not a built-in private benchmark loader.
 Exploration can prepare a disposable config **without inference**:
 
 ```powershell
-npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model 'YOUR_DEPLOYMENT' --wire-api responses --auth key --bounds '.\examples\request-bounds.example.json' --prepare-only --output '.\.benchmark-runs\ordering-exploration-v1'
+npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.prompt.txt' --provider openai --model 'YOUR_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds '.\examples\request-bounds.example.json' --prepare-only --output '.\.benchmark-runs\ordering-exploration-v1'
 ```
 
 Review a copied bounds file first; the example limits are not deployment
@@ -599,6 +599,11 @@ replaced). A later snapshot is a **what-if**, not a rewrite of recorded
 campaign prices, a negotiated invoice or real-time offline HTML.
 Campaign pricing must be declared/pinned before preparation; see
 [pricing semantics](CAMPAIGNS_AND_PUBLICATION.md#evidence-pricing-and-publication).
+For saved-run reports, use the [README's explicit `--pricing` attachment](../README.md#usage-and-optional-pricing).
+It enriches HTML with what-if scenarios, not recorded normalized/exported
+campaign prices. Optional model review has [a separate fixed rubric and sensitive
+artifact](TASK_AUTHORING_GUIDE.md#quality-evidence-and-scorecards); it is not
+an additional required-grade importer.
 
 ## Offline reporting and sharing
 

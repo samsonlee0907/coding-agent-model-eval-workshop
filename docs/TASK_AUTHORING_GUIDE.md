@@ -393,6 +393,28 @@ behaviors, independent dimensions such as maintainability or test adequacy,
 and the evidence source for each. Do not let a judge override deterministic
 checks.
 
+The optional model review uses the fixed `benchmark-judge-v3` prompt: seven
+integer 1-5 dimensions (`correctness`, `testAdequacy`, `apiDesign`,
+`reproducibility`, `codeQuality`, `requirementCoverage`, `maintainability`),
+low/medium/high evidence confidence and file/line findings whose citations
+are checked against inspected source. Its bounded/redacted inputs include the
+task, recorded run outcome/profile/usage, retained final source, manifest,
+integrity findings, short baseline diff, candidate validation and available
+run-level conformance probe. External campaign `grade.json` is not imported
+automatically. Missing source is unavailable evidence, not an invented review;
+the judge has no coding tools.
+
+`evaluate` starts paid inference immediately and requires separately approved
+judge credentials/endpoint, context/output/request/time bounds and permission
+to send the reviewed content. Success is saved as
+`llm-evaluation-<timestamp>.json` in the runs root unless `--output` is set;
+failure retains `llm-evaluation-failure-<timestamp>.json` accounting without
+scores. Use the exact successful artifact with `report:html --evaluation
+<file>` rather than assuming a discovered file is valid. Reports publish numeric
+dimensions and count-based coverage, not the sensitive narratives/findings.
+See the [bounded judge/report example](../README.md#optional-model-based-rubric-review)
+and the [implemented evidence/prompt/parser](../src/evaluator.ts).
+
 Keep probe source outside the candidate `workspacePath`; do not disclose its
 path, command, or hidden input/prompt to the candidate. The runner invokes
 probe commands with the candidate workspace as its current directory. Run each

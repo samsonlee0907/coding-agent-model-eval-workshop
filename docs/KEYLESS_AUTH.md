@@ -1,11 +1,11 @@
 # Keyless Microsoft Entra authentication
 
-Start with [operator installation and configuration](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task),
-then continue to [campaign first-run usage](RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell).
-Together they cover the actual example, saving configuration, offline preview
-and paid run/report commands. This guide explains the authentication steps and
-boundaries in more detail. Docker is unrelated to choosing key versus keyless
-authentication.
+Start with the [README keyless quickstart](../README.md#keyless-setup-preferred)
+for two exploratory provider runs, or [operator installation and configuration](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task)
+and [campaign first-run usage](RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell)
+for calibrated required acceptance. This guide explains the authentication
+steps and boundaries in more detail. Docker is unrelated to choosing key
+versus keyless authentication.
 
 ## Local developer setup
 
@@ -15,8 +15,9 @@ authentication.
    for macOS/Linux. Neither Azure Developer CLI (`azd`) nor a Copilot login is
    needed. Install on the **orchestrator host**, not in the candidate container.
 2. Obtain the existing resource name, deployment name, intended tenant UUID
-   and subscription UUID from your administrator. Confirm deployment Responses
-   support, reasoning settings, resource inference permission and network access.
+   and subscription UUID from your administrator. Confirm the actual deployment's
+   Responses or Anthropic Messages API, reasoning settings, resource inference
+   permission and network access.
    This toolkit does not deploy models, enable identities or assign roles.
 3. Sign into the intended account. This is interactive and may require MFA:
 
@@ -114,6 +115,10 @@ audience from your endpoint or expose a `--scope`/JSON `scope` override.
 That scope matches the
 [exact pinned SDK 1.0.10-preview.0 Azure Identity guide](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/setup/azure-managed-identity.md)
 and [Microsoft's v1 Responses examples](https://learn.microsoft.com/azure/foundry/openai/how-to/responses).
+[Microsoft's Claude Messages examples](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-claude)
+also document Entra token-provider authentication with this scope. That is a
+supported route, not proof that every deployment/version/runtime configuration
+has been live-accepted.
 Other/older Azure API examples may use `https://cognitiveservices.azure.com/.default`;
 project/agent APIs have their own contracts. A deployment that requires a
 different audience or lacks Entra support is **not covered by this keyless
