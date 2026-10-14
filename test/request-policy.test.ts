@@ -1,12 +1,33 @@
 import assert from "node:assert/strict";
-import test from "node:test";
+import test, { mock } from "node:test";
 import { createServer, request } from "node:http";
-import { RequestGuard, DeploymentAdmission, DispatchError, canRetryRequest, retryDelay } from "../src/request-policy.js";
+import { RequestGuard, DeploymentAdmission, DispatchError, canRetryRequest, retryDelay, deadlineTimeoutSignal } from "../src/request-policy.js";
 import { startRequestSanitizingProxy, dispatchBenchmarkWorkRequests, benchmarkWorkRequests, createRunDiagnostics } from "../src/runner.js";
 import { ProviderStream, ProviderTerminalError, providerTerminal } from "../src/provider-stream.js";
 import { deriveMetrics } from "../src/metrics.js";
 import { event } from "./fixtures/events.js";
 import { fixtureRuntime } from "./fixtures/revamp.js";
+
+test("deadline signals floor fractional durations without extending deadlines or overflowing Node timers", () => {
+  const delays: number[] = [];
+  const timeout = mock.method(AbortSignal, "timeout", (delay: number) => {
+    delays.push(delay); return new AbortController().signal;
+  });
+  try {
+    deadlineTimeoutSignal(1539077.4060058594, 0);
+    deadlineTimeoutSignal(100.75, 0.25, 500);
+    deadlineTimeoutSignal(100.75, 0.25, 50);
+    deadlineTimeoutSignal(4294967296, 0);
+    assert.deepEqual(delays, [1539077, 100, 50, 2147483647]);
+    for (const [deadline, now, limit] of [
+      [0.75, 0, 500], [0, 0, 500], [-1, 0, 500], [NaN, 0, 500], [Infinity, 0, 500],
+      [1, NaN, 500], [1, Infinity, 500], [1, 0, 0], [1, 0, 0.5], [1, 0, 2147483648],
+      [Number.MAX_VALUE, -Number.MAX_VALUE, 500],
+    ]) assert.throws(() => deadlineTimeoutSignal(deadline, now, limit),
+      (error: unknown) => error instanceof DispatchError && error.certainty === "not-dispatched");
+    assert.equal(delays.length, 4);
+  } finally { timeout.mock.restore(); }
+});
 
 test("physical request recovery is only for explicit 429 rejection and honors retry headers", () => {
   assert.equal(canRetryRequest("explicitly-rejected", 429), true);
@@ -65,6 +86,33 @@ async function upstream(handler: Parameters<typeof createServer>[0]) {
   return { server, base: `http://127.0.0.1:${address.port}`, close: () => new Promise<void>((r, reject) => server.close((e) => e ? reject(e) : r())) };
 }
 const post = (url: string, body = { model: "fixture", input: "safe fixture" }) => fetch(`${url}/responses`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
+test("timeout preflight errors are captured without crashing or dispatching any provider request", async () => {
+  let calls = 0, transforms = 0;
+  const host = await upstream((_req, res) => { calls++; res.end(); });
+  try {
+    for (const mode of ["expired", "invalid", "cancelled"] as const) {
+      const controller = new AbortController();
+      if (mode === "cancelled") controller.abort();
+      const guard = new RequestGuard(undefined, Date.now(),
+        mode === "invalid" ? NaN : mode === "expired" ? Date.now() - 10 : Date.now() + 10000.375);
+      const captured: Array<import("../src/types.js").JsonRecord> = [];
+      const proxy = await startRequestSanitizingProxy(host.base, body => { transforms++; return body; }, {
+        guard, signal: controller.signal,
+        capture(type, data) { if (type === "runner.provider_bridge_error") captured.push(data); },
+      });
+      try {
+        const reply = await post(proxy.baseUrl);
+        assert.equal(reply.status, 400); await reply.text();
+        assert.equal(captured[0].phase, "request-timeout");
+        assert.equal(captured[0].certainty, "not-dispatched");
+        assert.equal(guard.accounting.physicalRequests, 0);
+        assert.equal(guard.accounting.reservedTokens, 0);
+        assert.equal(guard.accounting.ambiguousRequests, 0);
+      } finally { await proxy.stop(); }
+    }
+    assert.equal(calls, 0); assert.equal(transforms, 0);
+  } finally { await host.close(); }
+});
 test("bridge recovers rejected 429 once, records both physical dispatches and prevents hidden replay", async () => {
   let calls = 0;
   const host = await upstream((_req, res) => {

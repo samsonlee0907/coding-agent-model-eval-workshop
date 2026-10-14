@@ -152,6 +152,15 @@ RPM/TPM pacing and an absolute per-attempt deadline. Protective USD amounts use
 the explicitly configured USD-per-million upper bound; they are not billing
 telemetry or a guarantee of a provider invoice. Choose the bound conservatively.
 Reservations persist across attempts/resumes and are not refunded as charges.
+Public API `PolicyClock`/absolute deadlines may contain fractional milliseconds.
+Provider and native-count timeout boundaries floor the remaining duration, never
+extend the deadline, and cap it at Node's signed 32-bit timer maximum. Invalid,
+expired or sub-millisecond remaining durations fail before dispatch; bridge
+preflight failures close the lane with captured `not-dispatched` diagnostics
+instead of escaping the HTTP handler. These rules add no model/session retries.
+See the owner documentation for
+[`AbortSignal.timeout`](https://nodejs.org/api/globals.html#static-method-abortsignaltimeoutdelay)
+and [Node timer limits](https://nodejs.org/api/timers.html#settimeoutcallback-delay-args).
 Legacy single-run calls without request bounds derive their overall ceiling
 from the declared session timeout and task/round/validation/probe stage count,
 not a study-specific fixed duration.

@@ -47,7 +47,7 @@ import { inspectArtifact } from "./artifact-inspection.js";
 import { runConformanceProbe } from "./conformance.js";
 import { providerAuthentication, providerSchema } from "./auth.js";
 import { atomicJson } from "./durable.js";
-import { DispatchError, RequestGuard, DeploymentAdmission, retryDelay, realClock } from "./request-policy.js";
+import { DispatchError, RequestGuard, DeploymentAdmission, retryDelay, realClock, deadlineTimeoutSignal } from "./request-policy.js";
 import { ControlledWorker, collectSnapshot, snapshotHash } from "./controlled-worker.js";
 import type { EventCollector as Collector } from "./event-collector.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
@@ -807,15 +807,17 @@ async function forwardSanitizedRequest(
 ): Promise<void> {
   const guard = options.guard ?? new RequestGuard();
   let dispatched = false;
-  let bridgePhase = "request-body", upstreamStatus: number | null = null, responseBytes = 0;
+  let bridgePhase = "request-timeout", upstreamStatus: number | null = null, responseBytes = 0;
   let outputTokenLimit: number | null = null;
   const disconnected = new AbortController();
   const onClose = () => { if (!outgoing.writableFinished) disconnected.abort(); };
   outgoing.once("close", onClose);
-  const signal = AbortSignal.any([disconnected.signal, ...(options.signal ? [options.signal] : []),
-    AbortSignal.timeout(Math.max(1, guard.deadline - Date.now()))]);
   try {
+    const signal = AbortSignal.any([disconnected.signal, ...(options.signal ? [options.signal] : []),
+      deadlineTimeoutSignal(guard.deadline)]);
+    if (signal.aborted) throw new DispatchError("Provider bridge cancelled before request admission.", "not-dispatched");
     guard.assertAvailable(0);
+    bridgePhase = "request-body";
     if (incoming.method !== "POST" || !/^\/(?:v1\/)?(?:chat\/completions|responses|messages)(?:\?[^#]*)?$/.test(incoming.url ?? "")) {
       throw new DispatchError("Only inference POST routes are permitted by the provider bridge.", "not-dispatched");
     }

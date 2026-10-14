@@ -20,6 +20,17 @@ export function loadRequestBounds(path: string | undefined): RequestBounds | und
   return path ? requestBoundsSchema.parse(JSON.parse(readFileSync(path, "utf8"))) : undefined;
 }
 export interface PolicyClock { now(): number; sleep(ms: number, signal?: AbortSignal): Promise<void>; }
+export function deadlineTimeoutSignal(deadline: number, now = Date.now(), maximumMs = 2147483647): AbortSignal {
+  const remaining = deadline - now;
+  if (!Number.isFinite(deadline) || !Number.isFinite(now) || !Number.isFinite(remaining)
+      || !Number.isInteger(maximumMs) || maximumMs < 1 || maximumMs > 2147483647) {
+    throw new DispatchError("Invalid provider timeout/deadline; no request dispatched.", "not-dispatched");
+  }
+  // AbortSignal requires an integer; Node timers overflow above signed 32-bit milliseconds.
+  const delay = Math.floor(Math.min(remaining, maximumMs));
+  if (delay < 1) throw new DispatchError("Provider deadline exhausted before request dispatch.", "not-dispatched");
+  return AbortSignal.timeout(delay);
+}
 export const realClock: PolicyClock = { now: Date.now, sleep: (ms, signal) => new Promise((resolve, reject) => {
   signal?.throwIfAborted();
   const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal?.reason); };

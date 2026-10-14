@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createHash } from "node:crypto";
 import https from "node:https";
+import childProcess from "node:child_process";
 import { syncBuiltinESMExports } from "node:module";
 import { CopilotClient, RuntimeConnection, ToolSet, defineTool, approveAll } from "@github/copilot-sdk";
 import { countNativeTokens, nativeCountBody, applyAnthropicThinking, canRetryNativeCount,
@@ -47,6 +48,27 @@ function fakeClock(start = 0) {
   const clock: PolicyClock = { now: () => now, async sleep(ms, signal) { signal?.throwIfAborted(); sleeps.push(ms); now += ms; } };
   return { clock, sleeps, advance: (ms: number) => { now += ms; } };
 }
+
+test("native count floors fractional deadlines and rejects invalid or sub-millisecond clocks before dispatch", async () => {
+  const counters = accounting(), time = fakeClock(0.25);
+  const result = await countNativeTokens(Buffer.from(JSON.stringify(message())), {
+    policy, accounting: counters, clock: time.clock, deadline: 100.75,
+    signal: new AbortController().signal, model, beforeDispatch: async () => {},
+    async send() { return reply(200, '{"input_tokens":123}'); },
+  });
+  assert.equal(result, 123); assert.equal(counters.requests, 1);
+  for (const [now, deadline] of [[0.25, 0.75], [NaN, 100], [0, NaN], [Infinity, 100], [0, Infinity]]) {
+    const rejected = accounting();
+    let admissions = 0, sends = 0;
+    await assert.rejects(countNativeTokens(Buffer.from(JSON.stringify(message())), {
+      policy, accounting: rejected, clock: fakeClock(now).clock, deadline,
+      signal: new AbortController().signal, model, beforeDispatch: async () => { admissions++; },
+      async send() { sends++; return reply(200, '{"input_tokens":123}'); },
+    }), /deadline/);
+    assert.equal(admissions, 0); assert.equal(sends, 0);
+    assert.equal(rejected.requests, 0); assert.equal(rejected.retries, 0); assert.equal(rejected.fees, "unknown");
+  }
+});
 
 test("native count retries the identical Azure Timeout/408 without a model request and preserves safe IDs", async () => {
   const counters = accounting(), time = fakeClock(), bodies: string[] = [];
@@ -378,7 +400,7 @@ test("unknown/null/object/contradictory inference429 categories cannot launder r
   }
 });
 
-test("public runBenchmark persists native admission failure before validation or task grading without a provider dispatch", { timeout: 60000 }, async () => {
+test("actual public runBenchmark preserves fractional PolicyClock and spawned runtime without inference or incomplete grading after native rejection", { timeout: 60000 }, async t => {
   const root = mkdtempSync(join(tmpdir(), "bt-native-run-"));
   const prior = { endpoint: process.env.FOUNDRY_ENDPOINT, key: process.env.FOUNDRY_API_KEY };
   let counts = 0;
@@ -392,6 +414,7 @@ test("public runBenchmark persists native admission failure before validation or
     assert.equal(url.hostname, "fixture.services.ai.azure.com");
     return request(new URL(url.pathname, upstream.base), options, callback);
   });
+  const spawned = mock.method(childProcess, "spawn");
   syncBuiltinESMExports();
   try {
     process.env.FOUNDRY_ENDPOINT = "https://fixture.services.ai.azure.com";
@@ -399,13 +422,32 @@ test("public runBenchmark persists native admission failure before validation or
     const config = fixtureConfig(root, "public-count-failure", "claude-haiku-5-5");
     config.contract.runtime = readRuntimeIdentity();
     config.contract.candidate.provider = "anthropic";
-    config.contract.foundryProvider = { type: "anthropic", nativeTokenCount: policy, anthropicThinking: "adaptive" };
+    config.contract.foundryProvider = { type: "anthropic", nativeTokenCount: { ...policy, requestTimeoutMs: 120000 }, anthropicThinking: "adaptive" };
     config.contract.task.validationCommand = 'node -e "require(\'node:fs\').writeFileSync(\'validator-started\',\'unexpected\')"';
     config.contract.task.conformanceProbe = { checks: [{ id: "public-check", description: "Must not grade interrupted execution.",
       severity: "required", command: 'node -e "require(\'node:fs\').writeFileSync(\'grader-started\',\'unexpected\')"' }] };
     config.requestBounds = { ...guard().bounds!, deadlineMs: 45000, maxRequestBytes: 1048576, maxTokens: 1000000, maxOutputTokens: 8192, tokensPerMinute: 1000000 };
     config.artifactsDirectory = join(root, "artifacts");
-    const run = await runBenchmark(config, { runId: "owned-public-fixture" });
+    const wall = Date.now(), monotonic = performance.now();
+    const clock: PolicyClock = { now: () => Math.floor(wall + performance.now() - monotonic) + 0.406005859375,
+      async sleep(ms, signal) { signal?.throwIfAborted(); await new Promise(resolve => setTimeout(resolve, ms)); } };
+    const deadlineAt = clock.now() + 45000, admission = new DeploymentAdmission(clock);
+    assert.equal(Number.isInteger(deadlineAt), false);
+    const run = await runBenchmark(config, { runId: "owned-public-fixture", deadlineAt, admission });
+    const cliPath = resolveCopilotCliPath(process.env);
+    const cliSpawns = spawned.mock.calls.filter(call => Array.isArray(call.arguments[1])
+      && call.arguments[1].includes("--headless") && call.arguments[1].includes("--stdio"));
+    assert.equal(cliSpawns.length, 1);
+    if (cliPath) {
+      assert.ok(cliSpawns[0].arguments[0] === cliPath || cliSpawns[0].arguments[1].includes(cliPath));
+      assert.equal(createHash("sha256").update(readFileSync(cliPath)).digest("hex"), config.contract.runtime.cliSha256);
+    }
+    assert.equal(run.diagnostics.runtime.cliVersion, config.contract.runtime.cliVersion);
+    assert.equal(typeof run.diagnostics.reportedBackendVersion, "string");
+    t.diagnostic(JSON.stringify({ selectedCliPath: cliPath ?? null,
+      selection: cliPath ? "explicit-external" : "sdk-default-no-external-found", cliSha256: config.contract.runtime.cliSha256,
+      cliVersion: config.contract.runtime.cliVersion, reportedBackendVersion: run.diagnostics.reportedBackendVersion,
+      fractionalDeadline: deadlineAt, nativeFixtureRequests: counts, inferenceRequests: run.requestAccounting?.physicalRequests }));
     assert.equal(counts, 3); assert.equal(run.executionStatus, "interrupted"); assert.equal(run.outcome.class, "harness_failure");
     assert.equal(run.requestAccounting?.physicalRequests, 0); assert.equal(run.requestAccounting?.ambiguousRequests, 0);
     assert.equal(run.requestAccounting?.nativeTokenCount?.requests, 3);
@@ -419,7 +461,7 @@ test("public runBenchmark persists native admission failure before validation or
     const checkpoint = JSON.parse(readFileSync(join(run.artifacts.directory, "execution.json"), "utf8"));
     assert.equal(checkpoint.executionComplete, false); assert.deepEqual(checkpoint.requestAccounting, run.requestAccounting);
   } finally {
-    intercepted.mock.restore(); syncBuiltinESMExports();
+    intercepted.mock.restore(); spawned.mock.restore(); syncBuiltinESMExports();
     if (prior.endpoint === undefined) delete process.env.FOUNDRY_ENDPOINT; else process.env.FOUNDRY_ENDPOINT = prior.endpoint;
     if (prior.key === undefined) delete process.env.FOUNDRY_API_KEY; else process.env.FOUNDRY_API_KEY = prior.key;
     await upstream.close(); rmSync(root, { recursive: true, force: true });

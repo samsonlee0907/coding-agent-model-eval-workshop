@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { DispatchError, realClock, retryDelay, type PolicyClock } from "./request-policy.js";
+import { DispatchError, realClock, retryDelay, deadlineTimeoutSignal, type PolicyClock } from "./request-policy.js";
 import type { JsonRecord } from "./types.js";
 
 export const nativeTokenCountPolicySchema = z.object({
@@ -133,7 +133,9 @@ export async function countNativeTokens(body: Buffer, options: NativeCountOption
   const countBody = nativeCountBody(body, options.model);
   const inferenceBodyHash = digest(body), countBodyHash = digest(countBody);
   const check = () => {
-    if (clock.now() >= options.deadline) throw new NativeTokenCountError("deadline");
+    const now = clock.now();
+    if (!Number.isFinite(now) || !Number.isFinite(options.deadline)) throw new NativeTokenCountError("invalid_deadline");
+    if (options.deadline - now < 1) throw new NativeTokenCountError("deadline");
     if (options.signal.aborted) throw new NativeTokenCountError("cancelled");
     if (options.accounting.requests >= policy.maxRequests) throw new NativeTokenCountError("request_limit");
   };
@@ -141,7 +143,7 @@ export async function countNativeTokens(body: Buffer, options: NativeCountOption
     check();
     await options.beforeDispatch();
     check();
-    const attemptTimeout = AbortSignal.timeout(Math.max(1, Math.min(policy.requestTimeoutMs, options.deadline - clock.now())));
+    const attemptTimeout = deadlineTimeoutSignal(options.deadline, clock.now(), policy.requestTimeoutMs);
     const signal = AbortSignal.any([options.signal, attemptTimeout]);
     const entry: CountAttempt = {
       request: ++options.accounting.requests, attempt, inferenceBodyHash, countBodyHash,
