@@ -170,13 +170,21 @@ prove resource inference RBAC, model availability, tool use or coding quality.
 Other endpoint families need their own verified support.
 
 For the supported **key** alternative, follow the
-[masked key setup](../README.md#3-configure-foundry-authentication) instead;
-omitted auth means key, not automatic keyless. Managed/workload identity are
+[README provider setup](../README.md#3-prepare-and-run-each-provider), or set
+the copied campaign's key mode before saving:
+
+```powershell
+$env:FOUNDRY_API_KEY = Read-Host 'API key for the selected Foundry resource' -MaskInput
+$spec.candidates[0].foundryProvider.auth = [pscustomobject]@{ mode = 'key' }
+```
+
+Use PowerShell 7.1+ for masked entry and an already key-enabled resource.
+Do not execute both auth branches or store keys/tokens in configuration.
+Omitted auth means key, not automatic keyless. Managed/workload identity are
 supported configuration paths on properly configured hosts, not local login
-shortcuts. **Key authentication was explicitly skipped**, not PASS or FAIL,
-in the keyless acceptance described below. Managed/workload hosts and private
-Docker grading were not live-tested there either; lack of live acceptance is
-not evidence that these capabilities fail or should be removed.
+shortcuts. Local fake-provider tests are not live acceptance of keys, Anthropic,
+managed/workload hosts or private Docker grading. Verify your chosen path
+separately; supported configuration is not a universal endpoint/auth guarantee.
 
 ### Capacity is not the example policy
 
@@ -486,6 +494,30 @@ Version intentional variations as distinct cohorts. Required/advisory/error
 signals are not interchangeable. Do not count missing candidates as equal
 coverage, infer a deployment from a label, or treat a calibrated check as broad
 proof that the task represents production.
+Optional MCP servers are part of the immutable local execution contract and
+are disallowed in isolated mode. Secret placeholders expand only at launch;
+never store credentials in task files. Media-token admission, PDF/OCR and
+independent workbook recalculation are not provided.
+
+### Command map
+
+Run from the repository root; npm scripts build before execution. The
+[README inline-task examples](../README.md#3-prepare-and-run-each-provider)
+are an exploratory alternative to this guide's calibrated campaign.
+
+| Command | Scope / cost |
+|---|---|
+| `npm run quickstart -- ... --prepare-only` | Offline disposable workspace/config; otherwise paid immediately |
+| `npm run doctor -- --config <file>` | Local checks; optional token-only `--acquire-auth`; runtime/fit controls are Responses-only |
+| `npm run bench -- --config <file>` | Paid single task immediately, no `--allow-paid` gate |
+| `npm run campaign -- <command> ...` | Prepare/status/report offline; run/resume require `--allow-paid`; owned isolated cleanup uses Docker |
+| `npm run report:html -- --runs <saved-runs> ...` | Offline report; normalized `--evidence` carries campaign required coverage |
+| `npm run portfolio -- --runs <saved-runs>` | Offline candidate-validation summary, not campaign acceptance |
+| `npm run prices:refresh -- --runs <saved-runs>` | Public pricing network, no inference; explicit what-if snapshot |
+| `npm run evaluate -- ...` | Optional paid judge immediately; requires bounds, never replaces required checks |
+
+Use each command's `--help` for exact supported flags; no command installs
+cloud infrastructure or assigns roles.
 
 ### Scenario and exploratory paths
 
@@ -530,6 +562,10 @@ CLI exit 0/journal completed describes orchestration, not required grade PASS.
 The report selects latest clean completion **including content FAIL**, not
 latest PASS; historical attempts/recovery remain visible. Clean-completed
 counts are execution coverage, not completed grading/comparison coverage.
+One sample per candidate or tiny tasks cannot establish broad ranking,
+repeatability, another model's equivalence or production routing. Fixed order,
+cache and operator pacing confound time/token comparisons; use representative
+matched tasks/repeats and all-attempt accounting before generalizing.
 
 Legacy `portfolio --runs` deliberately counts **candidate-validation**
 resolution only, with required acceptance **Not assessed**. Zero runtime
@@ -663,34 +699,6 @@ Shared validation handles child/stdin/stdout/stderr failures with finite
 timers/output capture/owned process-tree cleanup. No registry toggle, shared
 user-directory relocation, broad process-name kill or SDK guardrail removal
 is required. See [Windows grading scope](CAMPAIGNS_AND_PUBLICATION.md#windows-grading-working-directories).
-
-## Lessons from observed runs, not guarantees
-
-A clean four-cell follow-up used two tiny public tasks and two existing
-deployments, organized as sequential one-cell campaigns. All four persisted
-calibrated original R1 grades: three PASS and one JSON content FAIL (a scalar
-`16`, not the required object). The generic review completed; no requirement
-was relaxed or failure retried. Twenty-four physical requests had reported
-meters with no provider ambiguity, missing grades or infrastructure ERROR.
-Both deployments' then-approved allocation was observed as 50,000 TPM /
-50 RPM; that is a historical observation, **not this guide's quota/default**.
-The run used deliberate gaps exceeding two minutes between cells.
-Known usage totaled 132,046 input-plus-output tokens; reasoning was a subset
-of output, SDK cost zero was not USD, and the invoice remained unknown.
-Reviewed public-CLI folder/ZIP/exports were browser-inspected and copied
-separately after hash checks, without overwriting historical reports.
-
-Older stopped evidence remained unchanged and ungraded where no original
-grade existed. Earlier quota mismatch, local growth refusal, byte-edit tool
-limitations and Windows grading-copy errors were separate lessons, not
-retroactive reinterpretations of old unknown provider failures.
-
-This establishes a bounded path through the tested keyless/runtime/public
-tasks, not broad ranking, repeatability, another model's equivalence or
-production routing. With one sample per cell, two small tasks, fixed order,
-cache/latency/pacing and differing tool behavior, comparative time/token
-figures are confounded. More representative matched tasks/repeats and honest
-all-attempt accounting are required before drawing general conclusions.
 
 ## Official references and implementation truth
 

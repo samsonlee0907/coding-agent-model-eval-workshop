@@ -1,7 +1,7 @@
 # Keyless Microsoft Entra authentication
 
-Start with [README installation and configuration](../README.md#installation-and-configuration),
-then continue to [first-run usage](../README.md#first-run-one-task-one-deployment).
+Start with [operator installation and configuration](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task),
+then continue to [campaign first-run usage](RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell).
 Together they cover the actual example, saving configuration, offline preview
 and paid run/report commands. This guide explains the authentication steps and
 boundaries in more detail. Docker is unrelated to choosing key versus keyless
@@ -81,11 +81,11 @@ authentication.
    ```
 
    Put it under `contract.foundryProvider` in a `bench` task config, or under
-   **each candidate's** `foundryProvider` in campaign JSON. In the README,
+   **each candidate's** `foundryProvider` in campaign JSON. In the operator guide,
    `$spec.candidates[0].foundryProvider.auth` is set then mirrored into the
    task for `doctor`. Candidate configuration overrides the task's provider
    during campaign execution. Save both files as in
-   [README configuration step 5](../README.md#5-save-the-configuration).
+   [operator policy/save step](RUNNING_THE_TOOLKIT.md#3-review-finite-policy-and-calibrate-before-preparation).
    `candidate.model`/quickstart `--model` must be the exact deployment name.
    For the tenant-only alternative, replace the `subscriptionId` field with
    `"tenantId": "11111111-2222-4333-8444-555555555555"`; do not add both.
@@ -161,7 +161,7 @@ query is performed by `doctor` or this repository's offline examples.
 Choose `requestBounds.requestsPerMinute` and `tokensPerMinute` within your
 approved share of both limits, leaving headroom for other clients. Set them
 before saving/preparing and mirror the policy for task `doctor` checks as in
-[README setup](../README.md#check-deployment-capacity-before-paid-execution).
+[operator setup](RUNNING_THE_TOOLKIT.md#capacity-is-not-the-example-policy).
 That setup attaches `foundryProvider.capacity`: an administrator declaration
 or management observation with timestamp, canonical endpoint, exact deployment,
 wire API and positive observed RPM/TPM. Campaign preparation and `doctor`
@@ -344,7 +344,7 @@ For a new reader's one-cell diagnostic gate, an explicitly reviewable
 holds a deliberately small allowance for observing the terminal category:
 10 physical requests, 1 MiB/request, 200,000 pessimistically reserved tokens,
 five minutes, 10 RPM and 200,000 TPM. It does **not** promise task completion.
-After README setup/auth/execution-mode steps, **before saving/preparing**, use:
+After operator setup/auth/execution-mode steps, **before saving/preparing**, use:
 
 ```powershell
 # Fresh one-cell configuration only; never mutate a prepared campaign.
@@ -360,7 +360,8 @@ $spec.bounds.maxReservationUsd = 4 # At the example's declared $20/million prote
 $task | Add-Member -NotePropertyName requestBounds -NotePropertyValue $spec.requestBounds -Force
 ```
 
-Then follow [README save and first-run commands](../README.md#5-save-the-configuration):
+Then follow the [operator save step](RUNNING_THE_TOOLKIT.md#3-review-finite-policy-and-calibrate-before-preparation)
+and [first-run commands](RUNNING_THE_TOOLKIT.md#4-run-the-pre-dispatch-gates-in-order):
 runtime fake gate, offline prepare, token-only doctor, and the explicitly
 cost-bearing one-cell campaign run. Keep the selected CLI subscription-only
 credential and declared effort unchanged. Stop at the first interruption,
@@ -377,7 +378,7 @@ authorized by this guide.
 
 ## Cost-bearing execution
 
-Continue with [README first-run execution](../README.md#2-run-the-task-and-generate-a-report)
+Continue with [operator first-run execution](RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell)
 for the bounded single-cell campaign:
 
 ```powershell

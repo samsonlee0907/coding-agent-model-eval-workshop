@@ -3,7 +3,7 @@
 **Docker is only required for container-isolated execution/private grading.**
 Opening or generating saved reports, preparing/checking a campaign's status and
 trusted-local execution do not need it. Start with
-[README installation and configuration](../README.md#installation-and-configuration)
+[operator installation and configuration](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task)
 and choose the boundary before running code. Trusted local has no credential
 or arbitrary-process containment; removing isolation is not a Docker fix.
 
@@ -91,12 +91,12 @@ silently switches to host execution.
 
 ## 3. Configure isolation before preparing
 
-Follow [README configuration steps 1-3](../README.md#installation-and-configuration)
-in the same PowerShell 7+ shell, but use a fresh
-`$work = '.\.benchmark-runs\first-isolated'` in its copy block. Select key or
+Follow [operator configuration steps 1-3](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task)
+in the same PowerShell 7+ shell, choosing the **text** task as described and a
+fresh `$work = '.\.benchmark-runs\first-isolated'` in its copy block. Select key or
 [Entra auth](KEYLESS_AUTH.md) on the **host**; Docker does not choose auth.
-At [README configuration step 4](../README.md#4-select-the-execution-mode),
-add this policy to the copied task before saving or preparing:
+Before the [pre-dispatch gates](RUNNING_THE_TOOLKIT.md#4-run-the-pre-dispatch-gates-in-order),
+add this policy to the copied task before preparing:
 
 ```powershell
 # isolation:configure

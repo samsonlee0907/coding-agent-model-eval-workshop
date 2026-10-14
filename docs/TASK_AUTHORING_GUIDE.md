@@ -34,7 +34,7 @@ tool implements another harness.
 All quickstart examples are **cost-bearing trusted-local execution**, not
 sandboxed/Docker execution. They need an existing deployment, reachable
 `FOUNDRY_ENDPOINT`, selected **key or Entra** authentication and the matching
-`--provider` value. Follow [installation and configuration](../README.md#installation-and-configuration)
+`--provider` value. Follow [README setup](../README.md#1-install-the-reviewed-version)
 and [keyless instructions](KEYLESS_AUTH.md) first. Docker is optional except
 for [explicitly isolated configurations](ISOLATED_EXECUTION.md); quickstart
 has no isolation flag. Add `--source
@@ -44,9 +44,12 @@ acceptance criteria, baseline, and evaluator are stable.
 Every public quickstart/judge route requires `--bounds`; review the supplied
 `examples\request-bounds.example.json`, then adjust a local copy for your task.
 Use `--prepare-only` to generate the exploratory workspace/config offline,
-`doctor --verify-runtime` for actual tool execution against local fake Responses,
-and only then paid `bench --config`. Keep a bounded one-cell live gate before
-scaling, as shown in the [README progression](../README.md#first-run-one-task-one-deployment).
+`doctor --verify-runtime` for actual tool execution against local fake Responses
+when using explicit OpenAI Responses, and only then paid `bench --config`.
+Anthropic Messages is not covered by that probe or the initial-fit control;
+obtain separate acceptance of the selected deployment/runtime before a live
+smoke. Keep a bounded one-cell gate before scaling, as shown in the
+[operator progression](RUNNING_THE_TOOLKIT.md#operator-admission-and-stop-policy).
 
 For a campaign, add each task configuration to a `schemaVersion: 1` manifest;
 candidate deployments are supplied separately and override the config's
@@ -415,6 +418,6 @@ alternatives are not guessed, Claude cache writes retain 5-minute and 1-hour
 scenarios, and minimum published list price is an estimate rather than an
 invoice. The report withholds cost ranking when contracts drift.
 
-See the README’s [first-run](../README.md#first-run-one-task-one-deployment) flow and [report
-guidance](../README.md#reading-a-generated-report) for the canonical commands
+See the README’s [first-run](../README.md#3-prepare-and-run-each-provider) flow and [report
+guidance](../README.md#4-generate-open-and-share-the-report) for the canonical commands
 and interpretation.

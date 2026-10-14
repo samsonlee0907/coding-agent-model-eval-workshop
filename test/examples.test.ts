@@ -82,30 +82,27 @@ test("new command flag handling rejects unsupported, missing and duplicate optio
   assert.throws(() => assertCliArguments(["--zip", "--zip"], flags), /Duplicate/);
 });
 
-test("public README presents outcomes, setup, commands and limitations in order", () => {
+test("public README leads with bounded inline-task provider quickstarts and offline reporting", () => {
   const readme = readFileSync(resolve("README.md"), "utf8");
-  const sections = ["Expected outcomes", "Prerequisites", "Installation and configuration",
-    "Toolkit commands and usage", "Reading a generated report", "Known limitations and troubleshooting",
-    "Supporting documentation"];
+  const guide = readFileSync(resolve("docs", "RUNNING_THE_TOOLKIT.md"), "utf8");
   assert.match(readme, /^# Coding Agent Model Evaluation Toolkit\r?\n\r?\nA local TypeScript\/npm toolkit/);
+  assert.ok(readme.split(/\r?\n/).length <= 260, "Keep advanced reference detail out of README.");
   assert.deepEqual([...readme.matchAll(/^## (.+)$/gm)].map((heading) => heading[1].trim()),
-    ["Contents", ...sections]);
-  for (const section of sections) {
-    assert.ok(readme.includes(`](#${section.toLowerCase().replaceAll(" ", "-")})`));
+    ["Prerequisites", "1. Install the reviewed version", "2. Review bounds and choose one simple task",
+      "3. Prepare and run each provider", "4. Generate, open and share the report", "More detail"]);
+  for (const marker of ["setup", "openai", "anthropic", "report"]) {
+    assert.equal([...readme.matchAll(new RegExp(`# first-run:${marker}(?:[^\\r\\n]*)\\r?\\n`, "g"))].length, 1);
   }
-  const setup = readme.slice(readme.indexOf("## Installation and configuration"), readme.indexOf("## Toolkit commands and usage"));
-  assert.deepEqual([...setup.matchAll(/^### \d\. (.+)$/gm)].map((heading) => heading[1].trim()),
-    ["Install the toolkit", "Prepare a first-run configuration", "Configure Foundry authentication",
-      "Select the execution mode", "Save the configuration"]);
-  for (const marker of ["copy", "save", "offline"]) {
-    assert.equal([...readme.matchAll(new RegExp(`# onboarding:${marker}\\r?\\n`, "g"))].length, 1);
-  }
-  assert.ok(setup.includes("# onboarding:copy") && setup.includes("# onboarding:save"));
-  const usage = readme.slice(readme.indexOf("## Toolkit commands and usage"), readme.indexOf("## Reading a generated report"));
-  assert.ok(usage.includes("# onboarding:offline"));
+  const tasks = [...readme.matchAll(/^\$task = '(.+)'$/gm)].map((match) => match[1]);
+  assert.equal(tasks.length, 3);
+  assert.equal(new Set(tasks).size, 1, "Both provider examples must use the same inline task.");
+  assert.ok(!guide.includes("## Lessons from observed runs, not guarantees"));
+  assert.ok(!guide.includes("132,046") && !guide.includes("50,000 TPM"));
   for (const command of ["doctor", "campaign", "quickstart", "bench", "report:html", "portfolio", "prices:refresh", "evaluate"]) {
-    assert.ok(usage.includes(`| \`npm run ${command} -- `), `Missing command reference: ${command}`);
+    assert.ok(guide.includes(`| \`npm run ${command} -- `), `Missing relocated command reference: ${command}`);
   }
+  assert.match(readme, /required\s+acceptance stays UNGRADED/);
+  assert.match(readme, /Anthropic runtime\/initial-fit doctor controls are currently unsupported/);
 });
 
 test("onboarding auth/isolation fragments and immediate-run commands match implemented parsers", () => {
@@ -125,18 +122,20 @@ test("onboarding auth/isolation fragments and immediate-run commands match imple
   config.isolation.image = `owner/fixture@sha256:${"a".repeat(64)}`;
   assert.equal(isolationSchema.parse(config.isolation).mode, "container");
   const commands = [...(readme + keyless).matchAll(/^npm run (quickstart|evaluate) -- (.+)$/gm)];
-  assert.equal(commands.length, 3);
+  assert.equal(commands.length, 4);
   for (const command of commands) {
     const args = (command[2].match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((arg) => {
       if (arg === "$deployment") return "fixture-deployment";
+      if (arg === "$task") return "Common inline task";
       if (arg === "$tenantId") return "11111111-2222-4333-8444-555555555555";
       if (arg === "$subscriptionId") return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+      if (arg === '"$root\\openai-bounds.json"' || arg === '"$root\\anthropic-bounds.json"') return resolve("examples", "request-bounds.example.json");
       return arg.replace(/^['"]|['"]$/g, "");
     });
 
     const options = command[1] === "quickstart" ? parseQuickstartOptions(args) : parseEvaluationOptions(args);
-    assert.equal(options.auth?.mode, "entra");
-    assert.equal(options.wireApi, "responses");
+    assert.equal(options.auth?.mode, args.includes("--prepare-only") ? "key" : "entra");
+    assert.equal(options.wireApi, options.provider === "anthropic" ? undefined : "responses");
     assert.ok(options.requestBounds);
   }
 });
@@ -144,6 +143,7 @@ test("onboarding auth/isolation fragments and immediate-run commands match imple
 test("onboarding navigation resolves existing local documentation and headings", () => {
   const files = ["README.md", join("docs", "KEYLESS_AUTH.md"), join("docs", "ISOLATED_EXECUTION.md"),
     join("docs", "CAMPAIGNS_AND_PUBLICATION.md"), join("docs", "TASK_AUTHORING_GUIDE.md"),
+    join("docs", "RUNNING_THE_TOOLKIT.md"),
     join("scenarios", "in-memory-ordering-system", "task.md")];
   let checked = 0;
   for (const file of files) {

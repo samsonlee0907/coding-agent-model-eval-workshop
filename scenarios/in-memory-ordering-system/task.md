@@ -159,7 +159,7 @@ run configurations. There are two ways to run it:
 
 Both commands below start **paid inference** immediately and use trusted-local
 execution by default, with no credential/process isolation. Docker is not
-required for them. Follow the [README onboarding](../../README.md#installation-and-configuration)
+required for them. Follow the [operator onboarding](../../docs/RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task)
 for install, endpoint and key/Entra setup; use
 [explicit container configuration](../../docs/ISOLATED_EXECUTION.md) for
 isolated execution. A clean workspace or a task instruction is not a sandbox.
@@ -188,7 +188,7 @@ npm run quickstart -- --task-file '.\scenarios\in-memory-ordering-system\round1.
 Review the bounds file before either paid command. Add `--prepare-only` to
 create the workspace/config offline, verify it with `doctor --verify-runtime`
 (explicit Responses only), and then execute `bench --config` after the gate
-passes. Use the [README progression](../../README.md#first-run-one-task-one-deployment)
+passes. Use the [operator progression](../../docs/RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell)
 for a bounded one-cell live gate before scale.
 
 **B. Full multi-round contract run (rigorous / reproducible).** Copy

@@ -6,8 +6,9 @@ its task/evaluator JSON files use only Node standard-library checks and public
 requirements. Replace deployment placeholders and review bounds before
 inference. No command provisions Azure, grants roles or merges branches.
 
-New users: follow [installation and configuration](../README.md#installation-and-configuration),
-then the [single-cell first-run walkthrough](../README.md#first-run-one-task-one-deployment)
+New users: the [README quickstarts](../README.md#3-prepare-and-run-each-provider)
+cover exploratory tasks. For calibrated campaign acceptance, follow the
+[ordered campaign workflow](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task)
 instead of assembling configuration fragments here. Docker is **not** a core
 prerequisite: saved reporting, preparation and trusted-local runs work without
 it. For supported keyless configuration see [Entra onboarding](KEYLESS_AUTH.md);
@@ -42,7 +43,7 @@ inference. The session's separately reported backend version is retained in
 diagnostics; vendor backend and executable/package version labels can differ.
 
 Before immutable preparation, run the
-[README runtime coding gate](../README.md#1-check-prepare-and-preview-without-inference).
+[runtime coding gate](RUNNING_THE_TOOLKIT.md#4-run-the-pre-dispatch-gates-in-order).
 It drives real native read/create/edit or patch tools through the selected
 SDK/CLI against local fake Responses, including multi-round validation and
 large request bodies. For an isolated configuration, explicitly approve the
