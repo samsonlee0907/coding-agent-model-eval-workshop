@@ -282,6 +282,15 @@ not share an aggregate clock/budget: the operator must track the overall
 deadline, requests, reservations, known usage and cooldowns externally.
 See [bounded execution and dispatch certainty](CAMPAIGNS_AND_PUBLICATION.md#bounds-and-dispatch-certainty).
 
+For supported Anthropic deployments, the separate
+[opt-in native count/adaptive-thinking profile](CAMPAIGNS_AND_PUBLICATION.md#optional-anthropic-native-count-admission)
+can estimate each actual input before inference and recover bounded read-only
+count timeouts. Review its separate count-request, retry-wait, RPM and safety
+margin bounds before immutable preparation. Count 408 recovery is not model
+408 recovery: exhaustion stops admission, retains known earlier inference
+meters, leaves the unfinished cell ungraded and does not restart a candidate.
+The profile does not extend an expired execution window or alter calibration.
+
 ### Optional offline calibration for the supplied starters
 
 The examples ship required checks but do not ship reference calibration.

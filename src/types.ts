@@ -188,6 +188,8 @@ export interface FoundryProviderConfig {
   type: FoundryProviderType;
   wireApi?: "completions" | "responses";
   auth?: FoundryAuth;
+  nativeTokenCount?: import("./native-token-count.js").NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
   capacity?: {
     source: "administrator-declared" | "azure-management-observation";
     observedAt: string;
@@ -219,6 +221,8 @@ export interface FoundryProviderIdentity {
   requestAdaptation: "openai-null-refusal-sanitizer" | "strip-temperature";
   wireApi?: "completions" | "responses";
   auth?: FoundryAuth;
+  nativeTokenCount?: import("./native-token-count.js").NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
   capacity?: Omit<NonNullable<FoundryProviderConfig["capacity"]>, "endpoint"> & { endpointFingerprint: string };
 }
 
@@ -434,6 +438,8 @@ export interface BenchmarkRun {
     ambiguousRequests: number;
     rejectedRequests: number;
     providerTerminals?: Array<{ request: number; terminal: import("./provider-stream.js").ProviderTerminalEvidence }>;
+    nativeTokenCount?: import("./native-token-count.js").NativeTokenCountAccounting;
+    retryWaitMs?: number;
   };
   recordedPricing?: {
     snapshotHash: string;
@@ -610,6 +616,7 @@ export interface RunDiagnostics {
     bridge?: JsonRecord;
     httpStatus: number | null;
     signature:
+      | "native_token_count_failure"
       | "anthropic_temperature_deprecated"
       | "provider_resource_not_found"
       | "azure_key_auth_disabled"

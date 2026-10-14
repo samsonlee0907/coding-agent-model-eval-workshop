@@ -6,6 +6,7 @@ import { immutableContractHash, comparableBaselineSignature, compareRunContractS
 import { candidateKey } from "./pricing.js";
 import type { BenchmarkRun, RunContract } from "./types.js";
 import { providerTerminalSchema } from "./provider-stream.js";
+import { nativeTokenCountAccountingSchema, nativeTokenCountSummarySchema } from "./native-token-count.js";
 
 export const sha256Schema = z.string().regex(/^[a-f0-9]{64}$/);
 const id = z.string().min(1).max(500);
@@ -63,8 +64,11 @@ const attemptSchema = z.object({
   accounting: z.object({
     reservedTokens: optionalNumber, ambiguousRequests: optionalNumber, rejectedRequests: optionalNumber,
     providerTerminals: z.array(z.object({ request: z.number().int().positive(), terminal: providerTerminalSchema }).strict()).optional(),
+    nativeTokenCount: nativeTokenCountSummarySchema.optional(),
+    retryWaitMs: optionalNumber.optional(),
   }).strict(),
-  reservation: z.object({ tokens: z.number().finite().nonnegative(), requests: z.number().finite().nonnegative(), usd: z.number().finite().nonnegative() }).strict().optional(),
+  reservation: z.object({ tokens: z.number().finite().nonnegative(), requests: z.number().finite().nonnegative(), usd: z.number().finite().nonnegative(),
+    nativeCountRequests: count.optional() }).strict().optional(),
   pricing: z.object({ snapshotHash: sha256Schema, refreshedAt: date, currency: z.literal("USD"),
     scenarioId: id, accountingAssumption: z.string().nullable() }).strict().optional(),
   outcome: id, wireApi: id, authMode: id, runtimeHash: sha256Schema,
@@ -200,6 +204,8 @@ export function assertBenchmarkRun(value: unknown): asserts value is BenchmarkRu
     executionStatus: z.enum(["completed", "interrupted"]).optional(),
     requestAccounting: z.object({ physicalRequests: count, reservedTokens: count, ambiguousRequests: count, rejectedRequests: count,
       providerTerminals: z.array(z.object({ request: z.number().int().positive(), terminal: providerTerminalSchema }).strict()).optional(),
+      nativeTokenCount: nativeTokenCountAccountingSchema.optional(),
+      retryWaitMs: z.number().finite().nonnegative().optional(),
     }).strict().optional(),
     workspaceHash: sha256Schema.optional(),
     conformance: conformanceEvidenceSchema.optional(),
@@ -268,6 +274,11 @@ export function attemptFromRun(
       reservedTokens: run.requestAccounting?.reservedTokens ?? null, ambiguousRequests: run.requestAccounting?.ambiguousRequests ?? null,
       rejectedRequests: run.requestAccounting?.rejectedRequests ?? null,
       ...(run.requestAccounting?.providerTerminals ? { providerTerminals: run.requestAccounting.providerTerminals } : {}),
+      ...(run.requestAccounting?.nativeTokenCount ? { nativeTokenCount: (() => {
+        const { attempts: _attempts, ...summary } = run.requestAccounting.nativeTokenCount;
+        return summary;
+      })() } : {}),
+      ...(run.requestAccounting?.retryWaitMs !== undefined ? { retryWaitMs: run.requestAccounting.retryWaitMs } : {}),
     },
     ...(run.recordedPricing ? { pricing: {
       snapshotHash: run.recordedPricing.snapshotHash, refreshedAt: run.recordedPricing.refreshedAt, currency: run.recordedPricing.currency,

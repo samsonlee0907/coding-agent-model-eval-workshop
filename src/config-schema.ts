@@ -45,4 +45,8 @@ export const benchmarkConfigSchema = z.object({
   rounds: z.array(z.object({ prompt: z.string(), mode: z.enum(["enqueue", "immediate"]).optional() }).strict()),
   workspacePath: z.string().min(1), artifactsDirectory: z.string().optional(),
   isolation: isolationSchema.optional(), requestBounds: requestBoundsSchema.optional(),
-}).strict();
+}).strict().superRefine((config, ctx) => {
+  if (config.contract.foundryProvider.nativeTokenCount && !config.requestBounds) ctx.addIssue({
+    code: "custom", path: ["requestBounds"], message: "Native token-count admission requires finite requestBounds.",
+  });
+});

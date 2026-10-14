@@ -64,6 +64,10 @@ export async function doctor(configPath: string, acquireAuth = false, verify = f
       checks.push({ stage: "credential-acquisition", status: "fail", detail: error instanceof Error ? error.message : String(error) });
     }
   } else checks.push({ stage: "credential-acquisition", status: "not-verified", detail: "Not attempted. Use --acquire-auth for an explicit token-only network check." });
+  if (config.contract.foundryProvider.nativeTokenCount) checks.push({
+    stage: "native-token-count", status: "not-verified",
+    detail: "Opt-in native count policy parsed only; no count request sent. Each transformed Messages payload must be counted successfully before inference. Read-only count recovery, fees and shared RPM/retry-wait bounds are separate from inference accounting.",
+  });
   checks.push({ stage: "data-plane-inference", status: "not-verified", detail: "No model call made. Token acquisition and management login do not certify inference RBAC, deployment, private network or quota." });
   let runtimeVerification: Awaited<ReturnType<typeof verifyRuntime>> | undefined;
   let requestFitVerification: Awaited<ReturnType<typeof verifyRequestFit>> | undefined;

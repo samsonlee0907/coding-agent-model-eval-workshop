@@ -174,11 +174,118 @@ is unsupported and fails before dispatch. Input files of other formats may
 still be processed by task-owned code inside the workspace.
 
 Only explicitly rejected transient physical 429 requests may recover.
+Unknown, null, object-valued or contradictory error categories do not certify
+a transient rejection; neither HTTP 408 nor non-200 successful status codes
+certify model completion or permit model-request replay.
 `retry-after-ms`, Retry-After seconds/dates and bounded jittered backoff are
 honored. Auth, permanent quota, malformed/nonterminal 200, partial stream and
 ambiguous disconnect close the lane. A whole conversation work request is
 never retried: it may already have invoked non-idempotent tools. Duplicate
 possibly processed payloads cannot trigger hidden SDK replay.
+
+### Optional Anthropic native count admission
+
+Existing configurations keep byte-plus-output admission. To opt into
+model-native **input estimation before inference**, put the complete reviewed
+[`native-token-count.example.json`](../examples/native-token-count.example.json)
+object in `contract.foundryProvider.nativeTokenCount` (or a campaign candidate's
+`foundryProvider.nativeTokenCount`). Finite `requestBounds` are required.
+The public quickstart accepts that policy file:
+
+```powershell
+# Preparation only: no tokens, native counts or inference are acquired here.
+$subscriptionId = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee' # Replace with your intended subscription.
+$env:FOUNDRY_ENDPOINT = 'https://YOUR_RESOURCE.services.ai.azure.com'
+npm run quickstart -- --task 'Create a dependency-free Node.js sum module and tests; make npm test and npm run build pass.' --provider anthropic --model 'YOUR_EXISTING_DEPLOYMENT' --auth entra --credential azure-cli --subscription-id $subscriptionId --reasoning-effort high --bounds '.\examples\request-bounds.example.json' --native-token-count '.\examples\native-token-count.example.json' --anthropic-thinking adaptive --prepare-only --output '.\.benchmark-runs\native-count-v1'
+```
+
+Do not run the saved config until endpoint/inference RBAC, deployment/version,
+adaptive-thinking support, runtime tools, capacity and all finite bounds have
+been separately reviewed. Plain `doctor` parses the policy but sends **no**
+native request; `--acquire-auth` remains token-only. Responses-only runtime/fit
+doctor controls do not certify Anthropic. Running `bench` or a non-prepare-only
+quickstart sends count requests and paid inference; preparation is not live
+provider acceptance.
+
+The host-owned bridge uses the same resource, exact deployment, authentication
+and transformed Messages inputs for `/anthropic/v1/messages/count_tokens`.
+It keeps system/messages/tools/cache/thinking/output configuration, excludes
+generation-only fields and refuses unsupported source fields or invalid count
+responses. Each new payload is counted again. Identical count bytes may retry
+**only before that payload's model dispatch**; a successful estimate can be
+reused inside an already-certified physical inference-429 recovery loop, never
+across other payloads. Count admission does not expose credentials to the worker.
+
+| Policy field | Meaning |
+|---|---|
+| `schemaVersion` | `1`; strict versioned policy, recorded in immutable provider provenance |
+| `maxAttempts` | Includes the first count POST; example `4` means at most three additional tries per payload |
+| `maxRequests` | Total count POST ceiling for the provider lane/run, including retries and later payloads |
+| `requestTimeoutMs` | Per-count timeout, shortened to the remaining outer deadline |
+| `baseDelayMs`, `maxDelayMs`, `jitter` | Finite exponential local delay with bounded downward jitter; provider Retry-After minima are not clipped |
+| `maxRetryWaitMs` | Finite aggregate reserved retry-wait ceiling shared by native count and physical inference recovery |
+| `inputSafetyMarginPercent`, `inputSafetyMarginTokens` | Reviewed headroom added to the native input estimate, without deducting cached input |
+
+Inference reserves
+`ceil(inputEstimate * (1 + percent / 100)) + marginTokens + maxOutputTokens`.
+The output ceiling still includes reasoning. This replaces the byte-based
+input reservation **only when opted in**; it is not a guaranteed upper bound,
+billed usage, known Azure admission estimate or license to raise local TPM.
+Count POSTs also consume the same local deployment RPM lane (with zero
+inference-token reservation). Keep headroom for count traffic and external
+clients; native counting cannot certify live/shared capacity.
+
+Retry classification is stage-specific: an Azure count HTTP 408 with
+`error.code: "Timeout"` can recover without an Anthropic `error.type`;
+known transient count 429/500/502/503/504/529 categories and a narrow
+connection/attempt-timeout allowlist can also recover. Unknown/contradictory
+categories, authentication, permanent quota, malformed requests/responses and
+non-200 2xx responses stop. Retry-After seconds/dates/milliseconds, count
+attempt/global ceilings, shared wait, cancellation, RPM and the remaining
+request/campaign deadline all constrain dispatch. No 401 refresh/replay,
+count bypass, invented estimate, whole-session/candidate/content-FAIL retry
+or ambiguous inference replay is enabled. A hidden SDK reissue cannot reset
+the allowance: the bridge closes the lane on failure and claims each payload
+before counting.
+
+Campaigns opting in must separately declare
+`bounds.maxNativeTokenCountRequests`, covering the sum of each admitted
+candidate's `maxRequests` reservation across attempts/resumes. These count
+reservations are retained, not refunded. Count exhaustion stops new campaign
+admission and remains stopped on resume; already active lanes drain. Use a
+separately authorized **fresh** campaign for another attempt, not a changed
+old profile. Original task acceptance/calibration and saved grades are unchanged.
+
+`run.json`/`execution.json` retain separate `requestAccounting.nativeTokenCount`
+attempts, retry waits, categorical errors, safe request IDs (including
+`apim-request-id`) and body hashes, without raw error messages or credentials.
+Count failure is an infrastructure interruption with
+`native_token_count_failure`, not content FAIL or a missing inference meter.
+Earlier known SDK inference meters remain known; the failed payload never
+adds a physical inference. Ungraded interrupted cells and unstarted MISSING
+cells remain explicit. Portable evidence exports count summaries, not request
+IDs/body hashes. Count fees remain **unknown**; reports do not present a
+known inference subtotal as a priced whole run or invoice.
+
+`anthropicThinking: "adaptive"` is an independent explicit option, exposed by
+`--anthropic-thinking adaptive`. It adapts the selected CLI's manual thinking
+budget to `thinking.type: "adaptive"` and sets `output_config.effort` from the
+declared effort, preserving supported display configuration and other inputs.
+There is no deployment-name heuristic or automatic effort downgrade. Select
+it only for a deployment/version supporting this wire shape. The runtime/CLI
+hash and current `mode: empty`/`custom:controlled_workspace` isolation layout
+must bind a new paired observation; do not retrofit an old container-hosted
+CLI or fold supplementary results into an older runtime's ranking.
+
+Owner references:
+[token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting),
+[count request schema](https://platform.claude.com/docs/en/api/messages/count_tokens),
+[thinking](https://platform.claude.com/docs/en/build-with-claude/thinking),
+[effort and cost](https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost),
+and [Foundry endpoint/auth/hosting boundaries](https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry).
+
+### Terminal evidence and draining
+
 SSE uses event boundaries and streaming UTF-8 decoding, not line/chunk
 assumptions. Route-specific terminal evidence is certified before ending the
 downstream response; partial streams are destroyed rather than extended with

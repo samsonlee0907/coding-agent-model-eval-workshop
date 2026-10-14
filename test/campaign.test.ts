@@ -15,6 +15,8 @@ import { readRuntimeIdentity } from "../src/runtime-identity.js";
 import { runValidation } from "../src/validation.js";
 import type { BenchmarkConfig, BenchmarkRun } from "../src/types.js";
 import type { BenchmarkRunOptions } from "../src/runner.js";
+import { immutableContractHash } from "../src/contract.js";
+import { campaignSpecSchema } from "../src/campaign.js";
 
 function prepare(root: string, candidates = 2, overrides: Record<string, unknown> = {}) {
   mkdirSync(join(root, "source")); writeFileSync(join(root, "source", "input.txt"), "immutable input");
@@ -41,6 +43,58 @@ function fakeRunner(onRun: () => void = () => undefined, verdict: "pass" | "fail
     return run;
   };
 }
+
+test("native count reservations are separately bounded and exhaustion retains ungraded evidence and missing cells without replay", async () => {
+  const policy = JSON.parse(readFileSync(join("examples", "native-token-count.example.json"), "utf8"));
+  for (const ceiling of [policy.maxRequests - 1, policy.maxRequests * 2]) {
+    const root = mkdtempSync(join(tmpdir(), "bt-native-campaign-"));
+    try {
+      const candidates = ["first", "second"].map(id => ({ id, candidate: { provider: "anthropic", model: id },
+        foundryProvider: { type: "anthropic", nativeTokenCount: policy, anthropicThinking: "adaptive" } }));
+      const directory = prepare(root, 2, { candidates, bounds: {
+        concurrency: 1, minFreeMemoryMb: 0, maxAttemptsPerCell: 1, deadlineMs: 120000,
+        maxRequests: 100, maxReservedTokens: 100000, maxReservationUsd: 10, reservationUsdPerMillionTokens: 10,
+        maxNativeTokenCountRequests: ceiling,
+      } });
+      const spec = JSON.parse(readFileSync(join(root, "spec.json"), "utf8"));
+      delete spec.bounds.maxNativeTokenCountRequests;
+      assert.throws(() => campaignSpecSchema.parse(spec), /count-request reservation ceiling/);
+      let executions = 0;
+      const run = async (config: BenchmarkConfig, options: BenchmarkRunOptions) => {
+        executions++;
+        const saved = fixtureRun(options.runId!, config, "ungraded");
+        saved.contract.foundryProvider = { type: "anthropic", requestAdaptation: "strip-temperature",
+          endpointFingerprint: "a".repeat(64), auth: { mode: "key" }, nativeTokenCount: policy, anthropicThinking: "adaptive" };
+        saved.contractHash = immutableContractHash(saved.contract);
+        saved.executionStatus = "interrupted"; saved.runnerError = "Native token-count attempt_limit; no inference for failed payload.";
+        saved.diagnostics.providerFailure = { signature: "native_token_count_failure", httpStatus: 408, message: saved.runnerError };
+        saved.requestAccounting = { physicalRequests: 3, reservedTokens: 600, rejectedRequests: 0, ambiguousRequests: 0,
+          nativeTokenCount: { schemaVersion: 1, requests: 4, retries: 3, completed: 0, retryWaitMs: 30, fees: "unknown",
+            attempts: Array.from({ length: 4 }, (_, i) => ({ request: i + 1, attempt: i + 1,
+              inferenceBodyHash: "a".repeat(64), countBodyHash: "b".repeat(64), status: "retryable-error" as const,
+              httpStatus: 408, code: "Timeout", requestIds: { "apim-request-id": "safe-fixture" },
+              responseBodyHash: "c".repeat(64), responseBodyTruncated: false, inputTokens: null, retryAfterMs: 10 })) } };
+        atomicJson(join(saved.artifacts.directory, "run.json"), saved);
+        return saved;
+      };
+      await assert.rejects(() => runCampaign(directory, { allowPaid: true, runtime: fixtureRuntime, run }),
+        ceiling < policy.maxRequests ? /count request reservation bound/ : /Native token-count admission failed/);
+      assert.equal(executions, ceiling < policy.maxRequests ? 0 : 1);
+      const evidence = campaignEvidence(directory);
+      if (executions) {
+        const before = readFileSync(join(directory, "runs", evidence.attempts[0].id, "run.json"));
+        assert.equal(evidence.attempts[0].acceptance, "ungraded"); assert.equal(evidence.attempts[0].execution, "interrupted");
+        assert.equal(evidence.attempts[0].metrics.inputTokens, 100);
+        assert.equal(evidence.attempts[0].accounting.nativeTokenCount?.requests, 4);
+        assert.doesNotMatch(JSON.stringify(evidence), /safe-fixture|countBodyHash/);
+        assert.deepEqual(campaignStatus(directory).cells.map(cell => cell.status), ["interrupted", "missing"]);
+        await assert.rejects(() => runCampaign(directory, { allowPaid: true, runtime: fixtureRuntime, run, recoverRejected: true }), /Native token-count admission failed/);
+        assert.equal(executions, 1);
+        assert.deepEqual(readFileSync(join(directory, "runs", evidence.attempts[0].id, "run.json")), before);
+      } else assert.deepEqual(campaignStatus(directory).cells.map(cell => cell.status), ["missing", "missing"]);
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
 
 test("compiled public campaign resume grades retained outputs under long state roots without provider dispatch", async (t) => {
   const publicTask = JSON.parse(readFileSync(join("examples", "custom-campaign", "json-task.json"), "utf8"));

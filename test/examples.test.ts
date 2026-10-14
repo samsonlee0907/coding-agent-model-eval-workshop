@@ -3,6 +3,7 @@ import test from "node:test";
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
+import { execFileSync } from "node:child_process";
 import { prepareCampaign, runCampaign, campaignStatus, reportCampaign } from "../src/campaign.js";
 import { atomicJson } from "../src/durable.js";
 import { fixtureRun, fixtureRuntime } from "./fixtures/revamp.js";
@@ -80,6 +81,40 @@ test("new command flag handling rejects unsupported, missing and duplicate optio
   assert.throws(() => assertCliArguments(["--typo"], flags), /Unsupported/);
   assert.throws(() => assertCliArguments(["--directory", "--zip"], flags), /requires a value/);
   assert.throws(() => assertCliArguments(["--zip", "--zip"], flags), /Duplicate/);
+});
+
+test("documented native-count keyless quickstart prepares and doctor parses without credentials or network", () => {
+  const root = mkdtempSync(join(tmpdir(), "bt-native-example-"));
+  try {
+    const doc = readFileSync(resolve("docs", "CAMPAIGNS_AND_PUBLICATION.md"), "utf8");
+    const line = /^npm run quickstart -- (.+--native-token-count.+)$/m.exec(doc);
+    assert.ok(line);
+    const args = (line[1].match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map(arg => arg === "$subscriptionId"
+      ? "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee" : arg.replace(/^['"]|['"]$/g, ""));
+    args[args.indexOf("--output") + 1] = join(root, "prepared");
+    const env = { ...process.env, FOUNDRY_API_KEY: "", FOUNDRY_ENDPOINT: "https://fixture.services.ai.azure.com",
+      AZURE_CONFIG_DIR: join(root, "no-real-identity") };
+    const help = execFileSync(process.execPath, [resolve("dist", "quickstart-cli.js"), "--help"], { encoding: "utf8", env, timeout: 15000 });
+    assert.match(help, /--native-token-count/); assert.match(help, /--anthropic-thinking/);
+    execFileSync(process.execPath, [resolve("dist", "quickstart-cli.js"), ...args], { encoding: "utf8", env, timeout: 30000 });
+    const path = join(root, "prepared", "benchmark.local.json");
+    const config = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(config.contract.foundryProvider.type, "anthropic");
+    assert.equal(config.contract.foundryProvider.auth.credential, "azure-cli");
+    assert.equal(config.contract.foundryProvider.auth.subscriptionId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+    assert.equal(config.contract.foundryProvider.auth.tenantId, undefined);
+    assert.equal(config.contract.foundryProvider.wireApi, undefined);
+    assert.equal(config.contract.foundryProvider.anthropicThinking, "adaptive");
+    assert.equal(config.contract.foundryProvider.nativeTokenCount.maxAttempts, 4);
+    assert.equal(config.contract.execution.reasoningEffort, "high");
+    assert.equal(readFileSync(join(root, "prepared", "workspace", "BENCHMARK_TASK.md"), "utf8").trim(), config.contract.task.prompt);
+    const checked = JSON.parse(execFileSync(process.execPath, [resolve("dist", "doctor-cli.js"), "--config", path],
+      { encoding: "utf8", env, timeout: 30000 }));
+    assert.equal(checked.checks.find((check: { stage: string }) => check.stage === "native-token-count").status, "not-verified");
+    assert.equal(checked.checks.find((check: { stage: string }) => check.stage === "credential-acquisition").status, "not-verified");
+    assert.equal(checked.checks.find((check: { stage: string }) => check.stage === "data-plane-inference").status, "not-verified");
+    assert.equal(existsSync(join(root, "prepared", "artifacts")), false);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("public README leads with bounded inline-task provider quickstarts and offline reporting", () => {

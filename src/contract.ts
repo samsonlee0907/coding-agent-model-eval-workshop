@@ -37,6 +37,8 @@ export function compareRunContracts(left: RunContract, right: RunContract): Cont
     ...diff("foundryProvider.endpointFingerprint", left.foundryProvider?.endpointFingerprint ?? null, right.foundryProvider?.endpointFingerprint ?? null),
     ...diff("foundryProvider.auth", left.foundryProvider?.auth ?? { mode: "key" }, right.foundryProvider?.auth ?? { mode: "key" }),
     ...diff("foundryProvider.capacity", capacityComparison(left), capacityComparison(right)),
+    ...diff("foundryProvider.nativeTokenCount", left.foundryProvider?.nativeTokenCount ?? null, right.foundryProvider?.nativeTokenCount ?? null),
+    ...diff("foundryProvider.anthropicThinking", left.foundryProvider?.anthropicThinking ?? null, right.foundryProvider?.anthropicThinking ?? null),
   ];
   return { strictlyComparable: drift.length === 0, drift };
 }
@@ -91,6 +93,8 @@ export function comparableBaselineSignature(contract: RunContract): string | nul
       requestAdaptation: contract.foundryProvider?.requestAdaptation ?? "none",
       wireApi: contract.foundryProvider?.wireApi ?? "completions",
       ...(contract.foundryProvider?.capacity ? { capacity: capacityComparison(contract) } : {}),
+      ...(contract.foundryProvider?.nativeTokenCount ? { nativeTokenCount: contract.foundryProvider.nativeTokenCount } : {}),
+      ...(contract.foundryProvider?.anthropicThinking ? { anthropicThinking: contract.foundryProvider.anthropicThinking } : {}),
     },
   });
 }

@@ -25,5 +25,6 @@ export * from "./evidence.js";
 export * from "./publication.js";
 export * from "./report-ui.js";
 export * from "./request-policy.js";
+export * from "./native-token-count.js";
 export * from "./task-evaluator.js";
 export * from "./runtime-verification.js";

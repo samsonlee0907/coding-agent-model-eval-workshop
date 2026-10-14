@@ -117,6 +117,7 @@ export function toCsv(rows: readonly Record<string, unknown>[], columns: readonl
 }
 
 export function selectedResultRows(evidence: ReportEvidence) {
+  const native = evidence.attempts.some(attempt => attempt.accounting.nativeTokenCount);
   return selectReportCells(evidence).map((cell) => ({
     task: cell.task, candidate: cell.candidate, repeat: cell.repeat, status: cell.status,
     runId: cell.selected?.id ?? null, selectionReason: cell.reason, attempts: cell.attempts.length,
@@ -126,6 +127,17 @@ export function selectedResultRows(evidence: ReportEvidence) {
     wallMs: cell.selected?.metrics.wallMs ?? null, inputTokens: cell.selected?.metrics.inputTokens ?? null,
     outputTokens: cell.selected?.metrics.outputTokens ?? null, recordedUsd: cell.selected?.metrics.recordedUsd ?? null,
     recordedCostMultiplier: cell.selected?.metrics.recordedCost ?? null,
+    ...(native ? {
+      physicalInferenceRequests: cell.selected?.metrics.physicalRequests ?? null,
+      nativeCountRequests: cell.selected?.accounting.nativeTokenCount?.requests ?? null,
+      nativeCountRetries: cell.selected?.accounting.nativeTokenCount?.retries ?? null,
+      nativeCountRetryWaitMs: cell.selected?.accounting.nativeTokenCount?.retryWaitMs ?? null,
+      nativeCountFees: cell.selected?.accounting.nativeTokenCount?.fees ?? null,
+      allAttemptNativeCountRequests: cell.attempts.length && cell.attempts.every(a => a.accounting.nativeTokenCount)
+        ? cell.attempts.reduce((sum, a) => sum + a.accounting.nativeTokenCount!.requests, 0) : null,
+      allAttemptNativeCountRetries: cell.attempts.length && cell.attempts.every(a => a.accounting.nativeTokenCount)
+        ? cell.attempts.reduce((sum, a) => sum + a.accounting.nativeTokenCount!.retries, 0) : null,
+    } : {}),
     allAttemptRecordedCostMultiplier: cell.attempts.length && cell.attempts.every((a) => a.metrics.recordedCost !== null)
       ? cell.attempts.reduce((sum, a) => sum + a.metrics.recordedCost!, 0) : null,
     contractHash: cell.selected?.contractHash ?? null, promptHash: cell.selected?.promptHash ?? null,

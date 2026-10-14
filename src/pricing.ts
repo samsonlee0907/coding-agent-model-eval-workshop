@@ -77,6 +77,9 @@ export function parsePricingSnapshot(value: string): PricingSnapshot {
 }
 
 export function estimateRunPriceUsd(run: BenchmarkRun, snapshot: PricingSnapshot | null, scenarioId?: string, anthropicAccounting?: "sdk-inclusive" | "native-uncached"): RunPriceEstimate {
+  if (run.requestAccounting?.nativeTokenCount?.requests) return unavailable(
+    "Native token-count request fees are unknown; an inference-token subtotal is not a complete whole-run price.",
+  );
   if (!snapshot) return unavailable("No saved pricing snapshot. Run prices:refresh first.");
   const candidate = snapshot.candidates.find((entry) => entry.candidate === candidateKey(run));
   const scenario = candidate?.scenarios.find((entry) => entry.id === scenarioId);

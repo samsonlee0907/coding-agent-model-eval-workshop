@@ -205,6 +205,12 @@ plus declared output ceiling** reservation. This includes SDK system/context
 and tool schemas, not just the task prompt. It is a protective estimate,
 **not** billable tokens, Azure's admission estimator or a model tokenizer.
 Reasoning still shares the declared output ceiling.
+Anthropic users may explicitly select
+[native count admission with reviewed safety margins](CAMPAIGNS_AND_PUBLICATION.md#optional-anthropic-native-count-admission)
+before preparing a new profile. It adds same-resource authenticated count
+requests and separate count/fee accounting, not another credential fallback.
+Count 408 recovery never authorizes inference 408 replay, and plain doctor
+does not verify the native count endpoint.
 
 After saving configuration, before paid dispatch:
 

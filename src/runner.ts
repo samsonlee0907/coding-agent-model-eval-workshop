@@ -47,7 +47,7 @@ import { inspectArtifact } from "./artifact-inspection.js";
 import { runConformanceProbe } from "./conformance.js";
 import { providerAuthentication, providerSchema } from "./auth.js";
 import { atomicJson } from "./durable.js";
-import { DispatchError, RequestGuard, DeploymentAdmission, retryDelay, canRetryRequest } from "./request-policy.js";
+import { DispatchError, RequestGuard, DeploymentAdmission, retryDelay, realClock } from "./request-policy.js";
 import { ControlledWorker, collectSnapshot, snapshotHash } from "./controlled-worker.js";
 import type { EventCollector as Collector } from "./event-collector.js";
 import { readRuntimeIdentity } from "./runtime-identity.js";
@@ -57,6 +57,8 @@ import type { ProviderTerminalEvidence } from "./provider-stream.js";
 import { once } from "node:events";
 import { assertCapacityPolicy, capacityIdentity } from "./deployment-capacity.js";
 import { assertExactContentPolicy, exactContentTool, exactContentToolName } from "./exact-content.js";
+import { applyAnthropicThinking, countNativeTokens, NativeTokenCountError, nativeTokenCountPolicySchema,
+  providerErrorCode, transientRateLimit, type NativeTokenCountPolicy } from "./native-token-count.js";
 
 export function benchmarkSessionOptions(
   config: BenchmarkConfig, provider: ProviderConfig, workingDirectory: string, filters: string[],
@@ -120,6 +122,7 @@ async function rejectedReason(response: IncomingMessage): Promise<string> {
   }
   if (/AuthenticationTypeDisabled|key.?based authentication is disabled/i.test(text)) return "azure-key-auth-disabled";
   if (/insufficient_quota|billing_hard_limit|quota[_ -]?(?:exceeded|exhausted)/i.test(text)) return "permanent-quota";
+  if (text.length <= 65536 && transientRateLimit(providerErrorCode(Buffer.from(text)))) return "transient-rate-limit";
   return "provider-policy-or-request";
 }
 export interface BenchmarkWorkRequest {
@@ -149,6 +152,7 @@ export function benchmarkWorkRequests(
 }
 
 export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRunOptions = {}): Promise<BenchmarkRun> {
+  if (config.contract.foundryProvider.nativeTokenCount && !config.requestBounds) throw new TypeError("Native token-count admission requires finite requestBounds.");
   assertCapacityPolicy(config, process.env.FOUNDRY_ENDPOINT);
   const contract = materializeContract(config);
   const guardStarted = Date.now();
@@ -222,6 +226,10 @@ export async function runBenchmark(config: BenchmarkConfig, options: BenchmarkRu
       { guard, retries: contract.execution.retries, admission: options.admission,
         deployment: `${contract.foundryProvider?.endpointFingerprint}/${contract.candidate.model}`,
         wireApi: provider.wireApi, capture: (type, data) => collector.captureRunnerEvent(type, data),
+        nativeTokenCount: config.contract.foundryProvider.nativeTokenCount,
+        anthropicThinking: config.contract.foundryProvider.anthropicThinking,
+        reasoningEffort: contract.execution.reasoningEffort,
+        model: contract.candidate.model,
         validateTools: (payload) => assertAdvertisedTools(payload, sdkToolAllowlist) });
     const sessionProvider = compatibilityProxy ? { ...provider, baseUrl: compatibilityProxy.baseUrl } : provider;
     session = await client.createSession(benchmarkSessionOptions(config, sessionProvider,
@@ -324,6 +332,8 @@ export async function resumeBenchmarkFinalization(config: BenchmarkConfig, runId
       || evidenceHash(saved.contract.candidate) !== evidenceHash(config.contract.candidate)
       || evidenceHash(saved.contract.executionProfile) !== evidenceHash(executionProfile(config))
       || saved.contract.foundryProvider?.type !== config.contract.foundryProvider.type
+      || evidenceHash(saved.contract.foundryProvider.nativeTokenCount ?? null) !== evidenceHash(config.contract.foundryProvider.nativeTokenCount ?? null)
+      || saved.contract.foundryProvider.anthropicThinking !== config.contract.foundryProvider.anthropicThinking
       || (saved.contract.foundryProvider.wireApi ?? "completions") !== (config.contract.foundryProvider.wireApi ?? "completions")
       || Object.entries(config.contract.runtime ?? {}).some(([key, value]) => value !== saved.contract.runtime[key as keyof typeof saved.contract.runtime])) {
     throw new TypeError("Invalid or mismatched saved execution checkpoint.");
@@ -340,7 +350,7 @@ async function finalizeExecution(
   config: BenchmarkConfig, saved: ExecutionCheckpoint, collector: Collector, phase: (value: string) => void, worker: ControlledWorker | null,
   deadlineAt = Date.now() + config.contract.execution.sessionTimeoutMs,
 ): Promise<BenchmarkRun> {
-  const { runId, contract, startedAt, sessionId, runnerError } = saved;
+  const { runId, contract, startedAt, sessionId, runnerError, executionComplete } = saved;
   const artifactsDirectory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
   let workspace = config.workspacePath, workspaceHash: string | undefined;
   if (config.isolation) {
@@ -376,7 +386,10 @@ async function finalizeExecution(
   });
 
   let gradingWorker: ControlledWorker | null = null;
-  if (config.isolation) gradingWorker = await ControlledWorker.create(config.isolation,
+  const nativeAdmissionFailed = collector.events().some(event =>
+    event.eventType === "runner.provider_bridge_error" && event.data.phase === "native-token-count");
+  const finalizeChecks = executionComplete || !nativeAdmissionFailed;
+  if (finalizeChecks && config.isolation) gradingWorker = await ControlledWorker.create(config.isolation,
     collectSnapshot(workspace, config.isolation.maxFiles, config.isolation.maxBytes), join(artifactsDirectory, `grader-worker-${randomUUID()}.json`), undefined, undefined, deadlineAt);
   const validate: typeof runValidation = gradingWorker
     ? (command, _cwd, timeout) => gradingWorker!.validate(command, timeout)
@@ -388,6 +401,7 @@ async function finalizeExecution(
   let validation: BenchmarkRun["validation"] = null;
   let conformance = null;
   try {
+  if (finalizeChecks) {
   validation = await execute(
     resolveValidationCommand(contract.task.validationCommand, workspace),
     workspace,
@@ -395,6 +409,7 @@ async function finalizeExecution(
   );
   phase("validation-complete");
   collector.captureRunnerEvent("runner.validation_finished", asRecord(validation));
+  }
 
   // Captured after validation so the inspected artifact is the exact tree the
   // deterministic command was run against.
@@ -413,7 +428,7 @@ async function finalizeExecution(
   // Runs last so the probe sees the same tree validation and inspection saw.
   // A probe is task-owned and the agent never sees it, so passing it is
   // evidence about the delivered code rather than about the delivered tests.
-  conformance = contract.task.conformanceProbe
+  conformance = finalizeChecks && contract.task.conformanceProbe
     ? await runConformanceProbe(
         contract.task.conformanceProbe,
         workspace,
@@ -652,7 +667,8 @@ export function createRunDiagnostics(
     .filter((event) => event.eventType === "session.info" && event.data.infoType === "configuration")
     .flatMap((event) => typeof event.data.message === "string" ? [event.data.message] : []);
   const bridgeErrors = events.filter((event) => event.eventType === "runner.provider_bridge_error");
-  const bridge = bridgeErrors.find((event) => event.data.certainty === "possibly-processed") ?? bridgeErrors.at(-1);
+  const bridge = bridgeErrors.find((event) => event.data.certainty === "possibly-processed")
+    ?? bridgeErrors.find((event) => event.data.phase === "native-token-count") ?? bridgeErrors.at(-1);
   const terminal = providerTerminalSchema.safeParse(bridge?.data.providerTerminal);
   const rejected = events.filter((event) => event.eventType === "runner.provider_rejected" && typeof event.data.status === "number").at(-1);
   const httpStatus = typeof bridge?.data.status === "number" ? String(bridge.data.status)
@@ -680,7 +696,8 @@ export function createRunDiagnostics(
     providerFailure: {
       ...(bridge ? { bridge: bridge.data } : {}),
       httpStatus: httpStatus ? Number(httpStatus) : null,
-      signature: terminal.success && terminal.data.errorCode === "rate_limit_exceeded"
+      signature: bridge?.data.phase === "native-token-count" ? "native_token_count_failure"
+      : terminal.success && terminal.data.errorCode === "rate_limit_exceeded"
         ? "provider_rate_limit"
       : terminal.success && terminal.data.terminalResponse && terminal.data.incompleteReason === "max_output_tokens"
         ? "provider_output_limit"
@@ -692,12 +709,14 @@ export function createRunDiagnostics(
         ? "azure_key_auth_disabled"
       : rejected?.data.reason === "permanent-quota"
         ? "permanent_quota"
+      : rejected?.data.status === 429 && rejected.data.reason === "transient-rate-limit"
+        ? "provider_rate_limit"
       : /temperature.*deprecated/i.test(runnerError ?? "")
         ? "anthropic_temperature_deprecated"
       : /resource not found on provider.*\b404\b/i.test(runnerError ?? "")
         ? "provider_resource_not_found"
         : runnerError ? "other" : null,
-      message: terminal.success && typeof bridge?.data.reason === "string" ? bridge.data.reason : runnerError,
+      message: (terminal.success || bridge?.data.phase === "native-token-count") && typeof bridge?.data.reason === "string" ? bridge.data.reason : runnerError,
     },
   };
 }
@@ -735,10 +754,18 @@ export async function startRequestSanitizingProxy(
   options: ProxyOptions = {},
 ): Promise<TemperatureStrippingProxy> {
   options = { ...options, guard: options.guard ?? new RequestGuard(), admission: options.admission ?? new DeploymentAdmission() };
+  if (options.nativeTokenCount) {
+    options.nativeTokenCount = nativeTokenCountPolicySchema.parse(options.nativeTokenCount);
+    if (!options.guard!.bounds || !options.model) throw new TypeError("Native token counting requires finite requestBounds and the exact deployment model.");
+    options.guard!.accounting.nativeTokenCount = { schemaVersion: 1, requests: 0, retries: 0, completed: 0, retryWaitMs: 0, fees: "unknown", attempts: [] };
+  }
+  if (options.anthropicThinking && !options.reasoningEffort) throw new TypeError("Adaptive thinking requires a declared reasoning effort.");
   const targetBase = new URL(targetBaseUrl);
   const server = createServer((incoming, outgoing) => {
     void forwardSanitizedRequest(incoming, outgoing, targetBase, transform, options);
   });
+  const stopped = new AbortController();
+  options = { ...options, signal: AbortSignal.any([stopped.signal, ...(options.signal ? [options.signal] : [])]) };
   await new Promise<void>((resolve, reject) => {
     server.once("error", reject);
     server.listen(0, "127.0.0.1", () => {
@@ -753,7 +780,7 @@ export async function startRequestSanitizingProxy(
   }
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
-    stop: () => closeServer(server),
+    stop: async () => { stopped.abort(); await closeServer(server); },
   };
 }
 
@@ -765,6 +792,11 @@ export interface ProxyOptions {
   wireApi?: "completions" | "responses";
   capture?: (type: string, data: JsonRecord) => void;
   validateTools?: (payload: unknown) => void;
+  nativeTokenCount?: NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
+  reasoningEffort?: string;
+  model?: string;
+  signal?: AbortSignal;
 }
 async function forwardSanitizedRequest(
   incoming: IncomingMessage,
@@ -780,7 +812,10 @@ async function forwardSanitizedRequest(
   const disconnected = new AbortController();
   const onClose = () => { if (!outgoing.writableFinished) disconnected.abort(); };
   outgoing.once("close", onClose);
+  const signal = AbortSignal.any([disconnected.signal, ...(options.signal ? [options.signal] : []),
+    AbortSignal.timeout(Math.max(1, guard.deadline - Date.now()))]);
   try {
+    guard.assertAvailable(0);
     if (incoming.method !== "POST" || !/^\/(?:v1\/)?(?:chat\/completions|responses|messages)(?:\?[^#]*)?$/.test(incoming.url ?? "")) {
       throw new DispatchError("Only inference POST routes are permitted by the provider bridge.", "not-dispatched");
     }
@@ -789,29 +824,67 @@ async function forwardSanitizedRequest(
     }
     const requestBody = await readRequestBody(incoming, guard.bounds?.maxRequestBytes);
     let body = transform(requestBody, incoming.headers["content-type"]);
+    const route = (incoming.url ?? "").split("?")[0];
+    if ((options.nativeTokenCount || options.anthropicThinking) && !/^\/(?:v1\/)?messages$/.test(route)) {
+      throw new DispatchError("Native count/adaptive thinking requires the exact Anthropic Messages route.", "not-dispatched");
+    }
+    if (options.nativeTokenCount && route !== incoming.url) throw new DispatchError("Native counting does not admit query-string inference variants.", "not-dispatched");
+    if (options.anthropicThinking) body = applyAnthropicThinking(body, options.reasoningEffort!);
     options.validateTools?.(JSON.parse(body.toString("utf8")));
     if (guard.bounds) {
       const bounded = boundedProviderRequest(body, incoming.url ?? "/", guard.bounds);
       outputTokenLimit = bounded.outputTokenLimit;
       body = bounded.body;
     }
-    const tokens = body.length + (guard.bounds?.maxOutputTokens ?? 0);
+    let tokens = body.length + (guard.bounds?.maxOutputTokens ?? 0);
     const payloadHash = createHash("sha256").update(body).digest("hex");
     const target = new URL(`${targetBase.pathname.replace(/\/$/, "")}${incoming.url ?? "/"}`, targetBase.origin);
     const headers = forwardedHeaders(incoming.headers, body.length);
     const deadline = guard.deadline;
+    guard.assertAvailable(body.length);
+    guard.claim(payloadHash);
+    if (options.nativeTokenCount) {
+      bridgePhase = "native-token-count";
+      const policy = options.nativeTokenCount;
+      const input = await countNativeTokens(body, {
+        policy, accounting: guard.accounting.nativeTokenCount!, deadline, signal, model: options.model!,
+        beforeDispatch: async () => {
+          guard.assertAvailable(body.length);
+          await options.admission!.admit(options.deployment ?? target.origin, 0,
+            guard.bounds!.requestsPerMinute, guard.bounds!.tokensPerMinute, deadline, signal);
+          guard.assertAvailable(body.length);
+        },
+        beforeRetry: (delay) => guard.reserveRetryWait(delay, policy.maxRetryWaitMs),
+        send: async (countBody, countSignal) => {
+          const response = await upstreamResponse(new URL(`${target.pathname}/count_tokens`, target.origin),
+            { ...headers, "content-length": String(countBody.length), accept: "application/json" }, countBody, countSignal);
+          return {
+            status: response.statusCode ?? 502,
+            headers: { get: (name) => String(response.headers[name] ?? "") || null },
+            body: response, cancel: () => response.destroy(),
+          };
+        },
+        capture: options.capture,
+      });
+      const reservedInput = Math.ceil(input * (1 + policy.inputSafetyMarginPercent / 100)) + policy.inputSafetyMarginTokens;
+      tokens = reservedInput + guard.bounds!.maxOutputTokens;
+      if (!Number.isSafeInteger(tokens)) throw new NativeTokenCountError("invalid_reservation");
+      options.capture?.("runner.native_count_admission", { inferenceBodyHash: payloadHash, inputTokensEstimate: input,
+        reservedInputTokens: reservedInput, inclusiveOutputCeiling: guard.bounds!.maxOutputTokens,
+        estimateIsGuaranteedUpperBound: false, cacheDeduction: 0 });
+    }
     for (let attempt = 0; ; attempt++) {
       bridgePhase = "admission";
       if (guard.bounds) await (options.admission ?? new DeploymentAdmission()).admit(
-        options.deployment ?? target.origin, tokens, guard.bounds.requestsPerMinute, guard.bounds.tokensPerMinute, deadline,
+        options.deployment ?? target.origin, tokens, guard.bounds.requestsPerMinute, guard.bounds.tokensPerMinute, deadline, signal,
       );
-      guard.claim(payloadHash);
-      if (disconnected.signal.aborted) throw new DispatchError("Downstream disconnected before dispatch.", "not-dispatched");
+      if (attempt > 0) guard.claim(payloadHash);
+      if (signal.aborted) throw new DispatchError("Provider bridge cancelled before inference dispatch.", "not-dispatched");
       guard.reserve(body.length, tokens);
       dispatched = true;
       options.capture?.("runner.provider_dispatch", { request: guard.accounting.physicalRequests, reservedTokens: tokens, outputTokenLimit });
       bridgePhase = "upstream-headers";
-      const response = await upstreamResponse(target, headers, body, AbortSignal.any([disconnected.signal, AbortSignal.timeout(Math.max(1, deadline - Date.now()))]));
+      const response = await upstreamResponse(target, headers, body, signal);
       const status = response.statusCode ?? 502;
       upstreamStatus = status;
       bridgePhase = "upstream-body";
@@ -822,18 +895,19 @@ async function forwardSanitizedRequest(
         const reason = await rejectedReason(response);
         options.capture?.("runner.provider_rejected", { status, request: guard.accounting.physicalRequests, reason });
         if (attempt < (options.retries ?? 0) && Date.now() + delay < deadline) {
-          if (reason === "permanent-quota") {
+          if (reason !== "transient-rate-limit") {
             guard.close();
-            throw new DispatchError("Provider permanent quota exhaustion; no transient retry.", "explicitly-rejected", status);
+            throw new DispatchError(`Provider 429 category ${reason} is not certified transient; no retry.`, "explicitly-rejected", status);
           }
           dispatched = false;
-          await new Promise((resolve) => setTimeout(resolve, delay)); continue;
+          if (options.nativeTokenCount) guard.reserveRetryWait(delay, options.nativeTokenCount.maxRetryWaitMs);
+          await realClock.sleep(delay, signal); continue;
         }
         guard.close();
         throw new DispatchError("Provider 429 rejection exhausted bounded physical-request recovery.", "explicitly-rejected", status);
       }
       if (status < 200 || status >= 300) {
-        if (status >= 500) {
+        if (status === 408 || status >= 500) {
           response.resume();
           throw new DispatchError(`Provider ${status} failure may have processed the request; no replay.`, "possibly-processed", status);
         }
@@ -841,6 +915,10 @@ async function forwardSanitizedRequest(
         const reason = await rejectedReason(response);
         options.capture?.("runner.provider_rejected", { status, request: guard.accounting.physicalRequests, reason });
         throw new DispatchError(`Provider rejected request (${status}, ${reason}); no identity fallback or retry.`, "explicitly-rejected", status);
+      }
+      if (status !== 200) {
+        response.resume();
+        throw new DispatchError(`Unexpected inference HTTP ${status}; no completion certification or replay.`, "possibly-processed", status);
       }
       const streaming = String(response.headers["content-type"] ?? "").includes("text/event-stream");
       if (!streaming) {
@@ -900,10 +978,12 @@ async function forwardSanitizedRequest(
   } catch (error) {
     const certainty = error instanceof DispatchError ? error.certainty : dispatched ? "possibly-processed" : "not-dispatched";
     if (certainty === "possibly-processed") guard.ambiguous();
+    else guard.close();
     const code = error && typeof error === "object" && "code" in error && typeof error.code === "string"
       && /^[A-Z_0-9]{1,40}$/.test(error.code) ? error.code : null;
     options.capture?.("runner.provider_bridge_error", { certainty, status: error instanceof DispatchError ? error.status : null,
-      phase: error instanceof ProviderTerminalError ? "provider-terminal" : bridgePhase, upstreamStatus, responseBytes, code, outputTokenLimit,
+      phase: error instanceof ProviderTerminalError ? "provider-terminal" : bridgePhase, upstreamStatus, responseBytes,
+      code: error instanceof NativeTokenCountError ? error.code : code, outputTokenLimit,
       ...(error instanceof ProviderTerminalError ? { providerTerminal: error.terminal } : {}),
       reason: error instanceof DispatchError ? error.message : disconnected.signal.aborted ? "Downstream disconnected."
         : Date.now() >= guard.deadline ? "Provider request deadline exceeded." : "Upstream connection or response consumption failed." });
@@ -1067,6 +1147,8 @@ export function createFoundryProviderIdentity(
     ...(config.wireApi ? { wireApi: config.wireApi } : {}),
     ...(config.auth ? { auth: config.auth } : {}),
     ...(config.capacity ? { capacity: capacityIdentity(config) } : {}),
+    ...(config.nativeTokenCount ? { nativeTokenCount: config.nativeTokenCount } : {}),
+    ...(config.anthropicThinking ? { anthropicThinking: config.anthropicThinking } : {}),
   };
 }
 

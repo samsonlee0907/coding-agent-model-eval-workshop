@@ -206,6 +206,11 @@ The separate token gate proves acquisition only. Verify resource inference
 permission, model/version/API/reasoning support and local runtime tools
 separately before approving the bounded smoke. Supported configuration and
 vendor documentation are **not new live Anthropic acceptance**.
+Deployments that require adaptive thinking, or a reviewed native input estimate
+instead of byte-based admission, can use the
+[explicit opt-in profile](docs/CAMPAIGNS_AND_PUBLICATION.md#optional-anthropic-native-count-admission).
+It retries bounded read-only count timeouts before inference, never ambiguous
+model requests or an entire candidate.
 [Endpoint/auth boundaries](docs/KEYLESS_AUTH.md#endpoint-and-token-audience)
 and [safe diagnostics](docs/RUNNING_THE_TOOLKIT.md#diagnose-and-stop-safely)
 explain what remains unverified.

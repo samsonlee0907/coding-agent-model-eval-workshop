@@ -200,7 +200,8 @@ export class FoundryJudgeInvoker implements JudgeInvoker {
     this.requestAccounting = guard.accounting;
     const proxy = await startRequestSanitizingProxy(provider.baseUrl,
       identity.requestAdaptation === "strip-temperature" ? stripTemperature : stripNullMessageRefusals,
-      { guard, wireApi: provider.wireApi, retries: 0, capture: (type, data) => {
+      { guard, wireApi: provider.wireApi, retries: 0, nativeTokenCount: config.provider.nativeTokenCount,
+        anthropicThinking: config.provider.anthropicThinking, reasoningEffort: config.reasoningEffort, model: config.model, capture: (type, data) => {
         if (type === "runner.provider_bridge_error" || type === "runner.provider_rejected") this.providerDiagnostics.push({ type, ...data });
       } });
     const cliPath = resolveCopilotCliPath(process.env);

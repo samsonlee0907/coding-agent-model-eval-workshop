@@ -3,6 +3,7 @@ import { z } from "zod";
 import type { ProviderConfig } from "@github/copilot-sdk";
 import type { FoundryAuth, FoundryProviderConfig } from "./types.js";
 import { deploymentCapacitySchema } from "./deployment-capacity.js";
+import { nativeTokenCountPolicySchema } from "./native-token-count.js";
 
 export const foundryScope = "https://ai.azure.com/.default";
 export const authSchema = z.discriminatedUnion("mode", [
@@ -25,6 +26,8 @@ export const providerSchema = z.object({
   wireApi: z.enum(["completions", "responses"]).optional(),
   auth: authSchema.optional(),
   capacity: deploymentCapacitySchema.optional(),
+  nativeTokenCount: nativeTokenCountPolicySchema.optional(),
+  anthropicThinking: z.literal("adaptive").optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.auth?.mode === "entra" && value.auth.subscriptionId && value.auth.credential !== "azure-cli") {
     ctx.addIssue({ code: "custom", message: "subscriptionId selects an Azure CLI account only; it does not apply to managed/workload identity." });
@@ -32,6 +35,9 @@ export const providerSchema = z.object({
   if (value.type === "anthropic" && value.wireApi) {
     ctx.addIssue({ code: "custom", message: "wireApi applies only to openai; anthropic uses Messages." });
   }
+  if (value.type !== "anthropic" && (value.nativeTokenCount || value.anthropicThinking)) ctx.addIssue({
+    code: "custom", message: "nativeTokenCount and anthropicThinking apply only to Anthropic Messages.",
+  });
   if (value.auth?.mode === "entra" && value.auth.credential === "workload-identity"
       && (!value.auth.tenantId || !value.auth.clientId)) {
     ctx.addIssue({ code: "custom", message: "workload-identity requires explicit tenantId and clientId." });

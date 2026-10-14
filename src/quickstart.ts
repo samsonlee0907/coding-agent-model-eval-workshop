@@ -11,6 +11,7 @@ import type {
 import { parseAuthFlags, providerSchema } from "./auth.js";
 import { loadRequestBounds, type RequestBounds } from "./request-policy.js";
 import { assertCliArguments } from "./cli-arguments.js";
+import { loadNativeTokenCountPolicy, type NativeTokenCountPolicy } from "./native-token-count.js";
 
 const ignoredArtifactEntries = new Set([".git", "node_modules", "dist", ".benchmark-artifacts", ".benchmark-runs"]);
 
@@ -26,6 +27,8 @@ export interface QuickstartOptions {
   wireApi?: "completions" | "responses";
   requestBounds?: RequestBounds;
   prepareOnly?: boolean;
+  nativeTokenCount?: NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
 }
 
 export interface QuickstartWorkspace {
@@ -41,6 +44,9 @@ export interface QuickstartWorkspace {
  * GitHub account, remote, or repository is involved.
  */
 export function createQuickstartWorkspace(options: QuickstartOptions): QuickstartWorkspace {
+  providerSchema.parse({ type: options.provider, auth: options.auth, wireApi: options.wireApi,
+    nativeTokenCount: options.nativeTokenCount, anthropicThinking: options.anthropicThinking });
+  if (options.nativeTokenCount && !options.requestBounds) throw new TypeError("Native token counting requires --bounds.");
   if (!options.task.trim()) {
     throw new TypeError("A non-empty --task or --task-file value is required.");
   }
@@ -78,6 +84,8 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
         type: options.provider,
         ...(options.auth ? { auth: options.auth } : {}),
         ...(options.wireApi ? { wireApi: options.wireApi } : {}),
+        ...(options.nativeTokenCount ? { nativeTokenCount: options.nativeTokenCount } : {}),
+        ...(options.anthropicThinking ? { anthropicThinking: options.anthropicThinking } : {}),
       },
       execution: {
         instructions: [
@@ -128,6 +136,8 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
   const provider = parseFoundryProvider(argumentValue(argv, "--provider"));
   const foundry = providerSchema.parse({
     type: provider, auth: parseAuthFlags((flag) => argumentValue(argv, flag)), wireApi: argumentValue(argv, "--wire-api"),
+    nativeTokenCount: loadNativeTokenCountPolicy(argumentValue(argv, "--native-token-count")),
+    anthropicThinking: argumentValue(argv, "--anthropic-thinking"),
   });
   if (!model) {
     throw new TypeError("--model is required.");
@@ -144,6 +154,8 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
     reasoningEffort: parseReasoningEffort(argumentValue(argv, "--reasoning-effort")),
     ...(foundry.auth ? { auth: foundry.auth } : {}),
     ...(foundry.wireApi ? { wireApi: foundry.wireApi } : {}),
+    ...(foundry.nativeTokenCount ? { nativeTokenCount: foundry.nativeTokenCount } : {}),
+    ...(foundry.anthropicThinking ? { anthropicThinking: foundry.anthropicThinking } : {}),
   };
 }
 
@@ -158,6 +170,7 @@ function assertSupportedOptions(argv: readonly string[]): void {
     "--source",
     "--output",
     "--auth", "--credential", "--tenant-id", "--client-id", "--subscription-id", "--wire-api", "--bounds",
+    "--native-token-count", "--anthropic-thinking",
   ];
   assertCliArguments(argv, { ...Object.fromEntries(optionsWithValues.map((flag) => [flag, "value" as const])), "--prepare-only": "switch" });
 }

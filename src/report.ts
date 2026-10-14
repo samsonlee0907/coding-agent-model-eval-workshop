@@ -16,6 +16,13 @@ export function renderRunReport(run: BenchmarkRun): string {
     ["Cache-read tokens", formatMetric(run.metrics.cacheReadTokens)],
     ["Cache-write tokens", formatMetric(run.metrics.cacheWriteTokens)],
     ["Cost multiplier", formatMetric(run.metrics.cost)],
+    ...(run.requestAccounting?.nativeTokenCount ? [
+      ["Physical inference requests", String(run.requestAccounting.physicalRequests)],
+      ["Native count requests / retries", `${run.requestAccounting.nativeTokenCount.requests} / ${run.requestAccounting.nativeTokenCount.retries}`],
+      ["Native count retry wait (ms)", String(run.requestAccounting.nativeTokenCount.retryWaitMs)],
+      ["Shared reserved retry wait (ms)", String(run.requestAccounting.retryWaitMs ?? 0)],
+      ["Native count fees", "Unknown; inference usage is not a complete whole-run invoice."],
+    ] : []),
   ];
   return [
     `# Benchmark run ${run.runId}`,

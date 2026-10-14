@@ -6,6 +6,7 @@ import { runBenchmark } from "./runner.js";
 const usage = "Usage: npm run quickstart -- --task <prompt> | --task-file <file> --model <deployment> --provider <openai|anthropic>\n" +
   "  --bounds <request-bounds.json> [--prepare-only] [--source <starter>] [--output <new-folder>]\n" +
   "  [--wire-api completions|responses] [--reasoning-effort high]\n" +
+  "  [--native-token-count <policy.json>] [--anthropic-thinking adaptive] (Anthropic only)\n" +
   "  [--auth key|entra] [--credential azure-cli|managed-identity|workload-identity]\n" +
   "  [--tenant-id <uuid>] [--subscription-id <uuid>] [--client-id <uuid>]\n" +
   "Azure CLI: --tenant-id and --subscription-id are mutually exclusive.\n" +

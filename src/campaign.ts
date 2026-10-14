@@ -35,6 +35,7 @@ export const campaignSpecSchema = z.object({
     concurrency: z.number().int().min(1).max(64), minFreeMemoryMb: z.number().int().nonnegative(),
     maxAttemptsPerCell: z.number().int().min(1).max(10), deadlineMs: z.number().int().positive(),
     maxRequests: z.number().int().positive(), maxReservedTokens: z.number().int().positive(),
+    maxNativeTokenCountRequests: z.number().int().positive().optional(),
     maxReservationUsd: z.number().positive(), reservationUsdPerMillionTokens: z.number().positive(),
   }).strict(),
   requireCalibratedEvaluators: z.boolean().default(false),
@@ -42,7 +43,11 @@ export const campaignSpecSchema = z.object({
     snapshot: z.string(), scenarios: z.record(z.string(), z.string()),
     anthropicAccounting: z.enum(["sdk-inclusive", "native-uncached"]).optional(),
   }).strict().optional(),
-}).strict().refine((spec) => spec.tasks.length * spec.candidates.length * spec.repeats <= MAX_REPORT_CELLS,
+}).strict().superRefine((spec, ctx) => {
+  if (spec.candidates.some((candidate) => candidate.foundryProvider.nativeTokenCount) && !spec.bounds.maxNativeTokenCountRequests) ctx.addIssue({
+    code: "custom", path: ["bounds", "maxNativeTokenCountRequests"], message: "Native counting needs a separate finite campaign count-request reservation ceiling.",
+  });
+}).refine((spec) => spec.tasks.length * spec.candidates.length * spec.repeats <= MAX_REPORT_CELLS,
   "Campaign exceeds the in-memory publication bound; prepare independently identified subsets.");
 export type CampaignSpec = z.infer<typeof campaignSpecSchema>;
 type PreparedTask = { id: string; config: BenchmarkConfig; files: SnapshotFile[]; graderFiles?: SnapshotFile[];
@@ -55,7 +60,8 @@ const eventSchema = z.object({
   schemaVersion: z.literal(1), sequence: z.number().int().positive(), at: z.string().datetime(),
   pair: z.string(), attemptId: z.string().uuid(), state: z.enum(["reserved", "running", "finalizing", "completed", "interrupted", "error"]),
   phase: z.string(), runPath: z.string().optional(), message: z.string().optional(),
-  reservation: z.object({ tokens: z.number().nonnegative(), requests: z.number().nonnegative(), usd: z.number().nonnegative() }).optional(),
+  reservation: z.object({ tokens: z.number().nonnegative(), requests: z.number().nonnegative(), usd: z.number().nonnegative(),
+    nativeCountRequests: z.number().int().nonnegative().optional() }).optional(),
 }).strict();
 type CampaignEvent = z.infer<typeof eventSchema>;
 
@@ -197,10 +203,15 @@ export async function runCampaign(directory: string, options: CampaignRunOptions
         const run: unknown = existsSync(retainedRun) ? JSON.parse(readFileSync(retainedRun, "utf8")) : null;
         if (run) {
           assertBenchmarkRun(run);
+          if (run.diagnostics.providerFailure.signature === "native_token_count_failure") {
+            halt = true;
+            errors.push("Native token-count admission failed; no count bypass or automatic candidate replay. Further cells remain unstarted.");
+            return;
+          }
           const accounting = run.requestAccounting;
           const safe = accounting && accounting.physicalRequests > 0 && !accounting.ambiguousRequests
             && accounting.physicalRequests === accounting.rejectedRequests && run.diagnostics.providerFailure.httpStatus === 429
-            && run.diagnostics.providerFailure.signature !== "permanent_quota";
+            && run.diagnostics.providerFailure.signature === "provider_rate_limit";
           if (!options.recoverRejected || !safe || attempts >= prepared.spec.bounds.maxAttemptsPerCell) return;
           attemptId = randomUUID(); config = configFor(cell, attemptId); finalize = false;
         }
@@ -212,12 +223,15 @@ export async function runCampaign(directory: string, options: CampaignRunOptions
         const next = {
           tokens: prepared.spec.requestBounds.maxTokens, requests: prepared.spec.requestBounds.maxRequests,
           usd: prepared.spec.requestBounds.maxTokens / 1000000 * prepared.spec.bounds.reservationUsdPerMillionTokens,
+          ...(cell.candidate.foundryProvider.nativeTokenCount ? { nativeCountRequests: cell.candidate.foundryProvider.nativeTokenCount.maxRequests } : {}),
         };
         if (reservations.reduce((sum, r) => sum + r.tokens, 0) + next.tokens > prepared.spec.bounds.maxReservedTokens
             || reservations.reduce((sum, r) => sum + r.requests, 0) + next.requests > prepared.spec.bounds.maxRequests
             || reservations.reduce((sum, r) => sum + r.usd, 0) + next.usd > prepared.spec.bounds.maxReservationUsd) {
           throw new Error("Campaign protective request/token/USD reservation budget exhausted (not an invoice).");
         }
+        if (next.nativeCountRequests && reservations.reduce((sum, r) => sum + (r.nativeCountRequests ?? 0), 0) + next.nativeCountRequests
+            > prepared.spec.bounds.maxNativeTokenCountRequests!) throw new Error("Campaign native token-count request reservation bound exhausted.");
         if (!existsSync(config.workspacePath)) writeSnapshot(config.workspacePath, cell.task.files, prepared.spec.inputBounds.maxFiles, prepared.spec.inputBounds.maxBytes);
         append({ pair: cell.pair, attemptId, state: "reserved", phase: "prepared", reservation: next });
       }
@@ -239,6 +253,8 @@ export async function runCampaign(directory: string, options: CampaignRunOptions
         if (run.runId !== attemptId || evidenceHash(run.contract.task) !== evidenceHash(config.contract.task)
             || evidenceHash(run.contract.candidate) !== evidenceHash(config.contract.candidate)
             || evidenceHash(run.contract.execution) !== evidenceHash(config.contract.execution)
+            || evidenceHash(run.contract.foundryProvider?.nativeTokenCount ?? null) !== evidenceHash(config.contract.foundryProvider.nativeTokenCount ?? null)
+            || run.contract.foundryProvider?.anthropicThinking !== config.contract.foundryProvider.anthropicThinking
             || evidenceHash(run.contract.rounds) !== evidenceHash(config.rounds)
             || evidenceHash(run.contract.runtime) !== evidenceHash(prepared.runtime)) throw new Error("Execution differs from immutable prepared task/candidate/prompt/runtime bindings.");
         if (!run.workspaceHash && run.artifacts.workspace) {
@@ -278,7 +294,9 @@ export async function runCampaign(directory: string, options: CampaignRunOptions
         const phase = state === "interrupted" ? "execution" : cell.task.evaluator
           ? existsSync(join(directory, "runs", attemptId, "grade.json")) ? "graded" : "grading-pending" : "finalized";
         append({ pair: cell.pair, attemptId, state, phase, runPath: join("runs", attemptId, "run.json") });
-        if (run.diagnostics.providerFailure.httpStatus === 401 || run.diagnostics.providerFailure.httpStatus === 403
+        if (run.diagnostics.providerFailure.signature === "native_token_count_failure") {
+          halt = true; errors.push("Native token-count admission failed; no count bypass or automatic candidate replay. Further cells remain unstarted.");
+        } else if (run.diagnostics.providerFailure.httpStatus === 401 || run.diagnostics.providerFailure.httpStatus === 403
             || /Entra .* acquisition failed/.test(run.runnerError ?? "")) {
           halt = true; errors.push("Authentication/inference permission failure stopped new admission. The selected identity was not changed.");
         }
@@ -340,7 +358,11 @@ export function campaignEvidence(directory: string): ReportEvidence {
     assertBenchmarkRun(run);
     const declaredCandidate = prepared.spec.candidates.find((c) => c.id === candidate);
     if (run.runId !== event.attemptId || !declaredCandidate
-        || evidenceHash(run.contract.candidate) !== evidenceHash(declaredCandidate.candidate)) throw new TypeError("Campaign run/candidate binding mismatch.");
+        || evidenceHash(run.contract.candidate) !== evidenceHash(declaredCandidate.candidate)
+        || evidenceHash(run.contract.foundryProvider?.nativeTokenCount ?? null) !== evidenceHash(declaredCandidate.foundryProvider.nativeTokenCount ?? null)
+        || run.contract.foundryProvider?.anthropicThinking !== declaredCandidate.foundryProvider.anthropicThinking) {
+      throw new TypeError("Campaign run/candidate binding mismatch.");
+    }
     const gradePath = join(directory, "runs", event.attemptId, "grade.json");
     const grade = existsSync(gradePath) ? gradeSchema.parse(JSON.parse(readFileSync(gradePath, "utf8"))) : undefined;
     if (grade) {

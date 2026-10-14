@@ -19,8 +19,14 @@ export type RequestBounds = z.infer<typeof requestBoundsSchema>;
 export function loadRequestBounds(path: string | undefined): RequestBounds | undefined {
   return path ? requestBoundsSchema.parse(JSON.parse(readFileSync(path, "utf8"))) : undefined;
 }
-export interface PolicyClock { now(): number; sleep(ms: number): Promise<void>; }
-export const realClock: PolicyClock = { now: Date.now, sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)) };
+export interface PolicyClock { now(): number; sleep(ms: number, signal?: AbortSignal): Promise<void>; }
+export const realClock: PolicyClock = { now: Date.now, sleep: (ms, signal) => new Promise((resolve, reject) => {
+  signal?.throwIfAborted();
+  const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(signal?.reason); };
+  const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, ms);
+  signal?.addEventListener("abort", abort, { once: true });
+  if (signal?.aborted) abort();
+}) };
 
 export function retryDelay(headers: { get(name: string): string | null }, attempt: number, now: number, random = Math.random): number {
   const ms = Number(headers.get("retry-after-ms"));
@@ -43,13 +49,14 @@ export class DeploymentAdmission {
   private readonly windows = new Map<string, { at: number; tokens: number }[]>();
   private readonly chains = new Map<string, Promise<void>>();
   constructor(private readonly clock: PolicyClock = realClock) {}
-  admit(key: string, tokens: number, rpm: number, tpm: number, deadline: number): Promise<void> {
+  admit(key: string, tokens: number, rpm: number, tpm: number, deadline: number, signal?: AbortSignal): Promise<void> {
     const operation = (this.chains.get(key) ?? Promise.resolve()).then(async () => {
       if (tokens > tpm) throw new DispatchError(
-        `Single request conservative reservation ${tokens} exceeds local deployment TPM bound ${tpm}. It includes serialized request bytes (SDK system/context/tool schemas) plus the output ceiling, not billed tokens. Pacing/cooldown cannot shrink it. Review a separately declared supported request profile or sufficient deployment capacity; do not inflate TPM or use unverified tokenizer/bytes-per-token heuristics.`,
+        `Single request conservative reservation ${tokens} exceeds local deployment TPM bound ${tpm}. It includes the configured input reservation (serialized request bytes with SDK system/context/tool schemas, or an opted-in native estimate with margins) plus the output ceiling, not billed tokens. Pacing/cooldown cannot shrink it. Review a separately declared supported request profile or sufficient deployment capacity; do not inflate TPM or use unverified tokenizer/bytes-per-token heuristics.`,
         "not-dispatched",
       );
       while (true) {
+        signal?.throwIfAborted();
         const now = this.clock.now();
         if (now >= deadline) throw new DispatchError("Request admission deadline exceeded.", "not-dispatched");
         const window = (this.windows.get(key) ?? []).filter((entry) => now - entry.at < 60000);
@@ -59,7 +66,7 @@ export class DeploymentAdmission {
         }
         const wait = Math.max(1, window[0].at + 60000 - now);
         if (now + wait >= deadline) throw new DispatchError("Deployment pacing cannot admit before the deadline.", "not-dispatched");
-        await this.clock.sleep(wait);
+        await this.clock.sleep(wait, signal);
       }
     });
     this.chains.set(key, operation.catch(() => undefined));
@@ -79,13 +86,21 @@ export class RequestGuard {
     this.deadline = Math.min(this.bounds ? started + this.bounds.deadlineMs : deadline ?? started + 900000, deadline ?? Infinity);
   }
   reserve(bytes: number, tokens: number): void {
+    this.assertAvailable(bytes, tokens);
+    this.accounting.physicalRequests++;
+    this.accounting.reservedTokens += tokens;
+  }
+  assertAvailable(bytes: number, tokens = 0): void {
     if (this.blocked) throw new DispatchError("Provider lane closed after ambiguous/permanent failure; no automatic replay.", "not-dispatched");
     if (Date.now() >= this.deadline || this.bounds && (bytes > this.bounds.maxRequestBytes
         || this.accounting.physicalRequests >= this.bounds.maxRequests || this.accounting.reservedTokens + tokens > this.bounds.maxTokens)) {
       throw new DispatchError("Provider request/deadline/token protective bound reached.", "not-dispatched");
     }
-    this.accounting.physicalRequests++;
-    this.accounting.reservedTokens += tokens;
+  }
+  reserveRetryWait(ms: number, maximum: number): void {
+    const prior = this.accounting.retryWaitMs ?? 0;
+    if (!Number.isFinite(ms) || ms < 0 || prior + ms > maximum) throw new DispatchError("Shared native-count/inference retry wait bound reached.", "not-dispatched");
+    this.accounting.retryWaitMs = prior + ms;
   }
   reject(): void { this.accounting.rejectedRequests++; }
   ambiguous(): void { this.accounting.ambiguousRequests++; this.blocked = true; }
@@ -105,7 +120,7 @@ export class RequestGuard {
   }
   certifyResponse(): void { this.completedResponses++; }
   cleanlySettled(): boolean {
-    return this.completedResponses > 0 && !this.accounting.ambiguousRequests
+    return !this.blocked && this.completedResponses > 0 && !this.accounting.ambiguousRequests
       && this.completedResponses + this.accounting.rejectedRequests === this.accounting.physicalRequests;
   }
 }
