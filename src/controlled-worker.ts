@@ -18,6 +18,11 @@ export const isolationSchema = z.object({
   commandTimeoutMs: z.number().int().positive().max(3600000),
 }).strict();
 type Isolation = z.infer<typeof isolationSchema>;
+const workspaceOwnershipSchema = z.object({
+  uid: z.number().int().min(0).max(4294967294),
+  gid: z.number().int().min(0).max(4294967294),
+  mode: z.number().int().min(0).max(0o7777),
+}).strict();
 export type SnapshotFile = { path: string; bytes: number; sha256: string; content: string };
 const filesSchema = z.array(z.object({ path: z.string(), bytes: z.number().int().nonnegative(), sha256: z.string().regex(/^[a-f0-9]{64}$/), content: z.string() }).strict());
 const omitted = new Set([".git", "node_modules", ".benchmark-artifacts", ".benchmark-runs"]);
@@ -124,7 +129,7 @@ export function controlledContainerArgs(policy: Isolation, name: string, volume:
     "--read-only", "--pids-limit", "128", "--memory", `${policy.memoryMb}m`, "--memory-swap", `${policy.memoryMb}m`,
     "--cpus", String(policy.cpus), "--tmpfs", "/tmp:rw,noexec,nosuid,size=64m,uid=1000,gid=1000",
     "--tmpfs", `/grader:rw,noexec,nosuid,size=${policy.maxBytes},uid=1000,gid=1000`,
-    "--mount", `type=volume,source=${volume},target=/workspace`, "--workdir", "/workspace",
+    "--mount", `type=volume,source=${volume},target=/workspace,volume-nocopy`, "--workdir", "/workspace",
     "--entrypoint", "/usr/local/bin/node", policy.image, "-e", "setInterval(()=>{},1000000)"];
 }
 
@@ -132,6 +137,10 @@ const importScript = `
 const fs=require("node:fs"),path=require("node:path");let text="";process.stdin.on("data",c=>text+=c);process.stdin.on("end",()=>{
 for(const f of JSON.parse(text)){const p=path.join(process.argv[1],f.path);fs.mkdirSync(path.dirname(p),{recursive:true});fs.writeFileSync(p,Buffer.from(f.content,"base64"),{flag:"wx"});}
 });`;
+const ownershipScript = `
+const fs=require("node:fs"),s=fs.lstatSync("/workspace");
+if(!s.isDirectory())throw Error("Workspace volume must be a directory, not a symlink or file");
+process.stdout.write(JSON.stringify({uid:s.uid,gid:s.gid,mode:s.mode&0o7777}));`;
 const exportScript = `
 const fs=require("node:fs"),path=require("node:path"),crypto=require("node:crypto");
 const files=[];let bytes=0;const [maxFiles,maxBytes]=process.argv.slice(1).map(Number);
@@ -163,14 +172,24 @@ export class ControlledWorker {
     const worker = new ControlledWorker(isolationSchema.parse(policy), recordPath, docker, undefined, deadlineAt);
     await worker.checked(["version", "--format", "{{.Server.Version}}"]);
     await worker.checked(["image", "inspect", worker.policy.image]);
-    atomicJson(recordPath, { schemaVersion: 1, policy: worker.policy, name: worker.name, volume: worker.volume, owner: worker.owner });
+    const record = { schemaVersion: 1, policy: worker.policy, name: worker.name, volume: worker.volume, owner: worker.owner };
+    atomicJson(recordPath, record);
     try {
       await worker.checked(["volume", "create", "--label", `benchmark.owner=${worker.owner}`, worker.volume]);
-      // Credential-free initialization only changes its own Docker-managed volume.
+      await worker.verifyVolumeOwner();
+      const inspected = await worker.checked(["run", "--rm", "--pull", "never", "--name", `${worker.name}-owner`,
+        "--label", `benchmark.owner=${worker.owner}`, "--network", "none", "--cap-drop", "ALL",
+        "--pids-limit", "16", "--memory", "128m", "--cpus", "0.5",
+        "--security-opt", "no-new-privileges", "--user", "0", "--read-only", "--workdir", "/",
+        "--mount", `type=volume,source=${worker.volume},target=/workspace,readonly`,
+        "--entrypoint", "/usr/local/bin/node", worker.policy.image, "-e", ownershipScript], undefined, 4096);
+      const workspaceOwnership = workspaceOwnershipSchema.parse(JSON.parse(inspected.stdout));
+      atomicJson(recordPath, { ...record, workspaceOwnership });
+      // Docker copy-up preserves image directory ownership; cap-drop ALL cannot override it.
       await worker.checked(["run", "--rm", "--pull", "never", "--name", `${worker.name}-init`, "--label", `benchmark.owner=${worker.owner}`,
         "--network", "none", "--cap-drop", "ALL", "--pids-limit", "16", "--memory", "128m", "--cpus", "0.5",
-        "--security-opt", "no-new-privileges", "--user", "0", "--read-only",
-        "--mount", `type=volume,source=${worker.volume},target=/workspace`, "--entrypoint", "chmod", worker.policy.image, "0777", "/workspace"]);
+        "--security-opt", "no-new-privileges", "--user", `${workspaceOwnership.uid}:${workspaceOwnership.gid}`, "--read-only", "--workdir", "/",
+        "--mount", `type=volume,source=${worker.volume},target=/workspace,volume-nocopy`, "--entrypoint", "chmod", worker.policy.image, "0777", "/workspace"]);
       await worker.checked(controlledContainerArgs(worker.policy, worker.name, worker.volume, worker.owner));
       await worker.checked(["exec", "-i", worker.name, "/usr/local/bin/node", "-e", importScript, "/workspace"],
         JSON.stringify(validateSnapshot(files, worker.policy.maxFiles, worker.policy.maxBytes)), worker.policy.maxBytes * 2 + 65536);
@@ -187,6 +206,7 @@ export class ControlledWorker {
     const record = z.object({
       schemaVersion: z.literal(1), policy: isolationSchema,
       name: z.string().regex(/^benchmark-[a-f0-9-]+$/), volume: z.string().regex(/^benchmark-[a-f0-9-]+-workspace$/), owner: z.string().uuid(),
+      workspaceOwnership: workspaceOwnershipSchema.optional(),
     }).parse(JSON.parse(readFileSync(recordPath, "utf8")));
     const worker = new ControlledWorker(record.policy, recordPath, docker, record, deadlineAt);
     if (record.name !== `benchmark-${record.owner}` || record.volume !== `${record.name}-workspace`) throw new TypeError("Worker ownership record name binding mismatch.");
@@ -237,7 +257,7 @@ export class ControlledWorker {
       "--label", `benchmark.owner=${this.owner}`, "--network", "none", "--user", "1000:1000", "--read-only",
       "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--pids-limit", "16",
       "--memory", `${this.policy.memoryMb}m`, "--memory-swap", `${this.policy.memoryMb}m`, "--cpus", String(this.policy.cpus),
-      "--mount", `type=volume,source=${this.volume},target=/workspace,readonly`,
+      "--mount", `type=volume,source=${this.volume},target=/workspace,readonly,volume-nocopy`,
       "--entrypoint", "/usr/local/bin/node", this.policy.image, "-e", exportScript,
       String(this.policy.maxFiles), String(this.policy.maxBytes)], undefined, this.policy.maxBytes * 2 + this.policy.maxFiles * 512);
     const files = validateSnapshot(JSON.parse(result.stdout), this.policy.maxFiles, this.policy.maxBytes);
@@ -270,24 +290,28 @@ export class ControlledWorker {
   static async cleanup(recordPath: string, docker = executeDocker): Promise<void> {
     const record = z.object({
       schemaVersion: z.literal(1), policy: isolationSchema, name: z.string(), volume: z.string(), owner: z.string().uuid(),
+      workspaceOwnership: workspaceOwnershipSchema.optional(),
     }).strict().parse(JSON.parse(readFileSync(recordPath, "utf8")));
     if (record.name !== `benchmark-${record.owner}` || record.volume !== `${record.name}-workspace`) throw new TypeError("Worker ownership record name binding mismatch.");
     const worker = new ControlledWorker(record.policy, recordPath, docker, record, Date.now() + 30000);
     const containers = await worker.checked(["container", "ls", "-a", "--filter", `name=${record.name}`, "--format", "{{.Names}}"]);
-    for (const name of [`${record.name}-init`, `${record.name}-export`, record.name]) {
+    for (const name of [`${record.name}-owner`, `${record.name}-init`, `${record.name}-export`, record.name]) {
       if (!containers.stdout.split(/\r?\n/).includes(name)) continue;
       await worker.removeOwnedContainer(name);
     }
     const volumes = await worker.checked(["volume", "ls", "--filter", `name=${record.volume}`, "--format", "{{.Name}}"]);
     if (volumes.stdout.split(/\r?\n/).includes(record.volume)) {
-      const label = await worker.checked(["volume", "inspect", "--format", '{{index .Labels "benchmark.owner"}}', record.volume]);
-      if (label.stdout.trim() !== record.owner) throw new Error("Volume ownership mismatch; cleanup denied.");
+      await worker.verifyVolumeOwner();
       await worker.checked(["volume", "rm", record.volume]);
     }
   }
   private async verifyOwner(cleanup = false): Promise<void> {
     const result = await this.checked(["inspect", "--format", '{{index .Config.Labels "benchmark.owner"}}', this.name], undefined, undefined, cleanup);
     if (result.stdout.trim() !== this.owner) throw new Error("Container ownership mismatch; operation denied.");
+  }
+  private async verifyVolumeOwner(): Promise<void> {
+    const label = await this.checked(["volume", "inspect", "--format", '{{index .Labels "benchmark.owner"}}', this.volume]);
+    if (label.stdout.trim() !== this.owner) throw new Error("Volume ownership mismatch; operation denied.");
   }
   private async removeOwnedContainer(name: string): Promise<void> {
     const label = await this.checked(["inspect", "--format", '{{index .Config.Labels "benchmark.owner"}}', name]);

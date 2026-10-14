@@ -15,6 +15,7 @@ test("controlled container uses a digest, nonroot, no network/host binds and fin
   assert.match(text, /--network none/); assert.match(text, /--user 1000:1000/); assert.match(text, /--cap-drop ALL/);
   assert.match(text, /--read-only/); assert.match(text, /--memory 512m/); assert.match(text, /--pids-limit 128/);
   assert.match(text, /type=volume/);
+  assert.match(text, /target=\/workspace,volume-nocopy/);
   assert.doesNotMatch(text, /type=bind|docker\.sock|FOUNDRY|AZURE|--privileged|--publish|host\.docker/);
 });
 test("export freezes candidate writes and reads only an owned read-only volume; private grader files stay separate", async () => {
@@ -24,6 +25,10 @@ test("export freezes candidate writes and reads only an owned read-only volume; 
   const docker: DockerExecutor = async (args, input) => {
     calls.push([...args]);
     const label = args.find((a) => a.startsWith("benchmark.owner=")); if (label) owner = label.slice("benchmark.owner=".length);
+    if (args[0] === "volume" && args[1] === "inspect") return { code: 0, stdout: owner, stderr: "" };
+    if (args[0] === "run" && args[args.indexOf("--name") + 1]?.endsWith("-owner")) {
+      return { code: 0, stdout: JSON.stringify({ uid: 1000, gid: 1000, mode: 0o755 }), stderr: "" };
+    }
     if (args[0] === "inspect") {
       const format = args[args.indexOf("--format") + 1];
       return { code: 0, stdout: format === "{{.State.Paused}}" ? String(paused)
@@ -93,6 +98,9 @@ test("worker candidate tools are confined and cleanup verifies exact ownership",
     calls.push([...args]);
     const label = args.find((a) => a.startsWith("benchmark.owner=")); if (label) owner = label.split("=")[1];
     if (args[0] === "inspect" || args[0] === "volume" && args[1] === "inspect") return { code: 0, stdout: owner, stderr: "" };
+    if (args[0] === "run" && args[args.indexOf("--name") + 1]?.endsWith("-owner")) {
+      return { code: 0, stdout: JSON.stringify({ uid: 1000, gid: 1000, mode: 0o755 }), stderr: "" };
+    }
     return { code: 0, stdout: "", stderr: "" };
   };
   try {
@@ -110,4 +118,83 @@ test("worker candidate tools are confined and cleanup verifies exact ownership",
     await assert.rejects(() => worker.dispose(), /ownership mismatch/);
     assert.ok(calls.slice(before).every((args) => args[0] !== "rm"));
   } finally { rmSync(root, { recursive: true, force: true }); }
+});
+test("initializer uses actual copied-up volume owner without capabilities or candidate identity changes", async () => {
+  for (const identity of [{ uid: 0, gid: 0 }, { uid: 1000, gid: 1000 }, { uid: 10001, gid: 10001 }]) {
+    const root = mkdtempSync(join(tmpdir(), "benchmark-worker-owner-"));
+    const calls: string[][] = [];
+    let owner = "";
+    const docker: DockerExecutor = async args => {
+      calls.push([...args]);
+      const label = args.find(arg => arg.startsWith("benchmark.owner="));
+      if (label) owner = label.slice("benchmark.owner=".length);
+      if (args[0] === "volume" && args[1] === "inspect") return { code: 0, stdout: owner, stderr: "" };
+      if (args[0] === "run" && args[args.indexOf("--name") + 1]?.endsWith("-owner")) {
+        assert.ok(args.some(arg => arg.endsWith("target=/workspace,readonly")));
+        assert.equal(args[args.indexOf("--user") + 1], "0");
+        assert.match(args.at(-1)!, /lstatSync/);
+        assert.equal(calls.at(-2)?.[1], "inspect");
+        return { code: 0, stdout: JSON.stringify({ ...identity, mode: 0o755 }), stderr: "" };
+      }
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    try {
+      const record = join(root, "worker.json");
+      await ControlledWorker.create(policy, [file()], record, docker);
+      const runs = calls.filter(args => args[0] === "run");
+      assert.equal(runs.length, 3);
+      assert.equal(runs[1][runs[1].indexOf("--user") + 1], `${identity.uid}:${identity.gid}`);
+      assert.ok(runs[1].some(arg => arg.endsWith("target=/workspace,volume-nocopy")));
+      assert.ok(runs[1].includes("chmod"));
+      assert.deepEqual(runs[1].slice(-2), ["0777", "/workspace"]);
+      assert.equal(runs[2][runs[2].indexOf("--user") + 1], "1000:1000");
+      assert.ok(runs[2].some(arg => arg.endsWith("target=/workspace,volume-nocopy")));
+      assert.equal(runs[0][runs[0].indexOf("--workdir") + 1], "/");
+      assert.equal(runs[1][runs[1].indexOf("--workdir") + 1], "/");
+      for (const args of runs) {
+        assert.equal(args[args.indexOf("--network") + 1], "none");
+        assert.equal(args[args.indexOf("--cap-drop") + 1], "ALL");
+        assert.ok(args.includes("--read-only") && args.includes("no-new-privileges"));
+        assert.ok(!args.includes("--cap-add") && !args.includes("--privileged"));
+      }
+      assert.deepEqual(JSON.parse(readFileSync(record, "utf8")).workspaceOwnership, { ...identity, mode: 0o755 });
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
+});
+test("failed or invalid ownership inspection and owner chmod fail closed with exact owned cleanup", async () => {
+  for (const failure of ["owner-label", "inspect-failure", "not-json", "invalid-uid", "chmod"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "benchmark-worker-owner-failure-"));
+    const calls: string[][] = [];
+    let owner = "", name = "", volume = "", volumeExists = false, labelsChecked = 0;
+    const docker: DockerExecutor = async args => {
+      calls.push([...args]);
+      const label = args.find(arg => arg.startsWith("benchmark.owner="));
+      if (label) { owner = label.slice("benchmark.owner=".length); name = `benchmark-${owner}`; volume = `${name}-workspace`; }
+      if (args[0] === "volume" && args[1] === "create") volumeExists = true;
+      if (args[0] === "volume" && args[1] === "inspect") {
+        return { code: 0, stdout: failure === "owner-label" && labelsChecked++ === 0 ? "unrelated-owner" : owner, stderr: "" };
+      }
+      if (args[0] === "run") {
+        const helper = args[args.indexOf("--name") + 1];
+        if (helper.endsWith("-owner")) return { code: failure === "inspect-failure" ? 1 : 0,
+          stdout: failure === "not-json" ? "not JSON" : JSON.stringify({ uid: failure === "invalid-uid" ? "0:0" : 10001, gid: 10001, mode: 0o755 }),
+          stderr: "Workspace volume must be a directory" };
+        if (helper.endsWith("-init")) return { code: 1, stdout: "", stderr: "Operation not permitted" };
+        assert.fail("Candidate must not start after initializer failure.");
+      }
+      if (args[0] === "container" && args[1] === "ls") return { code: 0, stdout: `${name}-owner\n${name}-unrelated\n`, stderr: "" };
+      if (args[0] === "inspect") return { code: 0, stdout: owner, stderr: "" };
+      if (args[0] === "volume" && args[1] === "ls") return { code: 0, stdout: volumeExists ? volume : "", stderr: "" };
+      if (args[0] === "volume" && args[1] === "rm") volumeExists = false;
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    try {
+      await assert.rejects(() => ControlledWorker.create(policy, [file()], join(root, "worker.json"), docker));
+      assert.equal(volumeExists, false);
+      assert.deepEqual(calls.filter(args => args[0] === "rm").map(args => args.at(-1)), [`${name}-owner`]);
+      assert.ok(!calls.some(args => args[0] === "run" && args.includes("-d")));
+      assert.ok(!calls.some(args => args.includes("--cap-add") || args.includes("--privileged")));
+      if (failure !== "chmod") assert.ok(!calls.some(args => args.includes("chmod")));
+    } finally { rmSync(root, { recursive: true, force: true }); }
+  }
 });

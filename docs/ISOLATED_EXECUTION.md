@@ -11,7 +11,7 @@ This guide uses the same tiny text task and the implemented `isolation`
 configuration. There is **no toolkit-published/reviewed image** supplied.
 The image and Docker host must be approved by you/your organization. The
 instructions below are actions for your authorized environment, not claims
-that live Docker acceptance has already passed.
+that your selected host/image has passed live Docker acceptance.
 
 ## 1. Install and select a suitable Linux daemon
 
@@ -52,6 +52,23 @@ needed. A compatible Linux image must provide `/usr/local/bin/node`, `node`
 on `PATH`, `/bin/sh` and `chmod`. It must work as UID/GID 1000:1000 with a
 read-only root and no network. For other tasks, include all task/grader
 interpreters, system libraries and dependencies **before** execution.
+Before candidate launch, a bounded, credential-free helper inspects only the
+UUID-owned workspace volume through a read-only mount. Docker's default
+[volume copy-up](https://docs.docker.com/engine/storage/volumes/#mounting-a-volume-over-existing-data)
+can preserve a different image directory owner. The initializer runs the existing
+`chmod 0777 /workspace` as that actual numeric UID/GID, recorded as
+`workspaceOwnership` in the worker record. It never chowns the directory,
+recursively changes files, adds capabilities or changes the candidate/exporter
+UID/GID 1000:1000. Both helpers remain network-disabled, read-only-root,
+cap-drop ALL/no-new-privileges. Root without
+[FOWNER](https://docs.docker.com/engine/containers/run/#runtime-privilege-and-linux-capabilities)
+cannot chmod another UID's directory; it is not a permission-bypass fallback.
+Invalid ownership metadata, failed chmod or unsupported daemon/image behavior
+fails before candidate launch and triggers label-checked owned cleanup.
+Only the initial inspection permits Docker copy-up. Later initializer, candidate
+and read-only exporter mounts use `volume-nocopy`, so another container cannot
+reset the initialized permissions of a still-empty workspace volume.
+
 No runtime package download is possible; input snapshots omit `node_modules`.
 Install dependencies in an immutable image location and make them resolvable
 from the task's commands (do not assume a workspace dependency directory).
@@ -243,7 +260,7 @@ See [private grading](CAMPAIGNS_AND_PUBLICATION.md#task-owned-evaluators-and-pri
 macOS/Linux users can follow the PowerShell 7 steps with native paths; Docker
 CLI arguments are the same. For Bash, translate environment/path syntax and
 use a shell heredoc instead of PowerShell's here-string for the Node probe.
-**Live Docker enforcement has not been verified by this repository's current
-acceptance run**; existing tests cover injected Docker executors. Do not treat
+The test suite uses injected Docker executors; actual-image acceptance is specific
+to the tested image and daemon and must be repeated for your selected boundary. Do not treat
 installed Desktop, a successful `doctor`, or those mocked tests as live
 container enforcement evidence.
