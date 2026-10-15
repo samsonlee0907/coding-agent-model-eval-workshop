@@ -3,12 +3,13 @@ import test from "node:test";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync, existsSync, rmSync, mkdirSync, symlinkSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { execFileSync } from "node:child_process";
 import { unzipSync } from "fflate";
 import { evidenceFromRuns } from "../src/evidence.js";
-import { prepareApprovedPreviews, writeReportBundle, verifyReportBundle, spreadsheetSafe, toCsv, safeRelativePath } from "../src/publication.js";
+import { prepareApprovedPreviews, writeReportBundle, verifyReportBundle, spreadsheetSafe, toCsv, safeRelativePath, attemptUsageRows, selectedResultRows } from "../src/publication.js";
 import { renderEvidenceReport } from "../src/report-ui.js";
-import { fixtureRun } from "./fixtures/revamp.js";
+import { fixtureRun, fixtureConfig } from "./fixtures/revamp.js";
 import { immutableContractHash } from "../src/contract.js";
 
 test("metadata-safe default bundle and ZIP are portable, consistent and hash-verified", () => {
@@ -25,12 +26,109 @@ test("metadata-safe default bundle and ZIP are portable, consistent and hash-ver
     assert.doesNotMatch(html, /DO-NOT-PUBLISH|PRIVATE-PROMPT|https?:\/\/|fetch\(/);
     assert.deepEqual(JSON.parse(readFileSync(join(root, "report", "selected-results.json"), "utf8")).map((r: { status: string }) => r.status), ["pass"]);
     const zip = unzipSync(readFileSync(join(root, "report.zip")));
-    assert.ok(zip["index.html"]); assert.ok(zip["evidence.json"]); assert.equal(Object.keys(zip).length, 8);
+    assert.ok(zip["index.html"]); assert.ok(zip["evidence.json"]); assert.equal(Object.keys(zip).length, 10);
+    assert.ok(zip["attempt-usage.json"]); assert.ok(zip["attempt-usage.csv"]);
     writeFileSync(join(root, "report", "evidence.json"), "{}");
     assert.throws(() => verifyReportBundle(join(root, "report")), /integrity/);
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
+test("previous version-1 bundles remain verifiable without new usage exports or optional columns", () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-legacy-bundle-"));
+  try {
+    const directory = join(root, "report");
+    writeReportBundle(evidenceFromRuns([fixtureRun("legacy")]), directory);
+    const columns = ["task", "candidate", "repeat", "status", "runId", "selectionReason", "attempts", "validation",
+      "requiredFailed", "execution", "phase", "advisoryFailed", "checkErrors", "wallMs", "inputTokens", "outputTokens",
+      "recordedUsd", "recordedCostMultiplier", "allAttemptRecordedCostMultiplier", "contractHash", "promptHash", "policyHash", "workspaceHash"];
+    const selected = selectedResultRows(evidenceFromRuns([fixtureRun("legacy")])).map(row =>
+      Object.fromEntries(columns.map(column => [column, row[column as keyof typeof row]])));
+    writeFileSync(join(directory, "selected-results.json"), `${JSON.stringify(selected, null, 2)}\n`);
+    writeFileSync(join(directory, "selected-results.csv"), toCsv(selected, columns));
+    rmSync(join(directory, "attempt-usage.json")); rmSync(join(directory, "attempt-usage.csv"));
+    const integrity = JSON.parse(readFileSync(join(directory, "integrity.json"), "utf8"));
+    integrity.files = integrity.files.filter((file: { path: string }) => !file.path.startsWith("attempt-usage."));
+    for (const file of integrity.files) {
+      const bytes = readFileSync(join(directory, file.path));
+      file.bytes = bytes.length; file.sha256 = createHash("sha256").update(bytes).digest("hex");
+    }
+    writeFileSync(join(directory, "integrity.json"), JSON.stringify(integrity));
+    verifyReportBundle(directory);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("descriptive usage and exports include ungraded, validation-failed and interrupted attempts without filling cross-policy cells", () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-usage-exports-"));
+  try {
+    const a = fixtureRun("complete-a", fixtureConfig("workspace", "same-task", "candidate-a"), "ungraded");
+    const b = fixtureRun("complete-b", fixtureConfig("workspace", "same-task", "candidate-b"), "ungraded");
+    b.contract.execution.instructions = "Distinct immutable policy";
+    b.contractHash = immutableContractHash(b.contract); b.validation!.exitCode = 1;
+    const interrupted = fixtureRun("interrupted-a", fixtureConfig("workspace", "same-task", "candidate-a"), "ungraded");
+    interrupted.executionStatus = "interrupted"; interrupted.runnerError = "fixture interruption";
+    interrupted.metrics.outputTokens = { status: "unavailable", value: null };
+    interrupted.requestAccounting!.physicalRequests = 2;
+    const evidence = evidenceFromRuns([a, b, interrupted]);
+    evidence.attempts[0].metrics.agentTurns = 3; evidence.attempts[0].metrics.toolCalls = 9;
+    evidence.attempts[1].accounting.nativeTokenCount = { schemaVersion: 1, requests: 5, retries: 1, completed: 4,
+      retryWaitMs: 10, fees: "unknown" };
+    const usage = attemptUsageRows(evidence);
+    assert.equal(usage.length, 3);
+    assert.equal(usage[0].agentTurns, 3); assert.equal(usage[0].toolCalls, 9);
+    assert.equal(usage[0].totalTokens, 130); assert.equal(usage[0].nativeCountRequests, null);
+    assert.equal(usage[0].physicalInferenceRequests, 1);
+    assert.equal(usage[1].validation, "fail"); assert.equal(usage[1].acceptance, "ungraded");
+    assert.equal(usage[1].nativeCountRequests, 5); assert.equal(usage[1].physicalInferenceRequests, 1);
+    assert.equal(usage[2].selected, false); assert.equal(usage[2].totalTokens, null);
+    assert.equal(usage[2].physicalInferenceRequests, 2);
+    const selected = selectedResultRows(evidence);
+    assert.equal(selected.length, 4); assert.equal(selected.filter(row => row.status === "missing").length, 2);
+    assert.ok(selected.filter(row => row.status === "missing").every(row => row.totalTokens === null
+      && row.agentTurns === null && row.modelUsageRecords === null && row.physicalInferenceRequests === null));
+    const index = writeReportBundle(evidence, join(root, "report"), { zip: true });
+    assert.deepEqual(JSON.parse(readFileSync(join(root, "report", "attempt-usage.json"), "utf8")), usage);
+    assert.equal(readFileSync(join(root, "report", "attempt-usage.csv"), "utf8"), toCsv(usage, Object.keys(usage[0])));
+    const html = readFileSync(index, "utf8"), visible = html.slice(html.indexOf('<section id="usage">'), html.indexOf('<section id="insights">'));
+    assert.match(visible, /complete-a/); assert.match(visible, /complete-b/); assert.match(visible, /interrupted-a/);
+    assert.match(visible, /Validation: FAIL \(exit 1\)/); assert.match(visible, /Acceptance: UNGRADED/);
+    assert.match(visible, /Count HTTP <b>Unknown/); assert.match(visible, /Inference HTTP <b>2/);
+    assert.match(visible, /not a ranking/); assert.match(html, /raw-evidence/);
+    verifyReportBundle(join(root, "report"));
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("built --runs and --evidence CLI routes keep usage identical in bundles and explicit single-file reports", { timeout: 60000 }, () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-usage-cli-"));
+  try {
+    const run = fixtureRun("recorded", fixtureConfig("workspace", "task", "candidate"), "ungraded");
+    run.artifacts.directory = join(root, "runs", run.runId);
+    run.artifacts.normalizedEvents = join(run.artifacts.directory, "normalized-events.ndjson");
+    mkdirSync(run.artifacts.directory, { recursive: true });
+    writeFileSync(run.artifacts.normalizedEvents, Array.from({ length: 3 },
+      () => JSON.stringify({ eventType: "assistant.turn_start", data: {} })).join("\n"));
+    writeFileSync(join(run.artifacts.directory, "run.json"), JSON.stringify(run));
+    const evidence = evidenceFromRuns([run]), evidencePath = join(root, "evidence.json");
+    writeFileSync(evidencePath, JSON.stringify(evidence));
+    for (const [source, input] of [["--runs", join(root, "runs")], ["--evidence", evidencePath]]) {
+      const output = join(root, `report-${source.slice(2)}`);
+      execFileSync(process.execPath, [resolve("dist", "html-report-cli.js"), source, input, "--bundle", output, "--zip"],
+        { encoding: "utf8", timeout: 15000 });
+      verifyReportBundle(output);
+      const rows = JSON.parse(readFileSync(join(output, "attempt-usage.json"), "utf8"));
+      assert.equal(rows[0].totalTokens, 130); assert.equal(rows[0].agentTurns, 3);
+      assert.equal(rows[0].toolCalls, 0); assert.equal(rows[0].modelUsageRecords, 0);
+      assert.equal(rows[0].physicalInferenceRequests, 1); assert.equal(rows[0].nativeCountRequests, null);
+      assert.equal(rows[0].acceptance, "ungraded");
+      const single = `${output}.html`;
+      execFileSync(process.execPath, [resolve("dist", "html-report-cli.js"), source, input, "--output", single],
+        { encoding: "utf8", timeout: 15000 });
+      const html = readFileSync(single, "utf8");
+      assert.match(html, /<section id="usage">/);
+      assert.match(html.slice(html.indexOf('<section id="usage">'), html.indexOf('<section id="insights">')),
+        /Turns <b>3/);
+    }
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 test("only reviewed, byte-bound publication entries can expose sources/outputs", () => {
   const root = mkdtempSync(join(tmpdir(), "benchmark-approved-"));
   try {

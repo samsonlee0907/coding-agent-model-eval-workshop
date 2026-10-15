@@ -5,7 +5,7 @@ import sanitizeHtml from "sanitize-html";
 import { zipSync, strToU8 } from "fflate";
 import { z } from "zod";
 import { atomicWrite } from "./durable.js";
-import { parseReportEvidence, selectReportCells, sha256Schema, taskTypeAnalysis, type ReportEvidence } from "./evidence.js";
+import { parseReportEvidence, selectReportCells, sha256Schema, taskTypeAnalysis, type ReportEvidence, type EvidenceAttempt } from "./evidence.js";
 import { renderEvidenceReport } from "./report-ui.js";
 
 export const publicationManifestSchema = z.object({
@@ -116,23 +116,46 @@ export function toCsv(rows: readonly Record<string, unknown>[], columns: readonl
   return `${[columns.map(quote).join(","), ...rows.map((row) => columns.map((column) => quote(row[column])).join(","))].join("\r\n")}\r\n`;
 }
 
+function usageFields(attempt: EvidenceAttempt | null) {
+  const metrics = attempt?.metrics;
+  return {
+    wallMs: metrics?.wallMs ?? null, inputTokens: metrics?.inputTokens ?? null, outputTokens: metrics?.outputTokens ?? null,
+    totalTokens: metrics?.inputTokens != null && metrics.outputTokens != null ? metrics.inputTokens + metrics.outputTokens : null,
+    agentTurns: metrics?.agentTurns ?? null, modelUsageRecords: metrics?.modelUsageRecords ?? null,
+    physicalInferenceRequests: metrics?.physicalRequests ?? null, toolCalls: metrics?.toolCalls ?? null,
+    cacheReadTokens: metrics?.cacheReadTokens ?? null, cacheWriteTokens: metrics?.cacheWriteTokens ?? null,
+    cacheReadShare: metrics?.inputTokens != null && metrics.inputTokens > 0 && metrics.cacheReadTokens != null
+      && metrics.cacheReadTokens <= metrics.inputTokens ? metrics.cacheReadTokens / metrics.inputTokens : null,
+    recordedUsd: metrics?.recordedUsd ?? null, recordedCostMultiplier: metrics?.recordedCost ?? null,
+    nativeCountRequests: attempt?.accounting.nativeTokenCount?.requests ?? null,
+    nativeCountRetries: attempt?.accounting.nativeTokenCount?.retries ?? null,
+    nativeCountRetryWaitMs: attempt?.accounting.nativeTokenCount?.retryWaitMs ?? null,
+    nativeCountFees: attempt?.accounting.nativeTokenCount?.fees ?? null,
+  };
+}
+
+export function attemptUsageRows(evidence: ReportEvidence) {
+  const selected = new Set(selectReportCells(evidence).flatMap(cell => cell.selected ? [cell.selected.id] : []));
+  return evidence.attempts.map(attempt => ({
+    task: attempt.task, candidate: attempt.candidate, repeat: attempt.repeat, runId: attempt.id,
+    selected: selected.has(attempt.id), execution: attempt.execution, validation: attempt.validation, acceptance: attempt.acceptance,
+    validationExitCode: attempt.validationExitCode ?? null, validationTimedOut: attempt.validationTimedOut ?? null,
+    ...usageFields(attempt), contractHash: attempt.contractHash, cohortHash: attempt.cohortHash,
+    comparisonHash: attempt.comparisonHash ?? null, policyHash: attempt.policyHash, workspaceHash: attempt.workspaceHash,
+  }));
+}
+
 export function selectedResultRows(evidence: ReportEvidence) {
   const native = evidence.attempts.some(attempt => attempt.accounting.nativeTokenCount);
   return selectReportCells(evidence).map((cell) => ({
     task: cell.task, candidate: cell.candidate, repeat: cell.repeat, status: cell.status,
     runId: cell.selected?.id ?? null, selectionReason: cell.reason, attempts: cell.attempts.length,
     validation: cell.selected?.validation ?? null, requiredFailed: cell.selected?.requiredFailed ?? null,
+    validationExitCode: cell.selected?.validationExitCode ?? null, validationTimedOut: cell.selected?.validationTimedOut ?? null,
     execution: cell.selected?.execution ?? null, phase: cell.selected?.phase ?? null,
     advisoryFailed: cell.selected?.advisoryFailed ?? null, checkErrors: cell.selected?.checkErrors ?? null,
-    wallMs: cell.selected?.metrics.wallMs ?? null, inputTokens: cell.selected?.metrics.inputTokens ?? null,
-    outputTokens: cell.selected?.metrics.outputTokens ?? null, recordedUsd: cell.selected?.metrics.recordedUsd ?? null,
-    recordedCostMultiplier: cell.selected?.metrics.recordedCost ?? null,
+    ...usageFields(cell.selected),
     ...(native ? {
-      physicalInferenceRequests: cell.selected?.metrics.physicalRequests ?? null,
-      nativeCountRequests: cell.selected?.accounting.nativeTokenCount?.requests ?? null,
-      nativeCountRetries: cell.selected?.accounting.nativeTokenCount?.retries ?? null,
-      nativeCountRetryWaitMs: cell.selected?.accounting.nativeTokenCount?.retryWaitMs ?? null,
-      nativeCountFees: cell.selected?.accounting.nativeTokenCount?.fees ?? null,
       allAttemptNativeCountRequests: cell.attempts.length && cell.attempts.every(a => a.accounting.nativeTokenCount)
         ? cell.attempts.reduce((sum, a) => sum + a.accounting.nativeTokenCount!.requests, 0) : null,
       allAttemptNativeCountRetries: cell.attempts.length && cell.attempts.every(a => a.accounting.nativeTokenCount)
@@ -157,11 +180,14 @@ export function writeReportBundle(input: ReportEvidence, output: string, options
     const approved = options.publication ? prepareApprovedPreviews(options.publication, evidence) : { previews: [], originals: new Map<string, Uint8Array>() };
     const selected = selectedResultRows(evidence);
     const analysis = taskTypeAnalysis(evidence);
+    const usage = attemptUsageRows(evidence);
     const files = new Map<string, Uint8Array>([
       ["index.html", strToU8(renderEvidenceReport(evidence, approved.previews, options.details))],
       ["evidence.json", strToU8(`${JSON.stringify(evidence, null, 2)}\n`)],
       ["selected-results.json", strToU8(`${JSON.stringify(selected, null, 2)}\n`)],
       ["selected-results.csv", strToU8(toCsv(selected, Object.keys(selected[0] ?? { task: "", candidate: "", status: "" })))],
+      ["attempt-usage.json", strToU8(`${JSON.stringify(usage, null, 2)}\n`)],
+      ["attempt-usage.csv", strToU8(toCsv(usage, Object.keys(usage[0] ?? { task: "", candidate: "", runId: "" })))],
       ["task-types.json", strToU8(`${JSON.stringify(analysis, null, 2)}\n`)],
       ["task-types.csv", strToU8(toCsv(analysis, Object.keys(analysis[0] ?? { taskType: "", samples: "" })))],
       ["previews.json", strToU8(`${JSON.stringify(approved.previews, null, 2)}\n`)],
@@ -195,8 +221,23 @@ export function verifyReportBundle(directory: string): void {
     if (bytes.length !== file.bytes || createHash("sha256").update(bytes).digest("hex") !== file.sha256) throw new Error(`Publication integrity verification failed for ${file.path}.`);
   }
   const evidence = parseReportEvidence(JSON.parse(readFileSync(join(directory, "evidence.json"), "utf8")));
-  const selected = JSON.parse(readFileSync(join(directory, "selected-results.json"), "utf8"));
-  if (selectReportCells(evidence).length !== integrity.cells || JSON.stringify(selected) !== JSON.stringify(selectedResultRows(evidence))) throw new Error("Publication coverage/selection mismatch.");
+  const selected = z.array(z.record(z.string(), z.unknown())).parse(JSON.parse(readFileSync(join(directory, "selected-results.json"), "utf8")));
+  const expectedSelected: Record<string, unknown>[] = selectedResultRows(evidence);
+  const hasUsageExport = existsSync(join(directory, "attempt-usage.json"));
+  if (!hasUsageExport) {
+    const addedColumns = ["validationExitCode", "validationTimedOut", "totalTokens", "agentTurns", "modelUsageRecords",
+      "toolCalls", "cacheReadTokens", "cacheWriteTokens", "cacheReadShare",
+      ...(!evidence.attempts.some(attempt => attempt.accounting.nativeTokenCount) ? ["physicalInferenceRequests",
+        "nativeCountRequests", "nativeCountRetries", "nativeCountRetryWaitMs", "nativeCountFees"] : [])];
+    for (const [index, expected] of expectedSelected.entries()) {
+      for (const column of addedColumns) if (!Object.hasOwn(selected[index] ?? {}, column)) delete expected[column];
+    }
+  }
+  if (selectReportCells(evidence).length !== integrity.cells || JSON.stringify(selected) !== JSON.stringify(expectedSelected)) throw new Error("Publication coverage/selection mismatch.");
+  if (hasUsageExport
+      && JSON.stringify(JSON.parse(readFileSync(join(directory, "attempt-usage.json"), "utf8"))) !== JSON.stringify(attemptUsageRows(evidence))) {
+    throw new Error("Publication attempt usage mismatch.");
+  }
   const previews: ApprovedPreview[] = JSON.parse(readFileSync(join(directory, "previews.json"), "utf8"));
   for (const preview of previews) if (preview.download && !integrity.files.some((f) => f.path === preview.download)) throw new Error("Missing approved download.");
 }

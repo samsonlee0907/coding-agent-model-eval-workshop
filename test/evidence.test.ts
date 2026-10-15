@@ -1,10 +1,69 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { immutableContractHash } from "../src/contract.js";
 import { evidenceFromRuns, parseReportEvidence, selectReportCells, taskTypeAnalysis, attemptFromRun, evidenceHash } from "../src/evidence.js";
 import { fixtureConfig, fixtureRun } from "./fixtures/revamp.js";
 import { providerTerminal } from "../src/provider-stream.js";
 import { renderEvidenceReport } from "../src/report-ui.js";
+import { extractModelCalls } from "../src/metrics.js";
+import { event } from "./fixtures/events.js";
+
+test("usage adapter preserves observed turns, tools and cache independently of SDK/HTTP counters and acceptance", () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-usage-evidence-"));
+  try {
+    const run = fixtureRun("usage", fixtureConfig(), "ungraded");
+    run.artifacts.normalizedEvents = join(root, "events.ndjson");
+    writeFileSync(run.artifacts.normalizedEvents, [
+      ...Array.from({ length: 3 }, () => ({ eventType: "assistant.turn_start", data: { prompt: "PRIVATE-TURN-TEXT" } })),
+      { eventType: "assistant.message", data: { content: "PRIVATE-ANSWER" } },
+    ].map(value => JSON.stringify(value)).join("\n"));
+    run.modelCalls = extractModelCalls(Array.from({ length: 4 }, (_, sequence) => event(sequence, "assistant.usage", run.startedAt, { inputTokens: 10, outputTokens: 5 })));
+    run.toolCalls = [{ toolCallId: "tool-1", toolName: "shell", agentId: null, startedAt: run.startedAt,
+      completedAt: null, resultType: null, error: null }];
+    run.usageMetrics = { modelMetrics: { requests: { count: 999 } }, turns: 999 };
+    run.requestAccounting!.physicalRequests = 5;
+    run.metrics.cacheReadTokens = { status: "available", value: 70 };
+    run.metrics.cacheWriteTokens = { status: "unavailable", value: null };
+    run.validation!.exitCode = 1;
+    const evidence = evidenceFromRuns([run]), attempt = evidence.attempts[0];
+    assert.equal(attempt.acceptance, "ungraded"); assert.equal(attempt.validation, "fail");
+    assert.equal(attempt.validationExitCode, 1); assert.equal(attempt.validationTimedOut, false);
+    assert.equal(attempt.metrics.agentTurns, 3);
+    assert.equal(attempt.metrics.modelUsageRecords, 4); assert.equal(attempt.metrics.physicalRequests, 5);
+    assert.equal(attempt.metrics.toolCalls, 1);
+    assert.equal(attempt.metrics.cacheReadTokens, 70); assert.equal(attempt.metrics.cacheWriteTokens, null);
+    assert.doesNotMatch(JSON.stringify(evidence), /PRIVATE-TURN-TEXT|PRIVATE-ANSWER/);
+    const old = structuredClone(evidence);
+    delete old.attempts[0].metrics.agentTurns; delete old.attempts[0].metrics.toolCalls;
+    delete old.attempts[0].metrics.cacheReadTokens; delete old.attempts[0].metrics.cacheWriteTokens;
+    delete old.attempts[0].validationExitCode; delete old.attempts[0].validationTimedOut;
+    assert.equal(parseReportEvidence(old).attempts[0].metrics.agentTurns, undefined);
+    run.artifacts.normalizedEvents = join(root, "missing.ndjson");
+    assert.equal(attemptFromRun(run, "task", "candidate").metrics.agentTurns, null);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("turn counts use the bounded complete archive, never a truncated replay or absent stream", () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-usage-bounds-"));
+  try {
+    const run = fixtureRun("turns", fixtureConfig(), "ungraded");
+    run.artifacts.normalizedEvents = join(root, "events.ndjson");
+    writeFileSync(run.artifacts.normalizedEvents, Array.from({ length: 1005 },
+      () => JSON.stringify({ eventType: "assistant.turn_start", data: {} })).join("\n"));
+    const attempt = attemptFromRun(run, "task", "candidate");
+    assert.equal(attempt.replay.length, 1000); assert.equal(attempt.replayState, "truncated");
+    assert.equal(attempt.metrics.agentTurns, 1005);
+    writeFileSync(run.artifacts.normalizedEvents, Buffer.alloc(16 * 1024 * 1024 + 1, 32));
+    const oversized = attemptFromRun(run, "task", "candidate");
+    assert.equal(oversized.metrics.agentTurns, null); assert.equal(oversized.replayState, "truncated");
+    assert.equal(oversized.replay.length, 0);
+    writeFileSync(run.artifacts.normalizedEvents, "invalid events");
+    assert.throws(() => attemptFromRun(run, "task", "candidate"), /JSON/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
 
 test("latest clean content FAIL replaces PASS; newer interruption does not", () => {
   const pass = fixtureRun("old-pass"), fail = fixtureRun("new-fail", fixtureConfig(), "fail"), interrupted = fixtureRun("interrupted");

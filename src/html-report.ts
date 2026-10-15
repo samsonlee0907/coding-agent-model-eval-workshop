@@ -14,7 +14,7 @@ import type {
   LlmJudgeScore,
   Metric,
 } from "./types.js";
-import { evidenceFromRuns } from "./evidence.js";
+import { evidenceFromRuns, recordedAgentTurns } from "./evidence.js";
 import { renderEvidenceReport } from "./report-ui.js";
 import { atomicWrite } from "./durable.js";
 
@@ -446,7 +446,7 @@ function publicationEvidenceSection(
     candidate, attempts, wall: completeMean(attempts, (run) => metricNumber(run.metrics.e2eMs)),
     output: completeMean(attempts, (run) => metricNumber(run.metrics.outputTokens)),
     calls: completeMean(attempts, (run) => run.modelCalls.length),
-    turns: completeMean(attempts, agentTurns),
+    turns: completeMean(attempts, recordedAgentTurns),
     cache: completeCacheShare(attempts), minimum: minimum(attempts),
   }));
   const rank = (
@@ -512,11 +512,6 @@ function completeCacheShare(runs: readonly BenchmarkRun[]): number | null {
   if (values.some((value) => value.input === null || value.reads === null)) return null;
   const input = values.reduce((sum, value) => sum + value.input!, 0), reads = values.reduce((sum, value) => sum + value.reads!, 0);
   return input > 0 && reads <= input ? reads / input : null;
-}
-function agentTurns(run: BenchmarkRun): number | null {
-  if (!existsSync(run.artifacts.normalizedEvents)) return null;
-  return readFileSync(run.artifacts.normalizedEvents, "utf8").split(/\r?\n/).filter(Boolean)
-    .map((line) => JSON.parse(line) as { eventType?: string }).filter((event) => event.eventType === "assistant.turn_start").length;
 }
 function replayEvents(run: BenchmarkRun): Array<{ type: string; text: string }> {
   if (!existsSync(run.artifacts.normalizedEvents)) return [];

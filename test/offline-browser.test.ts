@@ -43,7 +43,12 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("request", (request) => { if (/^https?:/.test(request.url())) remote.push(request.url()); });
     await page.goto(pathToFileURL(index).href);
-    assert.equal(await page.locator("[data-cell]").count(), 280);
+    assert.equal(await page.locator("#matrix [data-cell]").count(), 280);
+    assert.equal(await page.locator("#usage-body tr").count(), 280);
+    assert.equal(await page.locator(".usage-card").count(), 12);
+    assert.match(await page.locator("#cell-detail .evidence-panel").textContent() ?? "", /SDK model-usage records/);
+    assert.equal(await page.locator("#cell-detail > pre").count(), 0);
+    assert.equal(await page.locator(".raw-evidence").getAttribute("open"), null);
     await page.locator("#type").selectOption("custom-build");
     assert.equal(await page.locator("#matrix-body tr:visible").count(), 20);
     await page.locator("#filter").fill("Task-2");
@@ -53,6 +58,10 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     await page.locator("#csv").click();
     const path = await (await download).path(); assert.ok(path);
     assert.equal(readFileSync(path, "utf8"), readFileSync(join(root, "report", "selected-results.csv"), "utf8"));
+    const usageDownload = page.waitForEvent("download");
+    await page.locator("#usage-csv").click();
+    const usagePath = await (await usageDownload).path(); assert.ok(usagePath);
+    assert.equal(readFileSync(usagePath, "utf8"), readFileSync(join(root, "report", "attempt-usage.csv"), "utf8"));
     assert.equal(await page.locator("iframe").getAttribute("sandbox"), "");
     assert.equal(await page.frameLocator("iframe").locator("h2").textContent(), "Approved inert output");
     assert.equal(await page.frameLocator("iframe").locator("script,form,img").count(), 0);
@@ -73,6 +82,61 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     await page.locator("#cell-selector").focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
     assert.ok((await page.locator("#cell-detail").textContent())?.includes("Latest clean execution"));
+    assert.deepEqual(errors, []); assert.deepEqual(remote, []);
+    await page.close();
+  } finally { await browser.close(); rmSync(root, { recursive: true, force: true }); }
+});
+
+test("offline usage inspector keeps ungraded validation failures and interrupted counters readable without selecting missing work", {
+  timeout: 60000, skip: !edgeAvailable && !process.env.BENCHMARK_BROWSER_EXECUTABLE ? "Install Edge or set BENCHMARK_BROWSER_EXECUTABLE for the offline browser gate." : false,
+}, async () => {
+  const root = mkdtempSync(join(tmpdir(), "benchmark-usage-browser-"));
+  const browser = await chromium.launch({ channel: edgeAvailable ? "msedge" : undefined, executablePath: process.env.BENCHMARK_BROWSER_EXECUTABLE, headless: true });
+  try {
+    const completed = fixtureRun("validation-failed", fixtureConfig("workspace", "task", "candidate-a"), "ungraded");
+    completed.validation!.exitCode = 1;
+    completed.artifacts.normalizedEvents = join(root, "complete-events.ndjson");
+    writeFileSync(completed.artifacts.normalizedEvents, Array.from({ length: 4 },
+      () => JSON.stringify({ eventType: "assistant.turn_start", data: { content: "NEVER-PUBLISH" } })).join("\n"));
+    const interrupted = fixtureRun("interrupted", fixtureConfig("workspace", "task", "candidate-b"), "ungraded");
+    interrupted.executionStatus = "interrupted"; interrupted.runnerError = "fixture";
+    interrupted.metrics.inputTokens = { status: "unavailable", value: null };
+    interrupted.metrics.cacheReadTokens = { status: "unavailable", value: null };
+    interrupted.requestAccounting!.physicalRequests = 2; interrupted.requestAccounting!.ambiguousRequests = 1;
+    const evidence = evidenceFromRuns([completed, interrupted]);
+    evidence.candidates.push({ id: "missing", model: "candidate-c", provider: "openai" });
+    evidence.attempts[1].accounting.nativeTokenCount = { schemaVersion: 1, requests: 5, retries: 1, completed: 4, retryWaitMs: 10, fees: "unknown" };
+    const index = writeReportBundle(evidence, join(root, "report"));
+    assert.doesNotMatch(readFileSync(index, "utf8"), /NEVER-PUBLISH/);
+    const page = await browser.newPage({ viewport: { width: 1280, height: 900 }, acceptDownloads: true });
+    const errors: string[] = [], remote: string[] = [];
+    page.on("pageerror", error => errors.push(error.message));
+    page.on("request", request => { if (/^https?:/.test(request.url())) remote.push(request.url()); });
+    await page.goto(pathToFileURL(index).href);
+    assert.equal(await page.locator("#matrix [data-cell]").count(), 3);
+    assert.equal(await page.locator(".usage-card").count(), 2);
+    assert.equal(await page.locator("#usage-body tr").count(), 2);
+    const panel = page.locator("#cell-detail .evidence-panel");
+    assert.match(await panel.textContent() ?? "", /Candidate validationFAIL \/ exit 1/);
+    assert.match(await panel.textContent() ?? "", /Independent acceptanceUNGRADED/);
+    assert.match(await panel.textContent() ?? "", /Observed agent turns4/);
+    assert.match(await panel.textContent() ?? "", /Total tokens \(input \+ output\)130/);
+    assert.equal(await page.locator(".raw-evidence").getAttribute("open"), null);
+    await page.locator('#usage-body [data-attempt="interrupted"]').click();
+    assert.match(await panel.textContent() ?? "", /Recorded attempt \/ not selected/);
+    assert.match(await panel.textContent() ?? "", /Physical inference HTTP requests2/);
+    assert.match(await panel.textContent() ?? "", /Native count HTTP requests \(not inference\)5/);
+    assert.match(await panel.textContent() ?? "", /Observed agent turnsUnknown/);
+    assert.match(await panel.textContent() ?? "", /Total tokens \(input \+ output\)Unknown/);
+    await page.locator("#matrix .missing").click();
+    assert.match(await page.locator("#cell-detail").textContent() ?? "", /No recorded attempt/);
+    assert.equal(await page.locator("#cell-detail .evidence-panel").count(), 0);
+    const download = page.waitForEvent("download");
+    await page.locator("#usage-json").click();
+    const path = await (await download).path(); assert.ok(path);
+    assert.equal(readFileSync(path, "utf8"), readFileSync(join(root, "report", "attempt-usage.json"), "utf8"));
+    await page.setViewportSize({ width: 390, height: 844 });
+    assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
     assert.deepEqual(errors, []); assert.deepEqual(remote, []);
     await page.close();
   } finally { await browser.close(); rmSync(root, { recursive: true, force: true }); }

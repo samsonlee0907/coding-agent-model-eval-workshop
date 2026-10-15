@@ -476,6 +476,40 @@ completion. Selected CSV/JSON include `execution`, `phase`, `status` and
 separate `validation` fields. Use `campaign status/report` or
 `report:html --evidence <normalized-campaign-evidence.json>` for the declared
 campaign's policies, grades and missing cells.
+
+The main **Recorded tokens & agent activity** section is descriptive and does
+not require a semantic grade or matched task-type comparison. It shows selected
+clean executions and, clearly labeled as not selected, the latest recorded
+attempt for interrupted-only cells. Its table retains every attempt, including
+validation failures and UNGRADED runs. Cross-policy missing cells stay missing.
+Run inspection leads with readable execution, validation, acceptance, usage
+and provenance; raw immutable JSON and sanitized replay remain collapsed.
+
+Token totals are captured input + output subtotals only when both are known.
+Reasoning is already included in output; cache-read/write tokens are displayed
+separately and never added again. Cache-read share is recorded cache reads /
+recorded input, only when that denominator is positive and reads do not exceed
+input; it is descriptive, not provider-normalized billing. Wall time preserves
+the recorded `e2eMs` metric. Agent turns count `assistant.turn_start` events in
+the complete normalized archive, not user rounds, `modelCalls.length` or SDK
+request summaries. Missing/oversized archives mean unknown turns; replay may
+be truncated for display while a bounded complete archive supplies the count.
+Tool-call records come from `run.toolCalls.length`; SDK model-usage records
+come from `run.modelCalls.length`. Physical inference requests come only from
+recorded request accounting. Native-count HTTP requests/retries/unknown fees
+are separate, never added to inference requests. Missing native accounting
+is unknown, not an inferred zero. Counters describe captured evidence and do
+not prove that every response was metered or that spend was free.
+
+These optional version-1 evidence fields are backward-compatible; absent
+fields in old normalized evidence remain unknown. Selected CSV/JSON include
+the same usage fields without changing selection. Portable folders/ZIPs and
+HTML downloads also contain `attempt-usage.csv` / `attempt-usage.json` for all
+retained attempts, with explicit selection and cohort/contract/comparison
+bindings. `--runs`, `--evidence`, campaign reports, and explicit single-file
+reports use the same adapters/renderer; no model rerun or external request is
+needed. Recorded USD estimates and SDK cost multipliers stay distinct.
+
 The legacy `portfolio --runs` summarizes retained candidate-validation
 outcomes only; `resolved` means that validator passed after clean execution.
 It does not load campaign declarations or external `grade.json`, so required

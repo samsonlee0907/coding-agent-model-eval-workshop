@@ -52,6 +52,7 @@ const attemptSchema = z.object({
   startedAt: date, completedAt: date,
   execution: z.enum(["completed", "interrupted", "error"]),
   phase: id, validation: z.enum(["pass", "fail", "error", "unavailable"]),
+  validationExitCode: z.number().int().nullable().optional(), validationTimedOut: z.boolean().optional(),
   acceptance: z.enum(["pass", "fail", "error", "ungraded"]),
   requiredPassed: count, requiredFailed: count, advisoryFailed: count, checkErrors: count,
   requiredErrors: count.optional(),
@@ -60,6 +61,8 @@ const attemptSchema = z.object({
     wallMs: optionalNumber, inputTokens: optionalNumber, outputTokens: optionalNumber,
     recordedCost: optionalNumber, recordedUsd: optionalNumber,
     modelUsageRecords: count, physicalRequests: optionalNumber,
+    agentTurns: count.nullable().optional(), toolCalls: count.nullable().optional(),
+    cacheReadTokens: optionalNumber.optional(), cacheWriteTokens: optionalNumber.optional(),
   }).strict(),
   accounting: z.object({
     reservedTokens: optionalNumber, ambiguousRequests: optionalNumber, rejectedRequests: optionalNumber,
@@ -254,6 +257,7 @@ export function attemptFromRun(
   const phase = !completed ? "execution" : required.length ? "graded"
     : run.contract.task.conformanceProbe?.checks.some((check) => check.severity !== "advisory") ? "grading-pending" : "finalized";
   const number = (name: keyof BenchmarkRun["metrics"]) => run.metrics[name].status === "available" ? run.metrics[name].value : null;
+  const metadata = loadRunMetadata(run);
   return {
     id: run.runId, task, candidate, repeat, contractHash: run.contractHash,
     promptHash: evidenceHash({ prompt: run.contract.task.prompt, instructions: run.contract.execution.instructions }),
@@ -261,7 +265,8 @@ export function attemptFromRun(
     workspaceHash: run.workspaceHash ?? null, startedAt: run.startedAt, completedAt: run.completedAt,
     comparisonHash: comparableBaselineSignature(run.contract) ? evidenceHash(comparableBaselineSignature(run.contract)) : null,
     execution: completed ? "completed" : "interrupted", phase,
-    validation, acceptance, requiredPassed: required.filter((c) => c.status === "pass").length,
+    validation, ...(run.validation ? { validationExitCode: run.validation.exitCode, validationTimedOut: run.validation.timedOut } : {}),
+    acceptance, requiredPassed: required.filter((c) => c.status === "pass").length,
     requiredFailed: failed, advisoryFailed: checks.filter((c) => c.severity === "advisory" && ["fail", "weak"].includes(c.status)).length,
     checkErrors: errors, requiredErrors, policyHash: grade?.policyHash ?? (run.contract.task.conformanceProbe ? evidenceHash(run.contract.task.conformanceProbe) : null),
     evaluatorVersion: grade?.evaluatorVersion ?? (probe ? "legacy-conformance-v1" : null), calibrated: grade?.calibrated ?? null,
@@ -269,6 +274,8 @@ export function attemptFromRun(
       wallMs: number("e2eMs"), inputTokens: number("inputTokens"), outputTokens: number("outputTokens"),
       recordedCost: number("cost"), recordedUsd: run.recordedPricing?.estimatedUsd ?? null, modelUsageRecords: run.modelCalls.length,
       physicalRequests: run.requestAccounting?.physicalRequests ?? null,
+      agentTurns: metadata.agentTurns, toolCalls: run.toolCalls.length,
+      cacheReadTokens: number("cacheReadTokens"), cacheWriteTokens: number("cacheWriteTokens"),
     },
     accounting: {
       reservedTokens: run.requestAccounting?.reservedTokens ?? null, ambiguousRequests: run.requestAccounting?.ambiguousRequests ?? null,
@@ -286,20 +293,31 @@ export function attemptFromRun(
     } } : {}),
     outcome: run.outcome.class, wireApi: run.contract.foundryProvider?.wireApi ?? (run.contract.candidate.provider === "openai" ? "completions (legacy)" : "messages"),
     authMode: run.contract.foundryProvider?.auth?.mode ?? "key (legacy)", runtimeHash: evidenceHash(run.contract.runtime),
-    ...loadMetadataReplay(run),
+    replay: metadata.replay, replayState: metadata.replayState,
   };
 }
 
 export function loadMetadataReplay(run: BenchmarkRun): Pick<EvidenceAttempt, "replay" | "replayState"> {
-  if (!existsSync(run.artifacts.normalizedEvents)) return { replay: [], replayState: "missing" };
-  if (statSync(run.artifacts.normalizedEvents).size > 16 * 1024 * 1024) return { replay: [], replayState: "truncated" };
+  const { replay, replayState } = loadRunMetadata(run);
+  return { replay, replayState };
+}
+
+export function recordedAgentTurns(run: BenchmarkRun): number | null {
+  return loadRunMetadata(run).agentTurns;
+}
+
+function loadRunMetadata(run: BenchmarkRun): Pick<EvidenceAttempt, "replay" | "replayState"> & { agentTurns: number | null } {
+  if (!existsSync(run.artifacts.normalizedEvents)) return { replay: [], replayState: "missing", agentTurns: null };
+  if (statSync(run.artifacts.normalizedEvents).size > 16 * 1024 * 1024) return { replay: [], replayState: "truncated", agentTurns: null };
   const replay: EvidenceAttempt["replay"] = [];
+  let agentTurns = 0, truncated = false;
   const name = (value: unknown): string | null => typeof value === "string" && /^[a-zA-Z0-9_./:-]{1,150}$/.test(value) ? value : null;
   const number = (value: unknown): number | null => typeof value === "number" && Number.isFinite(value) ? value : null;
   const boolean = (value: unknown): boolean | null => typeof value === "boolean" ? value : null;
   const lines = readFileSync(run.artifacts.normalizedEvents, "utf8").split(/\r?\n/).filter(Boolean);
   for (const line of lines) {
     const event = z.object({ eventType: z.string(), data: z.record(z.string(), z.unknown()) }).passthrough().parse(JSON.parse(line));
+    if (event.eventType === "assistant.turn_start") agentTurns++;
     const d = event.data;
     const metadata = event.eventType === "assistant.usage" ? {
       model: name(d.model), inputTokens: number(d.inputTokens), outputTokens: number(d.outputTokens),
@@ -311,10 +329,12 @@ export function loadMetadataReplay(run: BenchmarkRun): Pick<EvidenceAttempt, "re
       : event.eventType === "tool.execution_complete" ? { toolCallId: name(d.toolCallId), success: boolean(d.success) }
       : event.eventType === "runner.validation_finished" ? { exitCode: number(d.exitCode), timedOut: boolean(d.timedOut), durationMs: number(d.durationMs) }
       : ["runner.run_started", "runner.run_finished", "assistant.turn_start", "session.idle"].includes(event.eventType) ? { event: event.eventType } : null;
-    if (metadata) replay.push({ type: event.eventType, text: JSON.stringify(metadata) });
-    if (replay.length === 1000) return { replay, replayState: "truncated" };
+    if (metadata) {
+      if (replay.length < 1000) replay.push({ type: event.eventType, text: JSON.stringify(metadata) });
+      else truncated = true;
+    }
   }
-  return { replay, replayState: "available" };
+  return { replay, replayState: truncated ? "truncated" : "available", agentTurns };
 }
 
 export function evidenceFromRuns(runs: readonly BenchmarkRun[], campaignId = "imported-runs"): ReportEvidence {
