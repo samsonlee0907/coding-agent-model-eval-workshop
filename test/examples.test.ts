@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { execFileSync } from "node:child_process";
@@ -10,9 +11,12 @@ import { fixtureRun, fixtureRuntime } from "./fixtures/revamp.js";
 import { assertCliArguments } from "../src/cli-arguments.js";
 import { authSchema, foundryScope, providerSchema } from "../src/auth.js";
 import { isolationSchema } from "../src/controlled-worker.js";
-import { parseQuickstartOptions } from "../src/quickstart.js";
+import { createQuickstartWorkspace, parseQuickstartOptions } from "../src/quickstart.js";
 import { parseEvaluationOptions } from "../src/evaluator-options.js";
 import { loadRequestBounds } from "../src/request-policy.js";
+import { immutableContractHash } from "../src/contract.js";
+import { executionProfile } from "../src/runner.js";
+import type { RunContract } from "../src/types.js";
 
 test("documented custom campaign prepares, grades varied categories, resumes and publishes without inference", async () => {
   const root = mkdtempSync(join(tmpdir(), "benchmark-example-"));
@@ -117,46 +121,67 @@ test("documented native-count keyless quickstart prepares and doctor parses with
   } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
-test("public README leads with bounded inline-task provider quickstarts and offline reporting", () => {
+test("public README preserves the five-step flow with parallel bounded GPT and Claude paths", () => {
   const readme = readFileSync(resolve("README.md"), "utf8");
   const guide = readFileSync(resolve("docs", "RUNNING_THE_TOOLKIT.md"), "utf8");
-  assert.match(readme, /^# Coding Agent Model Evaluation Toolkit\r?\n\r?\nA local TypeScript\/npm toolkit/);
+  assert.match(readme, /^# Coding Agent Model Evaluation Workshop\r?\n\r?\nA TypeScript\/npm toolkit/);
   assert.ok(readme.split(/\r?\n/).length < 480, "Keep README an onboarding overview, not the full operator reference.");
   assert.deepEqual([...readme.matchAll(/^## (.+)$/gm)].map((heading) => heading[1].trim()),
-    ["Prerequisites", "1. Install the reviewed version", "2. Review bounds and choose one simple task",
-      "3. Prepare and run each provider", "4. Generate, open and share the report",
-      "How grading works", "Usage and optional pricing", "Optional model-based rubric review", "More detail"]);
-  for (const marker of ["setup", "auth", "openai", "anthropic", "report"]) {
-    assert.equal([...readme.matchAll(new RegExp(`# first-run:${marker}(?:[^\\r\\n]*)\\r?\\n`, "g"))].length, 1);
+    ["Start here", "Reading a generated report", "Task design and supported configuration", "Scope"]);
+  assert.deepEqual([...readme.matchAll(/^### ([1-5]\. .+)$/gm)].map((heading) => heading[1].trim()),
+    ["1. Install", "2. Configure Foundry", "3. Try one exploratory task",
+      "4. Run a controlled cohort", "5. Generate decision artifacts"]);
+  for (const marker of ["install", "auth", "bounds", "models", "report"]) {
+    for (const shell of ["powershell", "bash"]) {
+      assert.equal([...readme.matchAll(new RegExp(`# first-run:${marker}-${shell}\\r?\\n`, "g"))].length, 1);
+    }
   }
-  const tasks = [...readme.matchAll(/^\$task = '(.+)'$/gm)].map((match) => match[1]);
-  assert.equal(tasks.length, 3);
-  assert.equal(new Set(tasks).size, 1, "Both provider examples must use the same inline task.");
+  const powershellTask = /^\$task = '(.+)'$/m.exec(readme)?.[1];
+  const bashTask = /^task='(.+)'$/m.exec(readme)?.[1];
+  assert.ok(powershellTask);
+  assert.equal(bashTask, powershellTask, "PowerShell and Bash must use the same task.");
+  assert.match(readme, /--branch samsonlee0907-staging-benchmark-revamp --single-branch/);
+  assert.match(readme, /az account show --subscription \$subscriptionId/);
+  assert.match(readme, /az account show --subscription "\$subscription_id"/);
+  assert.match(readme, /account\.tenantId -ne \$tenantId/);
+  assert.match(readme, /--auth key/);
+  assert.match(readme, /maxTokens=20\*\$gptTpm/);
+  assert.match(readme, /"maxTokens":\$\(\(20\*claude_tpm\)\)/);
+  assert.doesNotMatch(readme, /tokensPerMinute["'=:\s]+200000/);
+  assert.match(readme, /Invoke-Item -LiteralPath/);
+  assert.match(readme, /open "\$root\/report-v1\/index\.html"/);
+  assert.match(readme, /xdg-open "\$root\/report-v1\/index\.html"/);
+  assert.match(readme, /paid inference immediately/i);
+  assert.match(readme, /Execution completion, task validation, and independent acceptance are separate/);
+  assert.match(readme, /Unknown values stay unknown/);
+  assert.match(readme, /keyless authentication boundary/);
+  assert.match(readme, /campaign workflow/);
+  assert.match(readme, /optional judge is a separate paid request/);
   assert.ok(!guide.includes("## Lessons from observed runs, not guarantees"));
   assert.ok(!guide.includes("132,046") && !guide.includes("50,000 TPM"));
   for (const command of ["doctor", "campaign", "quickstart", "bench", "report:html", "portfolio", "prices:refresh", "evaluate"]) {
     assert.ok(guide.includes(`| \`npm run ${command} -- `), `Missing relocated command reference: ${command}`);
   }
-  assert.match(readme, /required\s+acceptance stays UNGRADED/);
-  assert.match(readme, /Anthropic runtime\/initial-fit doctor controls are currently unsupported/);
-  assert.match(readme, /### Keyless setup \(preferred\)/);
-  assert.match(readme, /az account show --subscription \$subscriptionId/);
-  assert.match(readme, /account\.tenantId -ne \$tenantId/);
-  assert.match(readme, /SDK cost multipliers are not USD/);
-  assert.match(readme, /seven integer dimensions, 1-5/);
-  assert.match(readme, /campaign `grade\.json` automatically/);
-  for (const marker of ["openai", "anthropic"]) {
-    const block = new RegExp(`# first-run:${marker}\\r?\\n([\\s\\S]*?)\\r?\\n\`\`\``).exec(readme);
+  const modelBlocks = ["powershell", "bash"].map((shell) => {
+    const block = new RegExp(`# first-run:models-${shell}\\r?\\n([\\s\\S]*?)\\r?\\n\`\`\``).exec(readme);
     assert.ok(block);
-    assert.match(block[1], /--auth entra --credential azure-cli --subscription-id \$subscriptionId/);
-    assert.doesNotMatch(block[1], /--tenant-id|--auth key/);
-    assert.ok(block[1].indexOf("--acquire-auth") > block[1].indexOf("--prepare-only"));
-    if (marker === "openai") assert.ok(block[1].indexOf("--acquire-auth") > block[1].indexOf("--verify-request-fit"));
-    else assert.doesNotMatch(block[1], /--verify-runtime|--verify-request-fit|--wire-api/);
+    return block[1];
+  });
+  for (const block of modelBlocks) {
+    const commands = [...block.matchAll(/^npm run quickstart -- (.+)$/gm)].map((match) => match[1]);
+    assert.equal(commands.length, 2);
+    assert.match(commands[0], /--provider openai .*--wire-api responses/);
+    assert.match(commands[1], /--provider anthropic/);
+    assert.doesNotMatch(commands[1], /--wire-api|--native-token-count|--anthropic-thinking/);
+    for (const command of commands) {
+      assert.match(command, /--auth entra --credential azure-cli --subscription-id/);
+      assert.match(command, /--reasoning-effort high --bounds/);
+      assert.doesNotMatch(command, /--tenant-id|--prepare-only|--verify-runtime|--verify-request-fit/);
+    }
   }
 });
 
-test("onboarding auth/isolation fragments and immediate-run commands match implemented parsers", () => {
+test("onboarding command adapters parse and prepare both shell/provider recipes without credentials or network", () => {
   const readme = readFileSync(resolve("README.md"), "utf8");
   const keyless = readFileSync(resolve("docs", "KEYLESS_AUTH.md"), "utf8");
   const isolated = readFileSync(resolve("docs", "ISOLATED_EXECUTION.md"), "utf8");
@@ -172,26 +197,153 @@ test("onboarding auth/isolation fragments and immediate-run commands match imple
   const config = JSON.parse(policy[1]);
   config.isolation.image = `owner/fixture@sha256:${"a".repeat(64)}`;
   assert.equal(isolationSchema.parse(config.isolation).mode, "container");
-  const commands = [...(readme + keyless).matchAll(/^npm run (quickstart|evaluate) -- (.+)$/gm)];
-  assert.equal(commands.length, 5);
-  for (const command of commands) {
-    const args = (command[2].match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((arg) => {
-      if (arg === "$deployment") return "fixture-deployment";
-      if (arg === "$task") return "Common inline task";
-      if (arg === "$tenantId") return "11111111-2222-4333-8444-555555555555";
-      if (arg === "$subscriptionId") return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
-      if (/^"\$root\\(?:openai|anthropic|judge)-bounds\.json"$/.test(arg)) return resolve("examples", "request-bounds.example.json");
-      return arg.replace(/^['"]|['"]$/g, "");
+  const root = mkdtempSync(join(tmpdir(), "readme-onboarding-"));
+  try {
+    const blocks = ["powershell", "bash"].map((shell) => {
+      const block = new RegExp(`# first-run:models-${shell}\\r?\\n([\\s\\S]*?)\\r?\\n\`\`\``).exec(readme);
+      assert.ok(block);
+      return block[1];
+    });
+    const commands = blocks.flatMap((block) =>
+      [...block.matchAll(/^npm run quickstart -- (.+)$/gm)].map((match) => match[1]));
+    assert.equal(commands.length, 4);
+    const tasks = new Set<string>();
+    for (const [index, command] of commands.entries()) {
+      const args = (command.match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((token) => {
+        const arg = token.replace(/^['"]|['"]$/g, "");
+        if (arg === "$task") return "Common inline task";
+        if (["$gptDeployment", "$claudeDeployment", "$gpt_deployment", "$claude_deployment"].includes(arg)) {
+          return arg.toLowerCase().includes("claude") ? "fixture-claude" : "fixture-gpt";
+        }
+        if (["$subscriptionId", "$subscription_id"].includes(arg)) {
+          return "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        }
+        if (/^\$root[\\/](?:gpt|claude)-bounds\.json$/.test(arg)) {
+          return resolve("examples", "request-bounds.example.json");
+        }
+        if (/^\$root[\\/](?:gpt|claude)$/.test(arg)) return join(root, `prepared-${index}`);
+        return arg;
+      });
+      const options = parseQuickstartOptions(args);
+      assert.equal(options.auth?.mode, "entra");
+      assert.equal(options.auth.credential, "azure-cli");
+      assert.equal(options.auth.subscriptionId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
+      assert.equal(options.auth.tenantId, undefined);
+      assert.equal(options.wireApi, options.provider === "anthropic" ? undefined : "responses");
+      assert.ok(options.requestBounds);
+      tasks.add(options.task);
+
+      const env = { ...process.env, FOUNDRY_API_KEY: "", FOUNDRY_ENDPOINT: "https://fixture.services.ai.azure.com",
+        AZURE_CONFIG_DIR: join(root, "no-real-identity") };
+      execFileSync(process.execPath, [resolve("dist", "quickstart-cli.js"), ...args, "--prepare-only"],
+        { encoding: "utf8", env, timeout: 30000 });
+      const prepared = JSON.parse(readFileSync(join(root, `prepared-${index}`, "benchmark.local.json"), "utf8"));
+      assert.equal(prepared.contract.foundryProvider.type, options.provider);
+      assert.equal(prepared.contract.foundryProvider.wireApi, options.provider === "openai" ? "responses" : undefined);
+      assert.equal(existsSync(join(root, `prepared-${index}`, "artifacts")), false);
+    }
+    assert.deepEqual([...tasks], ["Common inline task"]);
+
+    const evaluateCommands = [...readme.matchAll(/^npm run evaluate -- (.+)$/gm)];
+    assert.equal(evaluateCommands.length, 2);
+    for (const command of evaluateCommands) {
+      const args = (command[1].match(/'[^']*'|"[^"]*"|\S+/g) ?? []).map((token) => {
+        const arg = token.replace(/^['"]|['"]$/g, "");
+        if (["$runs", "$subscriptionId", "$subscription_id"].includes(arg)) {
+          return arg === "$runs" ? root : "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+        }
+        if (/^\$root[\\/]judge-bounds\.json$/.test(arg)) return resolve("examples", "request-bounds.example.json");
+        if (/^\$root[\\/]judge-review-v1\.json$/.test(arg)) return join(root, "judge-review-v1.json");
+        return arg;
+      });
+      const options = parseEvaluationOptions(args);
+      assert.equal(options.provider, "openai");
+      assert.equal(options.wireApi, "responses");
+      assert.equal(options.auth?.mode, "entra");
+      assert.ok(options.requestBounds);
+    }
+
+    const bashBlocks = [...readme.matchAll(/```bash\r?\n([\s\S]*?)\r?\n```/g)].map((match) => match[1]).join("\n");
+    const bashPath = join(root, "readme-bash.sh");
+    writeFileSync(bashPath, `${bashBlocks}\n`, "utf8");
+    execFileSync("bash", ["-n", bashPath], { encoding: "utf8", timeout: 15000 });
+  } finally { rmSync(root, { recursive: true, force: true }); }
+});
+
+test("direct keyless quickstart artifacts flow through portfolio and HTML with strict legacy hash verification", () => {
+  const root = mkdtempSync(join(tmpdir(), "direct-quickstart-report-"));
+  try {
+    const task = "Create a dependency-free sum module and deterministic tests.";
+    const subscriptionId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee";
+    const bounds = resolve("examples", "request-bounds.example.json");
+    const emitted = ["gpt", "claude"].map((provider, index) => {
+      const options = parseQuickstartOptions([
+        "--task", task,
+        "--provider", provider === "gpt" ? "openai" : "anthropic",
+        "--model", provider === "gpt" ? "fixture-gpt" : "fixture-claude",
+        ...(provider === "gpt" ? ["--wire-api", "responses"] : []),
+        "--auth", "entra", "--credential", "azure-cli", "--subscription-id", subscriptionId,
+        "--bounds", bounds, "--output", join(root, provider),
+      ]);
+      const quickstart = createQuickstartWorkspace(options);
+      const config = quickstart.config;
+      const identity = {
+        type: config.contract.foundryProvider.type,
+        endpointFingerprint: (provider === "gpt" ? "a" : "b").repeat(64),
+        requestAdaptation: provider === "gpt" ? "openai-null-refusal-sanitizer" as const : "strip-temperature" as const,
+        ...(provider === "gpt" ? { wireApi: "responses" as const } : {}),
+        auth: config.contract.foundryProvider.auth!,
+      };
+      const contract: RunContract = {
+        contractVersion: 2, task: config.contract.task, candidate: config.contract.candidate,
+        execution: config.contract.execution, rounds: config.rounds, runtime: fixtureRuntime,
+        foundryProvider: identity, executionProfile: executionProfile(config),
+      };
+      const run = fixtureRun(`${provider}-direct-${index}`, config, "ungraded");
+      run.contract = contract;
+      if (provider === "claude") {
+        const legacyContract = structuredClone(contract);
+        legacyContract.foundryProvider!.auth = {
+          ...legacyContract.foundryProvider!.auth!,
+          tenantId: undefined,
+          clientId: undefined,
+        };
+        const legacyCanonical = (value: unknown): string => {
+          if (Array.isArray(value)) return `[${value.map(legacyCanonical).join(",")}]`;
+          if (value !== null && typeof value === "object") {
+            return `{${Object.keys(value).sort().map((key) =>
+              `${JSON.stringify(key)}:${legacyCanonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
+          }
+          return JSON.stringify(value);
+        };
+        run.contractHash = createHash("sha256").update(legacyCanonical(legacyContract)).digest("hex");
+      } else {
+        run.contractHash = immutableContractHash(contract);
+      }
+      const persisted = JSON.parse(JSON.stringify(run));
+      mkdirSync(persisted.artifacts.directory, { recursive: true });
+      writeFileSync(join(persisted.artifacts.directory, "run.json"), `${JSON.stringify(persisted, null, 2)}\n`);
+      return persisted;
     });
 
-    const options = command[1] === "quickstart" ? parseQuickstartOptions(args) : parseEvaluationOptions(args);
-    assert.ok(options.auth?.mode === "entra");
-    assert.equal(options.auth.credential, "azure-cli");
-    assert.equal(options.auth.subscriptionId, "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee");
-    assert.equal(options.auth.tenantId, undefined);
-    assert.equal(options.wireApi, options.provider === "anthropic" ? undefined : "responses");
-    assert.ok(options.requestBounds);
-  }
+    execFileSync(process.execPath, [resolve("dist", "portfolio-cli.js"), "--runs", root],
+      { encoding: "utf8", timeout: 30000 });
+    const report = join(root, "report-v1");
+    execFileSync(process.execPath, [resolve("dist", "html-report-cli.js"), "--runs", root, "--bundle", report],
+      { encoding: "utf8", timeout: 30000 });
+    assert.match(readFileSync(join(root, "model-selection-report.md"), "utf8"), /Retained runs:\*\* 2/);
+    assert.match(readFileSync(join(report, "index.html"), "utf8"), /Coding Agent Model Benchmark/);
+
+    const tamperedRoot = join(root, "tampered");
+    const tampered = structuredClone(emitted[1]);
+    tampered.contract.task.prompt = "Tampered after emission.";
+    const tamperedDirectory = join(tamperedRoot, "artifacts", tampered.runId);
+    tampered.artifacts.directory = tamperedDirectory;
+    mkdirSync(tamperedDirectory, { recursive: true });
+    writeFileSync(join(tamperedDirectory, "run.json"), `${JSON.stringify(tampered, null, 2)}\n`);
+    assert.throws(() => execFileSync(process.execPath, [resolve("dist", "portfolio-cli.js"), "--runs", tamperedRoot],
+      { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 30000 }), /Contract hash mismatch/);
+  } finally { rmSync(root, { recursive: true, force: true }); }
 });
 
 test("onboarding navigation resolves existing local documentation and headings", () => {

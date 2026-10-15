@@ -129,8 +129,15 @@ export function parseAuthFlags(value: (flag: string) => string | undefined): Fou
     if (value("--credential") || value("--tenant-id") || value("--client-id") || value("--subscription-id")) throw new TypeError("Key mode cannot select an Entra identity.");
     return authSchema.parse({ mode });
   }
+  const credential = value("--credential");
+  const tenantId = value("--tenant-id");
+  const clientId = value("--client-id");
+  const subscriptionId = value("--subscription-id");
   return authSchema.parse({
-    mode, credential: value("--credential"), tenantId: value("--tenant-id"), clientId: value("--client-id"), subscriptionId: value("--subscription-id"),
+    mode, credential,
+    ...(tenantId ? { tenantId } : {}),
+    ...(clientId ? { clientId } : {}),
+    ...(subscriptionId ? { subscriptionId } : {}),
   });
 }
 

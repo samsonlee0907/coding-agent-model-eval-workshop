@@ -511,7 +511,7 @@ independent workbook recalculation are not provided.
 ### Command map
 
 Run from the repository root; npm scripts build before execution. The
-[README inline-task examples](../README.md#3-prepare-and-run-each-provider)
+[README inline-task examples](../README.md#3-try-one-exploratory-task)
 are an exploratory alternative to this guide's calibrated campaign.
 
 | Command | Scope / cost |
@@ -608,7 +608,7 @@ replaced). A later snapshot is a **what-if**, not a rewrite of recorded
 campaign prices, a negotiated invoice or real-time offline HTML.
 Campaign pricing must be declared/pinned before preparation; see
 [pricing semantics](CAMPAIGNS_AND_PUBLICATION.md#evidence-pricing-and-publication).
-For saved-run reports, use the [README's explicit `--pricing` attachment](../README.md#usage-and-optional-pricing).
+For saved-run reports, use the [README's explicit `--pricing` attachment](../README.md#5-generate-decision-artifacts).
 It enriches HTML with what-if scenarios, not recorded normalized/exported
 campaign prices. Optional model review has [a separate fixed rubric and sensitive
 artifact](TASK_AUTHORING_GUIDE.md#quality-evidence-and-scorecards); it is not

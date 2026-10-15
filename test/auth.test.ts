@@ -69,6 +69,9 @@ test("Azure CLI subscription selector is passed without an incompatible tenant f
     "--tenant-id", tenantId, "--subscription-id", subscriptionId];
   assert.throws(() => parseQuickstartOptions([...flags, "--task", "fixture"]), /only one of tenantId or subscriptionId/);
   assert.throws(() => parseEvaluationOptions(flags), /only one of tenantId or subscriptionId/);
+  const subscriptionOnly = parseQuickstartOptions(["--provider", "openai", "--model", "fixture", "--auth", "entra",
+    "--credential", "azure-cli", "--subscription-id", subscriptionId, "--task", "fixture"]);
+  assert.deepEqual(Object.keys(subscriptionOnly.auth ?? {}).sort(), ["credential", "mode", "subscriptionId"]);
   assert.throws(() => providerSchema.parse({ type: "openai", auth: { mode: "entra", credential: "managed-identity", subscriptionId } }));
   const auth = { mode: "entra" as const, credential: "azure-cli" as const, subscriptionId };
   await assert.rejects(bearerTokenProvider(auth, { async getToken() { throw new Error("AADSTS90072 account private@example.test secret=PRIVATE"); } }),

@@ -6,7 +6,7 @@ its task/evaluator JSON files use only Node standard-library checks and public
 requirements. Replace deployment placeholders and review bounds before
 inference. No command provisions Azure, grants roles or merges branches.
 
-New users: the [README quickstarts](../README.md#3-prepare-and-run-each-provider)
+New users: the [README quickstarts](../README.md#3-try-one-exploratory-task)
 cover exploratory tasks. For calibrated campaign acceptance, follow the
 [ordered campaign workflow](RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task)
 instead of assembling configuration fragments here. Docker is **not** a core

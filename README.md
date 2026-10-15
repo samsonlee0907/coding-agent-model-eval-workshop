@@ -1,386 +1,460 @@
-# Coding Agent Model Evaluation Toolkit
+# Coding Agent Model Evaluation Workshop
 
-A local TypeScript/npm toolkit that runs coding tasks through the
+A TypeScript/npm toolkit for comparing coding-agent runs on the same task and
+execution policy. It drives persistent
 [GitHub Copilot SDK](https://github.com/github/copilot-sdk/tree/v1.0.10-preview.0)
-using your existing Microsoft Foundry deployments, then generates an offline
-**Coding Agent Model Benchmark** report. Bring your own tasks and deployments;
-no fixed dataset, model ranking or Copilot subscription is required.
+sessions through existing Microsoft Foundry deployments, records evidence,
+runs deterministic checks, and produces an offline **Coding Agent Model
+Benchmark** report.
 
-**First run:** try the same one-line task with one OpenAI deployment and one
-Anthropic deployment below. You get two disposable workspaces, local execution
-evidence and a shareable HTML report/ZIP. For independent acceptance checks,
-custom suites or recovery, use [Running the toolkit smoothly](docs/RUNNING_THE_TOOLKIT.md).
+This staging README keeps the original main-branch journey and adds two
+incremental capabilities: Microsoft Entra (keyless) authentication and a
+copyable one-GPT/one-Claude walkthrough. The current `main` branch at
+`010fc0799332af6ae7e425cb35fdd96ac978287c` does not contain every staging flag
+used below. Clone the named staging branch until these changes are released.
 
-| Capability | What you get |
-|---|---|
-| Coding execution | Persistent Copilot SDK/CLI sessions, native coding tools and fixed follow-up rounds; Foundry supplies inference |
-| Task-owned acceptance | Required/advisory deterministic checks, reference calibration and immutable resumable campaigns for your tasks |
-| Model-based review | Optional fixed-rubric judge scores and citation-checked findings, separate from deterministic grades |
-| Usage and price evidence | Known physical-request meters, all-attempt accounting and explicit official-price what-if snapshots |
-| Offline publication | Task-by-model matrix, inspectors, metadata replay, JSON/CSV exports and portable folder/ZIP |
+## Start here
 
-## Prerequisites
+### 1. Install
 
-- **Node.js 20.19+ with npm**, **Git**, and **PowerShell 7+** for these commands.
-  Installation needs network access; masked entry for the optional key path
-  requires PowerShell 7.1+.
-- **Existing Foundry deployments:** one supporting OpenAI Responses, one
-  supporting Anthropic Messages. Confirm exact deployment names/model versions,
-  supported reasoning settings, endpoint/network access and approved RPM/TPM;
-  subscription quota is not deployment capacity.
-- **Keyless Microsoft Entra access (preferred):** install
-  [Azure CLI](https://learn.microsoft.com/cli/azure/install-azure-cli) on the
-  orchestrator host, obtain your intended tenant/subscription, and have the
-  appropriate **inference permission on each resource**. Login or management
-  Contributor alone does not grant inference access. See
-  [endpoint-specific roles](docs/KEYLESS_AUTH.md#endpoint-and-token-audience).
+| Prerequisite | Required for | Notes |
+|---|---|---|
+| Node.js 20.19+ with npm | Installation and every toolkit command | Check `node --version` and `npm --version`. |
+| Git | Clone and local task baselines | Make it available on `PATH`. |
+| Azure CLI | Keyless local runs | Install it on the orchestrator host; key authentication does not need it. |
+| Existing Foundry deployments | Live runs | This toolkit does not provision models, change quota, or assign IAM. |
+| Network access | Install, sign-in, live runs, optional pricing refresh | Report/portfolio generation is local. |
+| Docker | Optional isolation/private grading only | Not needed for the trusted-local first run below. |
 
-Docker is **not needed** here. Quickstart is trusted-local and grants
-read/edit/shell: candidate code can access host files, credentials and caches.
-Use trusted tasks on a suitable disposable host. For isolation/private grading,
-follow the separate [Docker requirements](docs/ISOLATED_EXECUTION.md).
+`npm ci` installs the pinned SDK and its bundled Copilot CLI runtime. A
+standalone Copilot CLI and GitHub Copilot subscription are not required.
+Trusted-local runs grant candidate code `read`, `edit`, and `shell` access on
+the host, including access to host files, network, credentials, and caches.
+Use trusted tasks on a suitable disposable machine; see
+[isolated execution](docs/ISOLATED_EXECUTION.md) before running untrusted code.
 
-## 1. Install the reviewed version
-
-Use the exact reviewed commit/tag/branch; a fresh clone's default branch may
-not yet contain staging changes. Already in that checkout? Skip clone/ref
-selection. These installation commands do not provision resources or change
-Azure defaults.
+<details open>
+<summary><strong>PowerShell 7+ / Windows</strong></summary>
 
 ```powershell
-git clone https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
+# first-run:install-powershell
+git clone --branch samsonlee0907-staging-benchmark-revamp --single-branch https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
 Set-Location coding-agent-model-eval-workshop
-git fetch origin REPLACE_WITH_REVIEWED_REF
-if ($LASTEXITCODE -ne 0) { throw 'Reviewed revision unavailable.' }
-git switch --detach FETCH_HEAD
-if ($LASTEXITCODE -ne 0) { throw 'Checkout failed.' }
+node --version
+npm --version
+git --version
 npm ci
 if ($LASTEXITCODE -ne 0) { throw 'Installation failed.' }
 npm run build
 if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
 ```
 
-The lockfile pins SDK **1.0.10-preview.0**; an installed CLI can override its
-bundled runtime. See [host/runtime selection](docs/RUNNING_THE_TOOLKIT.md#1-install-and-select-a-public-task).
+</details>
 
-## 2. Review bounds and choose one simple task
+<details>
+<summary><strong>Bash / macOS or Linux</strong></summary>
 
-From the repository root, copy a finite policy for **each deployment**:
+Run these in Bash. From zsh, enter `bash` first or translate only the ordinary
+shell variable syntax; the toolkit commands themselves are identical.
 
-```powershell
-# first-run:setup
-$root = '.\.benchmark-runs\first-comparison-v1'
-if (Test-Path -LiteralPath $root) { throw 'Choose a new comparison folder.' }
-New-Item -ItemType Directory -Path $root | Out-Null
-Copy-Item -LiteralPath '.\examples\request-bounds.example.json' -Destination "$root\openai-bounds.json"
-Copy-Item -LiteralPath '.\examples\request-bounds.example.json' -Destination "$root\anthropic-bounds.json"
-$task = 'Create a dependency-free Node.js sum(a,b) module, deterministic node:test tests including negative numbers, and package.json test/build scripts; make npm test and npm run build pass.'
+```bash
+# first-run:install-bash
+git clone --branch samsonlee0907-staging-benchmark-revamp --single-branch https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git
+cd coding-agent-model-eval-workshop
+node --version
+npm --version
+git --version
+npm ci
+npm run build
 ```
 
-**Edit/review both bounds files before continuing.** The example declares
-10 physical requests, 1 MiB/request, 200,000 conservative token reservations,
-5,000 inclusive output tokens/request, five minutes, 10 RPM and 200,000 TPM.
-These are examples, **not discovered quota or a completion/billing guarantee**.
-Set approved deployment shares, output and time limits; track the combined
-two-run budget/deadline yourself. Pacing cannot make an oversized request fit,
-and initial fit does not guarantee later context fits. Detailed
-[capacity](docs/RUNNING_THE_TOOLKIT.md#capacity-is-not-the-example-policy) and
-[bounds guidance](docs/RUNNING_THE_TOOLKIT.md#3-review-finite-policy-and-calibrate-before-preparation)
-explain the fields and optional recorded capacity binding.
+On macOS with Homebrew, `brew install azure-cli` installs Azure CLI. If a new
+Homebrew install is not yet on `PATH`, run `eval "$(brew shellenv)"`. Linux
+users should use Microsoft's
+[distribution-specific Azure CLI installer](https://learn.microsoft.com/cli/azure/install-azure-cli-linux),
+then open a new shell and run `az version`.
 
-## 3. Prepare and run each provider
+</details>
 
-Use **separate PowerShell shells**, both at the reviewed repository root.
-In each, select the intended CLI account/subscription and set the matching
-resource endpoint before `bench`; never inherit the other provider's resource
-accidentally. The endpoint is a process variable; saved configs contain the
-explicit credential selector, not tokens. `$task` and `$root` are redeclared
-below; `$subscriptionId` comes from the common setup.
+### 2. Configure Foundry
 
-### Keyless setup (preferred)
+Obtain the resource root and exact deployment name for one OpenAI Responses
+deployment and one Anthropic Messages deployment. `FOUNDRY_ENDPOINT` is the
+resource root only—no project path, `/openai/v1`, `/anthropic`, query, or
+fragment:
 
-After installing Azure CLI/reopening PowerShell, run this setup for the intended
-subscription in each provider shell. **If already signed into the intended
-account, skip the `az login` line and check the cached mapping.** Sign-in may
-require MFA; these are auth/management network operations, not inference.
+| `--provider` | Toolkit-derived inference base | First-run protocol |
+|---|---|---|
+| `openai` | `https://<resource>.openai.azure.com/openai/v1` | Explicit `--wire-api responses` |
+| `anthropic` | `https://<resource>.services.ai.azure.com/anthropic` | Messages; do not pass `--wire-api` |
+
+The runner records an endpoint fingerprint, not the endpoint, key, or token.
+Confirm the exact model/version, reasoning support, inference permission,
+network access, RPM, and TPM with the resource administrator. Subscription
+quota is not deployment capacity.
+
+#### Keyless setup (preferred)
+
+This local keyless path uses Azure CLI plus Microsoft Entra ID.
+
+Microsoft documents interactive `az login` on Windows, macOS, and Linux,
+including MFA and browser/device-code flows. The toolkit passes the
+subscription selector to `AzureCliCredential` at runtime; it does **not** run
+`az account set`, silently choose another account, or fall back to a key.
+Use subscription **or** tenant as the stored selector, never both. The recipe
+below checks the expected tenant during setup and stores subscription only.
+
+<details open>
+<summary><strong>PowerShell 7+ / Windows</strong></summary>
 
 ```powershell
-# first-run:auth
+# first-run:auth-powershell
 $tenantId = 'REPLACE_WITH_EXPECTED_TENANT_UUID'
 $subscriptionId = 'REPLACE_WITH_SELECTED_SUBSCRIPTION_UUID'
 az version
 az login --tenant $tenantId
-if ($LASTEXITCODE -ne 0) { throw 'Login failed.' }
+if ($LASTEXITCODE -ne 0) { throw 'Azure login failed.' }
 $account = az account show --subscription $subscriptionId --output json | ConvertFrom-Json
 if ($LASTEXITCODE -ne 0) { throw 'Selected subscription is unavailable.' }
 if ($account.tenantId -ne $tenantId) { throw 'Subscription belongs to a different tenant.' }
 Remove-Item Env:FOUNDRY_API_KEY -ErrorAction SilentlyContinue
 ```
 
-The examples pass **subscription only** to `AzureCliCredential`; the expected
-tenant is a setup check, not a second stored runtime restriction. Use tenant
-**or** subscription, never both with the pinned Azure Identity 4.13.3/CLI
-credential. Token requests use the selected cached account without
-`az account set` or silent fallback. Keep that login stable; do not print or
-paste tokens/headers. The refreshable callback uses fixed
-`https://ai.azure.com/.default`. Full
-[login/selector guidance](docs/KEYLESS_AUTH.md#local-developer-setup)
-explains different tenants/subscriptions and host identities.
+</details>
 
-**Alternatives:** an already-enabled resource key uses `--auth key` with no
-identity flags and `FOUNDRY_API_KEY` supplied only in the host environment.
-Managed/workload identity needs a configured host. Use the focused
-[key setup](docs/RUNNING_THE_TOOLKIT.md#2-bind-identity-endpoint-and-actual-deployment-capacity)
-or [host identity guide](docs/KEYLESS_AUTH.md#managed-and-workload-identities-on-configured-hosts);
-do not enable keys or switch methods automatically when keyless fails.
+<details>
+<summary><strong>Bash / macOS or Linux</strong></summary>
 
-### OpenAI example
+```bash
+# first-run:auth-bash
+tenant_id='REPLACE_WITH_EXPECTED_TENANT_UUID'
+subscription_id='REPLACE_WITH_SELECTED_SUBSCRIPTION_UUID'
+az version
+az login --tenant "$tenant_id"
+account_tenant="$(az account show --subscription "$subscription_id" --query tenantId --output tsv)"
+test "$account_tenant" = "$tenant_id" || { echo 'Subscription belongs to a different tenant.' >&2; exit 1; }
+unset FOUNDRY_API_KEY
+```
 
-Use an existing Responses deployment supporting the declared `high` reasoning
-setting. This toolkit requires the `.services.ai.azure.com` resource **root**
-and derives `.openai.azure.com/openai/v1` internally; do not supply that
-derived inference URL or a project path:
+</details>
+
+Your identity needs the endpoint-specific data-plane inference role. Login,
+subscription access, or management Contributor alone is not proof of inference
+permission. The toolkit requests refreshable tokens for
+`https://ai.azure.com/.default`; see the detailed
+[keyless authentication boundary](docs/KEYLESS_AUTH.md).
+
+#### Existing key option
+
+Key behavior remains backward compatible. Use `--auth key`, omit identity
+flags, and keep the key only in the current host shell:
 
 ```powershell
-# first-run:openai
+# PowerShell 7.1+
+$env:FOUNDRY_API_KEY = Read-Host 'Foundry resource key' -MaskInput
+```
+
+```bash
+# Bash / macOS or Linux
+read -r -s -p 'Foundry resource key: ' FOUNDRY_API_KEY
+printf '\n'
+export FOUNDRY_API_KEY
+```
+
+Do not execute both auth paths or store credentials in config files.
+
+#### Create finite model-specific bounds
+
+Staging requires `--bounds` for immediate quickstart execution. Do not use the
+repository's 200k TPM example unchanged for a deployment with less capacity.
+Enter an approved share of each deployment's observed RPM/TPM. The commands
+below create a new shared report root, cap each run at 20 physical inference
+requests, 1 MiB/request, 8,192 output tokens/request, 20 minutes, and a total
+reservation of `20 x approved TPM`. These are local safeguards, not a USD cap,
+invoice estimate, or guarantee that every request will fit.
+
+<details open>
+<summary><strong>PowerShell 7+ / Windows</strong></summary>
+
+```powershell
+# first-run:bounds-powershell
 $root = '.\.benchmark-runs\first-comparison-v1'
-$task = 'Create a dependency-free Node.js sum(a,b) module, deterministic node:test tests including negative numbers, and package.json test/build scripts; make npm test and npm run build pass.'
-$env:FOUNDRY_ENDPOINT = 'https://YOUR_OPENAI_RESOURCE.services.ai.azure.com'
-npm run quickstart -- --task $task --provider openai --model 'YOUR_OPENAI_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --reasoning-effort high --bounds "$root\openai-bounds.json" --prepare-only --output "$root\openai"
-if ($LASTEXITCODE -ne 0) { throw 'Preparation failed.' }
-npm run doctor -- --config "$root\openai\benchmark.local.json"
-if ($LASTEXITCODE -ne 0) { throw 'Local checks failed.' }
-npm run doctor -- --config "$root\openai\benchmark.local.json" --verify-runtime
-if ($LASTEXITCODE -ne 0) { throw 'Runtime probe failed.' }
-npm run doctor -- --config "$root\openai\benchmark.local.json" --verify-request-fit
-if ($LASTEXITCODE -ne 0) { throw 'Initial fit blocked or unverified.' }
-# Token-only Azure network operation, not a model request:
-npm run doctor -- --config "$root\openai\benchmark.local.json" --acquire-auth
-if ($LASTEXITCODE -ne 0) { throw 'Selected authentication failed.' }
+if (Test-Path -LiteralPath $root) { throw 'Choose a new comparison folder.' }
+New-Item -ItemType Directory -Path $root | Out-Null
+$gptRpm = [int](Read-Host 'Approved GPT RPM share')
+$gptTpm = [int](Read-Host 'Approved GPT TPM share')
+$claudeRpm = [int](Read-Host 'Approved Claude RPM share')
+$claudeTpm = [int](Read-Host 'Approved Claude TPM share')
+if (@($gptRpm,$gptTpm,$claudeRpm,$claudeTpm) | Where-Object { $_ -lt 1 }) { throw 'Positive finite limits are required.' }
+@{maxRequests=20;maxRequestBytes=1048576;maxTokens=20*$gptTpm;maxOutputTokens=8192;deadlineMs=1200000;requestsPerMinute=$gptRpm;tokensPerMinute=$gptTpm} |
+  ConvertTo-Json | Set-Content -LiteralPath "$root\gpt-bounds.json" -Encoding utf8
+@{maxRequests=20;maxRequestBytes=1048576;maxTokens=20*$claudeTpm;maxOutputTokens=8192;deadlineMs=1200000;requestsPerMinute=$claudeRpm;tokensPerMinute=$claudeTpm} |
+  ConvertTo-Json | Set-Content -LiteralPath "$root\claude-bounds.json" -Encoding utf8
 ```
 
-Preparation sends **no inference**. The two optional runtime/fit controls use
-localhost fake Responses, not Azure. The final token-only gate exercises the
-selected Entra credential but does **not** certify data-plane RBAC, deployment
-availability or coding quality. See [what each gate proves](docs/RUNNING_THE_TOOLKIT.md#4-run-the-pre-dispatch-gates-in-order).
+</details>
 
-After reviewing the saved config and obtaining paid-run approval:
+<details>
+<summary><strong>Bash / macOS or Linux</strong></summary>
 
-```powershell
-# PAID inference; no --allow-paid gate on bench.
-npm run bench -- --config "$root\openai\benchmark.local.json"
-if ($LASTEXITCODE -ne 0) { throw 'Inspect retained evidence before any further paid run.' }
+```bash
+# first-run:bounds-bash
+root='.benchmark-runs/first-comparison-v1'
+test ! -e "$root" || { echo 'Choose a new comparison folder.' >&2; exit 1; }
+mkdir -p "$root"
+read -r -p 'Approved GPT RPM share: ' gpt_rpm
+read -r -p 'Approved GPT TPM share: ' gpt_tpm
+read -r -p 'Approved Claude RPM share: ' claude_rpm
+read -r -p 'Approved Claude TPM share: ' claude_tpm
+test "$gpt_rpm" -gt 0 && test "$gpt_tpm" -gt 0 && test "$claude_rpm" -gt 0 && test "$claude_tpm" -gt 0 ||
+  { echo 'Positive finite limits are required.' >&2; exit 1; }
+cat >"$root/gpt-bounds.json" <<EOF
+{"maxRequests":20,"maxRequestBytes":1048576,"maxTokens":$((20*gpt_tpm)),"maxOutputTokens":8192,"deadlineMs":1200000,"requestsPerMinute":$gpt_rpm,"tokensPerMinute":$gpt_tpm}
+EOF
+cat >"$root/claude-bounds.json" <<EOF
+{"maxRequests":20,"maxRequestBytes":1048576,"maxTokens":$((20*claude_tpm)),"maxOutputTokens":8192,"deadlineMs":1200000,"requestsPerMinute":$claude_rpm,"tokensPerMinute":$claude_tpm}
+EOF
 ```
 
-Inspect execution and candidate validation before admitting the other run.
-An exit 0 is not independent acceptance. Stop on infrastructure/unknown
-dispatch/budget errors; never retry until PASS.
+</details>
 
-### Anthropic example
+Optional deployment-capacity observation, doctor/runtime probes, Anthropic
+native token counting, managed/workload identity, and campaign admission are
+advanced controls, not prerequisites for reading this flow. See
+[Running the toolkit smoothly](docs/RUNNING_THE_TOOLKIT.md) and
+[campaign/publication details](docs/CAMPAIGNS_AND_PUBLICATION.md).
 
-In its **own shell**, repeat the common keyless setup for the intended account,
-then use an existing Claude deployment supporting Entra and the declared
-reasoning setting. The toolkit/SDK support a refreshable bearer provider and
-[Microsoft documents Entra Messages authentication](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-claude)
-with the same scope. The toolkit derives `/anthropic` and the SDK uses
-Messages; do **not** pass `--wire-api`.
+### 3. Try one exploratory task
+
+Run the same ordinary task once with GPT and once with Claude, sequentially.
+Each command creates a separate disposable local Git baseline and workspace
+under the shared `$root`/`$root` folder. It never modifies this repository.
+These commands send **paid inference immediately**. Review the bounds,
+deployment, endpoint, and auth selector first. Do not retry until PASS: a
+completed execution whose validator fails is still retained evidence; an
+infrastructure interruption is not a completed run.
+
+The primary Claude path uses Messages and its standard high-effort wire shape.
+It does not opt into native token counting. If a reviewed deployment needs
+native input admission or adaptive thinking, follow the optional
+[Anthropic native-count profile](docs/CAMPAIGNS_AND_PUBLICATION.md#optional-anthropic-native-count-admission)
+rather than adding hidden retries.
+
+<details open>
+<summary><strong>PowerShell 7+ / Windows — keyless</strong></summary>
 
 ```powershell
-# first-run:anthropic
-$root = '.\.benchmark-runs\first-comparison-v1'
-$task = 'Create a dependency-free Node.js sum(a,b) module, deterministic node:test tests including negative numbers, and package.json test/build scripts; make npm test and npm run build pass.'
-$env:FOUNDRY_ENDPOINT = 'https://YOUR_ANTHROPIC_RESOURCE.services.ai.azure.com'
-npm run quickstart -- --task $task --provider anthropic --model 'YOUR_ANTHROPIC_DEPLOYMENT' --auth entra --credential azure-cli --subscription-id $subscriptionId --reasoning-effort high --bounds "$root\anthropic-bounds.json" --prepare-only --output "$root\anthropic"
-if ($LASTEXITCODE -ne 0) { throw 'Preparation failed.' }
-npm run doctor -- --config "$root\anthropic\benchmark.local.json"
-if ($LASTEXITCODE -ne 0) { throw 'Local checks failed.' }
-# Token-only Azure network operation, not a model request:
-npm run doctor -- --config "$root\anthropic\benchmark.local.json" --acquire-auth
-if ($LASTEXITCODE -ne 0) { throw 'Selected authentication failed.' }
+# first-run:models-powershell
+$task = 'Create a dependency-free Node.js module exporting sum(a, b), deterministic node:test coverage for positive, negative, zero, and non-number rejection, and package.json test/build scripts; make npm test and npm run build pass.'
+$gptDeployment = 'YOUR_EXISTING_GPT_RESPONSES_DEPLOYMENT'
+$claudeDeployment = 'YOUR_EXISTING_CLAUDE_MESSAGES_DEPLOYMENT'
+
+$env:FOUNDRY_ENDPOINT = 'https://YOUR_GPT_RESOURCE.services.ai.azure.com'
+npm run quickstart -- --task $task --provider openai --model $gptDeployment --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --reasoning-effort high --bounds "$root\gpt-bounds.json" --output "$root\gpt"
+if ($LASTEXITCODE -ne 0) { throw 'GPT run did not complete; inspect retained evidence and do not replay blindly.' }
+
+$env:FOUNDRY_ENDPOINT = 'https://YOUR_CLAUDE_RESOURCE.services.ai.azure.com'
+npm run quickstart -- --task $task --provider anthropic --model $claudeDeployment --auth entra --credential azure-cli --subscription-id $subscriptionId --reasoning-effort high --bounds "$root\claude-bounds.json" --output "$root\claude"
+if ($LASTEXITCODE -ne 0) { throw 'Claude run did not complete; inspect retained evidence and do not replay blindly.' }
 ```
 
-**Anthropic runtime/initial-fit doctor controls are currently unsupported:**
-do not run the Responses-only probes or switch protocols to get a green gate.
-Plain doctor checks local configuration, not live auth/tools/throughput.
-The separate token gate proves acquisition only. Verify resource inference
-permission, model/version/API/reasoning support and local runtime tools
-separately before approving the bounded smoke. Supported configuration and
-vendor documentation are **not new live Anthropic acceptance**.
-Deployments that require adaptive thinking, or a reviewed native input estimate
-instead of byte-based admission, can use the
-[explicit opt-in profile](docs/CAMPAIGNS_AND_PUBLICATION.md#optional-anthropic-native-count-admission).
-It retries bounded read-only count timeouts before inference, never ambiguous
-model requests or an entire candidate.
-[Endpoint/auth boundaries](docs/KEYLESS_AUTH.md#endpoint-and-token-audience)
-and [safe diagnostics](docs/RUNNING_THE_TOOLKIT.md#diagnose-and-stop-safely)
-explain what remains unverified.
+</details>
 
-```powershell
-# PAID inference; run only after the separately reviewed prerequisites.
-npm run bench -- --config "$root\anthropic\benchmark.local.json"
-if ($LASTEXITCODE -ne 0) { throw 'Inspect retained evidence; do not replay blindly.' }
+<details>
+<summary><strong>Bash / macOS or Linux — keyless</strong></summary>
+
+```bash
+# first-run:models-bash
+task='Create a dependency-free Node.js module exporting sum(a, b), deterministic node:test coverage for positive, negative, zero, and non-number rejection, and package.json test/build scripts; make npm test and npm run build pass.'
+gpt_deployment='YOUR_EXISTING_GPT_RESPONSES_DEPLOYMENT'
+claude_deployment='YOUR_EXISTING_CLAUDE_MESSAGES_DEPLOYMENT'
+
+export FOUNDRY_ENDPOINT='https://YOUR_GPT_RESOURCE.services.ai.azure.com'
+npm run quickstart -- --task "$task" --provider openai --model "$gpt_deployment" --wire-api responses --auth entra --credential azure-cli --subscription-id "$subscription_id" --reasoning-effort high --bounds "$root/gpt-bounds.json" --output "$root/gpt"
+
+export FOUNDRY_ENDPOINT='https://YOUR_CLAUDE_RESOURCE.services.ai.azure.com'
+npm run quickstart -- --task "$task" --provider anthropic --model "$claude_deployment" --auth entra --credential azure-cli --subscription-id "$subscription_id" --reasoning-effort high --bounds "$root/claude-bounds.json" --output "$root/claude"
 ```
 
-Each provider creates `benchmark.local.json`, `workspace\BENCHMARK_TASK.md`
-and a clean local Git baseline. A run retains
-`artifacts\<run-id>\run.json`, diagnostics and `report.md`, plus generated
-code in `workspace`. Quickstart adds a fixed test/build follow-up and uses
-candidate-owned validation; it does **not** create calibrated required
-`grade.json`. Use a new workspace/config for another attempt.
-Without `--prepare-only`, quickstart itself sends paid inference immediately;
-it has no `--allow-paid` flag.
+</details>
 
-## 4. Generate, open and share the report
+For the key alternative, keep the same commands and replace
+`--auth entra --credential azure-cli --subscription-id ...` with
+`--auth key`. OpenAI must still use `--wire-api responses`; Anthropic must not
+use `--wire-api`. `quickstart` adds a fixed follow-up that runs `npm test` and
+`npm run build`. Its validator is candidate-owned, so independent required
+acceptance remains **UNGRADED**.
 
-After both approved runs, from either shell at the repository root:
+### 4. Run a controlled cohort
+
+After the exploratory runs, use controlled copies when you need a pinned
+baseline, fixed rounds, task-owned checks, or repeated attempts. Preserve the
+main flow: copy [`benchmark.example.json`](benchmark.example.json), replace
+every `REPLACE_...` value, use one clean candidate workspace per attempt, and
+write every candidate under one artifacts parent. Do not reuse an exploratory
+workspace or point `workspacePath` at the source baseline.
+
+<details open>
+<summary><strong>PowerShell 7+ / Windows</strong></summary>
 
 ```powershell
-# first-run:report -- saved evidence only, no auth or inference
-$root = '.\.benchmark-runs\first-comparison-v1'
-npm run report:html -- --runs $root --bundle "$root\report-v1" --zip
+Copy-Item -LiteralPath '.\benchmark.example.json' -Destination '.\candidate-gpt.json'
+Copy-Item -LiteralPath '.\benchmark.example.json' -Destination '.\candidate-claude.json'
+git -C 'C:\benchmark-workspaces\candidate-gpt' checkout --detach '<pinned-commit>'
+git -C 'C:\benchmark-workspaces\candidate-gpt' clean -fd
+npm run bench -- --config '.\candidate-gpt.json'
+git -C 'C:\benchmark-workspaces\candidate-claude' checkout --detach '<pinned-commit>'
+git -C 'C:\benchmark-workspaces\candidate-claude' clean -fd
+npm run bench -- --config '.\candidate-claude.json'
+```
+
+</details>
+
+<details>
+<summary><strong>Bash / macOS or Linux</strong></summary>
+
+```bash
+cp ./benchmark.example.json ./candidate-gpt.json
+cp ./benchmark.example.json ./candidate-claude.json
+git -C "$HOME/benchmark-workspaces/candidate-gpt" checkout --detach '<pinned-commit>'
+git -C "$HOME/benchmark-workspaces/candidate-gpt" clean -fd
+npm run bench -- --config ./candidate-gpt.json
+git -C "$HOME/benchmark-workspaces/candidate-claude" checkout --detach '<pinned-commit>'
+git -C "$HOME/benchmark-workspaces/candidate-claude" clean -fd
+npm run bench -- --config ./candidate-claude.json
+```
+
+</details>
+
+Keep prompt, baseline, instructions, rounds, tools, network policy, runtime,
+reasoning/output settings, validation, and evaluator policy identical where
+you claim comparison. For resumable multi-task matrices, calibrated evaluators,
+or isolated/private grading, use the optional
+[campaign workflow](docs/RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell).
+
+### 5. Generate decision artifacts
+
+Portfolio and report generation read saved evidence and send no model request.
+Pricing refresh is an optional public-network operation against official
+pricing pages. Use fresh output names: publication refuses to overwrite a good
+report with partial output.
+
+<details open>
+<summary><strong>PowerShell 7+ / Windows</strong></summary>
+
+```powershell
+# first-run:report-powershell
+$runs = $root
+npm run portfolio -- --runs $runs
+npm run report:html -- --runs $runs --bundle "$root\report-v1" --zip
 if ($LASTEXITCODE -ne 0) { throw 'Report generation failed.' }
 Invoke-Item -LiteralPath "$root\report-v1\index.html"
+
+# Optional official-price what-if snapshot; not inference or an invoice.
+npm run prices:refresh -- --runs $runs
+npm run report:html -- --runs $runs --pricing "$root\pricing-snapshot.json" --bundle "$root\report-priced-v1" --zip
 ```
 
-The loader finds both providers' saved runs recursively. A report needs at
-least one `run.json`; prepare-only does not generate results. The folder
-contains offline HTML, evidence/selected-results/task-types JSON and CSV,
-preview metadata and integrity hashes; the companion is `report-v1.zip`.
-For just one provider, pass its `artifacts` directory to `--runs`.
-An explicit single HTML uses `--output <new-file.html>` instead of `--bundle`
-and cannot combine `--zip` or approved previews.
+</details>
 
-**Interpretation:** execution completion, candidate validation and independent
-acceptance are different. This quickstart is exploratory and required
-acceptance stays UNGRADED; one task/run per provider is not a ranking.
-Independent quickstart baselines can appear as separate task cohorts with
-MISSING cross-cells; the shared prompt alone does not make them strictly
-comparable. Use a prepared matched campaign for acceptance comparisons.
-See [result semantics](docs/RUNNING_THE_TOOLKIT.md#read-results-without-overstating-them).
+<details>
+<summary><strong>Bash / macOS or Linux</strong></summary>
 
-Review metadata before sharing **only the report folder/ZIP**, not the parent
-workspaces or raw logs. Content previews/original downloads need an explicit
-reviewed hash-bound manifest. Use new report/delivery destinations rather than
-overwriting history; follow [integrity and safe sharing](docs/RUNNING_THE_TOOLKIT.md#offline-reporting-and-sharing).
-The report opens offline in a browser without Node, Azure, a server or CDN.
+```bash
+# first-run:report-bash
+runs="$root"
+npm run portfolio -- --runs "$runs"
+npm run report:html -- --runs "$runs" --bundle "$root/report-v1" --zip
+if [ "$(uname -s)" = 'Darwin' ]; then open "$root/report-v1/index.html"; else xdg-open "$root/report-v1/index.html"; fi
 
-## How grading works
+# Optional official-price what-if snapshot; not inference or an invoice.
+npm run prices:refresh -- --runs "$runs"
+npm run report:html -- --runs "$runs" --pricing "$root/pricing-snapshot.json" --bundle "$root/report-priced-v1" --zip
+```
 
-There are three different questions: did execution finish, did the candidate's
-test/build gate pass, and did the delivered artifact satisfy independent public
-requirements? Quickstart answers the first two; its candidate-written tests
-can miss requirements, so required acceptance remains **UNGRADED**.
+</details>
 
-For true acceptance, declare a task-owned evaluator in a
-[prepared campaign](docs/RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell).
-Required checks determine PASS/content FAIL; advisory failures are WEAK rather
-than required failures. Positive, negative and equivalent-valid reference
-fixtures calibrate the unchanged policy before execution. The original
-`runs\<attempt-id>\grade.json` binds run, output bytes and policy; a separately
-graded diagnostic copy does not recover the original grade.
+The shared root is searched recursively, so the GPT and Claude `run.json`
+artifacts are both included. The portable folder/ZIP includes offline HTML,
+normalized evidence, selected and all-attempt usage JSON/CSV, task-type data,
+preview metadata, and integrity hashes. A single HTML file uses
+`--output <new-file.html>` instead of `--bundle`; it cannot combine with
+`--zip` or approved previews.
 
-| Evidence | Read it as |
-|---|---|
-| Required PASS / content FAIL | A completed artifact did/did not meet the declared required checks; retain FAIL, never rerun until PASS |
-| Evaluator ERROR | Check/setup/spawn/timeout infrastructure uncertainty, not a model content verdict |
-| UNGRADED / MISSING | Required evidence absent / no recorded cell attempt; neither means zero cost or PASS |
-| Interrupted execution | Fixed work/round plan incomplete, even if a file or visible validator looks green |
+## Reading a generated report
 
-CLI exit 0 or a completed journal job is not required PASS. Default selection
-is the latest clean completion **including FAIL**, not the latest PASS.
-Match full task/input/round/tool/runtime/reasoning/output/evaluator profiles
-before comparisons; provider/API differences and sparse samples matter.
-See [acceptance/calibration design](docs/TASK_AUTHORING_GUIDE.md#versioned-evidence-and-evaluator-design)
-and [result interpretation](docs/RUNNING_THE_TOOLKIT.md#read-results-without-overstating-them).
+Read the output as an evidence scorecard, not a universal model ranking.
+Execution completion, task validation, and independent acceptance are separate.
+A completed run can have validation FAIL or content FAIL. UNGRADED means
+required independent evidence was not recorded; MISSING means no cell attempt.
+Neither means zero cost or PASS.
 
-## Usage and optional pricing
+The report shows recorded input/output/total tokens, observed agent turns, SDK
+usage records, physical inference requests, tool calls, wall time, cache
+counters, and separately labeled native-count requests where recorded.
+Unknown values stay unknown rather than becoming zero. Reasoning is already
+inside output tokens; cache tokens and native-count calls are not added again.
+One exploratory task/run per provider is descriptive and does not establish
+reliability. Independent quickstart baselines can appear as distinct cohorts
+with missing cross-cells; use a matched controlled campaign for acceptance
+comparisons.
 
-Known physical terminal meters describe usage; SDK model-usage records are not
-request counts. Reasoning is already part of output, and cache subdivisions
-must not be added twice. **SDK cost multipliers are not USD.** Protective
-byte/token/USD reservations are admission declarations, not invoices or
-guaranteed billing caps. Compare selected-run versus **all-attempt** cost and
-coverage separately; missing meters or billing remain unknown, not $0.
-
-An optional refresh fetches public **official published pricing**, not model
-inference: Azure OpenAI's pricing page and Claude API pricing, with Foundry
-Claude billing/cache references. It saves `$root\pricing-snapshot.json`.
-This is a versioned **what-if estimate**, not negotiated billing, a rewrite of
-recorded campaign prices or real-time offline HTML.
+An optional judge is a separate paid request and never overrides deterministic
+validation or required checks:
 
 ```powershell
-# Optional public pricing network only; preserve an existing snapshot first.
-npm run prices:refresh -- --runs $root
-if ($LASTEXITCODE -ne 0) { throw 'Pricing refresh failed; retain the earlier report.' }
-# Offline: explicitly attach that saved snapshot to a new report.
-npm run report:html -- --runs $root --pricing "$root\pricing-snapshot.json" --bundle "$root\report-priced-v1" --zip
+# PowerShell: create/review judge-bounds.json first.
+npm run evaluate -- --runs $runs --provider openai --model 'YOUR_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds "$root\judge-bounds.json" --output "$root\judge-review-v1.json"
+npm run report:html -- --runs $runs --evaluation "$root\judge-review-v1.json" --bundle "$root\report-reviewed-v1" --zip
 ```
 
-Custom deployment names may need an exact `--pricing-model recorded=Official Label`
-mapping; `--region` filters published pricing-page regions. Unresolved labels,
-regions or meters remain unavailable. Claude retains 5-minute/1-hour cache
-scenarios and needs explicit labeled input-accounting assumptions; an invoice
-or automatic cheapest-price default is not inferred. Report HTML shows attached
-what-if scenarios; normalized exports keep recorded estimates unchanged.
-See [pricing semantics and sources](docs/RUNNING_THE_TOOLKIT.md#usage-cost-and-what-if-pricing).
-
-## Optional model-based rubric review
-
-After deterministic validation, a separately authorized model judge can review
-the retained final source, manifest/integrity evidence, bounded diffs,
-validation and available run-level conformance evidence. The current fixed
-`benchmark-judge-v3` rubric has **seven integer dimensions, 1-5**:
-correctness, test adequacy, API design, reproducibility, code quality,
-requirement coverage and maintainability. It records low/medium/high evidence
-confidence, reviewed files and file/line findings with citation checks.
-There are no custom dimension/weight flags.
-
-`evaluate` is **paid inference immediately**, with its own approved judge,
-endpoint/identity, request/output/context/deadline bounds and authorization.
-It has no coding tools, but the reviewed content is still sent to a model:
-do not submit unapproved private code. Missing source limits evidence; no
-invented review can substitute for it. The judge does not import external
-campaign `grade.json` automatically or replace required deterministic grades.
-
-One optional example, in the OpenAI shell, uses a judge in the **same approved
-resource**. First create/review a separate `$root\judge-bounds.json`; its source
-review request can be much larger than the coding prompt. Then:
-
-```powershell
-# PAID judge, only after separate approval and reviewed bounds.
-npm run evaluate -- --runs $root --provider openai --model 'YOUR_APPROVED_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --subscription-id $subscriptionId --bounds "$root\judge-bounds.json" --output "$root\judge-review-v1.json"
-if ($LASTEXITCODE -ne 0) { throw 'Judge failed; inspect retained accounting, not fabricated scores.' }
-# Offline: attach the exact evaluation, optionally pricing too if already saved.
-npm run report:html -- --runs $root --evaluation "$root\judge-review-v1.json" --bundle "$root\report-reviewed-v1" --zip
+```bash
+# Bash: create/review judge-bounds.json first.
+npm run evaluate -- --runs "$runs" --provider openai --model 'YOUR_JUDGE_DEPLOYMENT' --wire-api responses --auth entra --credential azure-cli --subscription-id "$subscription_id" --bounds "$root/judge-bounds.json" --output "$root/judge-review-v1.json"
+npm run report:html -- --runs "$runs" --evaluation "$root/judge-review-v1.json" --bundle "$root/report-reviewed-v1" --zip
 ```
 
-The local evaluation JSON contains scores, rationales/findings, limitations
-and judge provenance; keep it sensitive. Without `--output`, the CLI writes
-`llm-evaluation-<timestamp>.json` in the runs root and run-based reports discover
-the latest root-level file. The explicit path above avoids guessing.
-Failure produces an accounting artifact with no published scores.
-Report HTML includes structured numeric review/coverage, not private judge
-narratives or findings. These qualitative scores **never override** deterministic
-outcomes or establish a broad model ranking. See the
-[rubric and evidence reference](docs/TASK_AUTHORING_GUIDE.md#quality-evidence-and-scorecards).
+Review metadata before sharing the report folder/ZIP. Raw logs, prompts, tool
+arguments/results, validation output, patches, judge responses, and workspaces
+are sensitive local evidence. Content previews need a reviewed hash-bound
+publication manifest.
 
-## More detail
+## Task design and supported configuration
 
-| Next step | Guide |
-|---|---|
-| Custom JSON/text tasks, fixed rounds, calibrated acceptance or a full suite | [Task choice](docs/RUNNING_THE_TOOLKIT.md#choose-your-path), [authoring](docs/RUNNING_THE_TOOLKIT.md#author-tasks-and-expand-carefully) |
-| Keyless, managed/workload identity or capacity questions | [Identity/capacity workflow](docs/RUNNING_THE_TOOLKIT.md#2-bind-identity-endpoint-and-actual-deployment-capacity), [authentication reference](docs/KEYLESS_AUTH.md) |
-| Campaign prepare/status/run/resume/report | [Campaign workflow](docs/RUNNING_THE_TOOLKIT.md#5-prepare-preview-then-deliberately-authorize-one-paid-cell), [command map](docs/RUNNING_THE_TOOLKIT.md#command-map) |
-| Interruption, missing grade, provider error or Windows grading issue | [Diagnosis](docs/RUNNING_THE_TOOLKIT.md#diagnose-and-stop-safely), [operator stop policy](docs/RUNNING_THE_TOOLKIT.md#operator-admission-and-stop-policy), [resume warning](docs/RUNNING_THE_TOOLKIT.md#resume-is-not-a-grading-only-command) |
-| Isolation/private grading | [Docker prerequisites and worker boundary](docs/ISOLATED_EXECUTION.md) |
-| Exact-byte editing or a richer benchmark blueprint | [Exact UTF-8 tools](docs/TASK_AUTHORING_GUIDE.md#exact-utf-8-editing-without-shell), [ordering scenario](scenarios/in-memory-ordering-system/task.md) |
-| Publication, optional judge/portfolio, pricing and comparability | [Campaign/reference details](docs/CAMPAIGNS_AND_PUBLICATION.md#evidence-pricing-and-publication) |
+Use [`benchmark.example.json`](benchmark.example.json) for controlled runs and
+the [task authoring guide](docs/TASK_AUTHORING_GUIDE.md) for task-owned probes,
+calibrated required/advisory checks, exact-byte requirements, and fixed rounds.
+The richer [in-memory ordering scenario](scenarios/in-memory-ordering-system/task.md)
+is a blueprint, not a bundled universal benchmark.
 
-Official sources: [pinned SDK BYOK](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/auth/byok.md),
-[refreshable Entra callback](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/setup/azure-managed-identity.md),
-[Azure CLI login](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively),
+The default coding scope is `read`, `edit`, and `shell`. Optional
+[Model Context Protocol](https://modelcontextprotocol.io) servers are part of
+the immutable contract. Secret placeholders expand only from the process
+environment; never put credentials in config files.
+
+## Scope
+
+- Foundry deployments must match the implemented `openai` Responses/legacy
+  completions or `anthropic` Messages wire shape.
+- Key remains the compatibility default when auth is omitted. Keyless requires
+  explicit `--auth entra` plus a credential selector; it never silently changes
+  methods or principals.
+- A deterministic validation command runs once after the session. Optional
+  conformance/evaluator evidence is separate from candidate-written tests.
+- Finite request limits are required by the staging quickstart, but they are
+  operator-reviewed safeguards, not discovered quota or guaranteed billing caps.
+- Cost, token, cache, latency, and request metrics are reported only when
+  captured. Missing or incomplete metering remains unavailable/unknown.
+- Automated documentation/tests use local fixtures and fake transports; they
+  do not prove live RBAC, capacity, model support, or coding quality.
+
+Official references:
+[Azure CLI interactive login](https://learn.microsoft.com/cli/azure/authenticate-azure-cli-interactively),
+[Copilot SDK BYOK](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/auth/byok.md),
+[Copilot SDK refreshable Azure Identity callback](https://github.com/github/copilot-sdk/blob/v1.0.10-preview.0/docs/setup/azure-managed-identity.md),
 [Microsoft Responses](https://learn.microsoft.com/azure/foundry/openai/how-to/responses),
-[Microsoft Claude Messages/auth](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-claude)
-and [Anthropic on Foundry](https://platform.claude.com/docs/en/build-with-claude/claude-in-microsoft-foundry).
-Run `npm run quickstart -- --help` / `npm run report:html -- --help` for exact
-options; see the [operator guide's references and limits](docs/RUNNING_THE_TOOLKIT.md#official-references-and-implementation-truth).
+and [Microsoft Claude Messages/auth](https://learn.microsoft.com/azure/foundry/foundry-models/how-to/use-foundry-models-claude).
+
+For optional doctor/runtime/capacity/native-count diagnostics, campaign
+prepare/status/resume, isolation/private grading, pricing semantics, and safe
+publication, continue with [Running the toolkit smoothly](docs/RUNNING_THE_TOOLKIT.md).

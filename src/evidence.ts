@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
-import { immutableContractHash, comparableBaselineSignature, compareRunContractSet } from "./contract.js";
+import { matchesImmutableContractHash, comparableBaselineSignature, compareRunContractSet } from "./contract.js";
 import { candidateKey } from "./pricing.js";
 import type { BenchmarkRun, RunContract } from "./types.js";
 import { providerTerminalSchema } from "./provider-stream.js";
@@ -223,7 +223,7 @@ export function assertBenchmarkRun(value: unknown): asserts value is BenchmarkRu
       || terminals.some((entry) => entry.request > run.requestAccounting!.physicalRequests))) {
     throw new TypeError("Provider terminal metering must bind unique dispatched physical requests.");
   }
-  if (immutableContractHash(run.contract) !== run.contractHash) throw new TypeError(`Contract hash mismatch for run ${run.runId}.`);
+  if (!matchesImmutableContractHash(run.contract, run.contractHash)) throw new TypeError(`Contract hash mismatch for run ${run.runId}.`);
 }
 
 export function cleanlyCompletedRun(run: BenchmarkRun): boolean {

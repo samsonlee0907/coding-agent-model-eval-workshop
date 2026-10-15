@@ -34,7 +34,7 @@ tool implements another harness.
 All quickstart examples are **cost-bearing trusted-local execution**, not
 sandboxed/Docker execution. They need an existing deployment, reachable
 `FOUNDRY_ENDPOINT`, selected **key or Entra** authentication and the matching
-`--provider` value. Follow [README setup](../README.md#1-install-the-reviewed-version)
+`--provider` value. Follow [README setup](../README.md#1-install)
 and [keyless instructions](KEYLESS_AUTH.md) first. Docker is optional except
 for [explicitly isolated configurations](ISOLATED_EXECUTION.md); quickstart
 has no isolation flag. Add `--source
@@ -412,7 +412,7 @@ failure retains `llm-evaluation-failure-<timestamp>.json` accounting without
 scores. Use the exact successful artifact with `report:html --evaluation
 <file>` rather than assuming a discovered file is valid. Reports publish numeric
 dimensions and count-based coverage, not the sensitive narratives/findings.
-See the [bounded judge/report example](../README.md#optional-model-based-rubric-review)
+See the [bounded judge/report example](../README.md#reading-a-generated-report)
 and the [implemented evidence/prompt/parser](../src/evaluator.ts).
 
 Keep probe source outside the candidate `workspacePath`; do not disclose its
@@ -440,6 +440,6 @@ alternatives are not guessed, Claude cache writes retain 5-minute and 1-hour
 scenarios, and minimum published list price is an estimate rather than an
 invoice. The report withholds cost ranking when contracts drift.
 
-See the README’s [first-run](../README.md#3-prepare-and-run-each-provider) flow and [report
-guidance](../README.md#4-generate-open-and-share-the-report) for the canonical commands
+See the README’s [first-run](../README.md#3-try-one-exploratory-task) flow and [report
+guidance](../README.md#5-generate-decision-artifacts) for the canonical commands
 and interpretation.

@@ -16,6 +16,12 @@ export function immutableContractHash(contract: RunContract): string {
   return hashCanonical(contract);
 }
 
+export function matchesImmutableContractHash(contract: RunContract, recordedHash: string): boolean {
+  if (immutableContractHash(contract) === recordedHash) return true;
+  const legacy = legacyDirectQuickstartEntraHash(contract);
+  return legacy !== null && legacy === recordedHash;
+}
+
 export function compareRunContracts(left: RunContract, right: RunContract): ContractComparison {
   const drift = [
     ...diff("contractVersion", left.contractVersion, right.contractVersion),
@@ -160,9 +166,42 @@ function stableStringify(value: unknown): string {
     return `[${value.map(stableStringify).join(",")}]`;
   }
   if (isPlainObject(value)) {
-    return `{${Object.keys(value)
+    return `{${Object.keys(value).filter((key) => value[key] !== undefined)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function legacyDirectQuickstartEntraHash(contract: RunContract): string | null {
+  // Direct quickstart previously hashed absent CLI selector fields as undefined before JSON omitted them.
+  const auth = contract.foundryProvider?.auth;
+  if (contract.contractVersion !== 2
+      || !/^quickstart-[a-f0-9]{12}$/.test(contract.task.id)
+      || contract.task.validationCommand !== "auto"
+      || contract.candidate.deployment !== "local-byok"
+      || contract.executionProfile?.mode !== "trusted-local"
+      || auth?.mode !== "entra") {
+    return null;
+  }
+  const optionalFields = ["tenantId", "clientId", "subscriptionId"] as const;
+  const missing = optionalFields.filter((field) => !Object.hasOwn(auth, field));
+  if (!missing.length) return null;
+  const legacyAuth: Record<string, unknown> = { ...auth };
+  for (const field of missing) legacyAuth[field] = undefined;
+  const legacyContract: RunContract = {
+    ...contract,
+    foundryProvider: { ...contract.foundryProvider!, auth: legacyAuth as typeof auth },
+  };
+  return createHash("sha256").update(legacyStableStringify(legacyContract)).digest("hex");
+}
+
+function legacyStableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(legacyStableStringify).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort()
+      .map((key) => `${JSON.stringify(key)}:${legacyStableStringify(value[key])}`)
       .join(",")}}`;
   }
   return JSON.stringify(value);

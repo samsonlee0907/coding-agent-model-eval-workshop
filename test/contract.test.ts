@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
-import { compareRunContractSet, compareRunContracts, createComparisonContract, immutableContractHash } from "../src/contract.js";
+import { compareRunContractSet, compareRunContracts, createComparisonContract, immutableContractHash, matchesImmutableContractHash } from "../src/contract.js";
 import type { RunContract } from "../src/types.js";
 
 function contract(): RunContract {
@@ -42,6 +43,42 @@ test("run contracts are deterministic and detect policy drift", () => {
   const comparison = compareRunContracts(left, right);
   assert.equal(comparison.strictlyComparable, false);
   assert.equal(comparison.drift[0]?.path, "execution.cachePolicy");
+});
+
+test("contract hashes survive JSON round trips and narrowly verify legacy direct keyless quickstarts", () => {
+  const direct = contract();
+  direct.task.id = "quickstart-123456789abc";
+  direct.task.validationCommand = "auto";
+  direct.candidate = { provider: "openai", model: "fixture", deployment: "local-byok" };
+  direct.foundryProvider = {
+    type: "openai", endpointFingerprint: "a".repeat(64), requestAdaptation: "openai-null-refusal-sanitizer",
+    wireApi: "responses",
+    auth: {
+      mode: "entra", credential: "azure-cli", subscriptionId: "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee",
+      tenantId: undefined, clientId: undefined,
+    },
+  };
+  direct.executionProfile = { mode: "trusted-local", requestBoundsHash: "b".repeat(64) };
+
+  const currentHash = immutableContractHash(direct);
+  const persisted = JSON.parse(JSON.stringify(direct)) as RunContract;
+  assert.equal(immutableContractHash(persisted), currentHash);
+  assert.equal(matchesImmutableContractHash(persisted, currentHash), true);
+
+  const legacyCanonical = (value: unknown): string => {
+    if (Array.isArray(value)) return `[${value.map(legacyCanonical).join(",")}]`;
+    if (value !== null && typeof value === "object") {
+      return `{${Object.keys(value).sort().map((key) =>
+        `${JSON.stringify(key)}:${legacyCanonical((value as Record<string, unknown>)[key])}`).join(",")}}`;
+    }
+    return JSON.stringify(value);
+  };
+  const legacyHash = createHash("sha256").update(legacyCanonical(direct)).digest("hex");
+  assert.notEqual(legacyHash, currentHash);
+  assert.equal(matchesImmutableContractHash(persisted, legacyHash), true);
+
+  persisted.task.prompt = "Tampered prompt.";
+  assert.equal(matchesImmutableContractHash(persisted, legacyHash), false);
 });
 
 test("wire adaptation is strict-comparison drift", () => {

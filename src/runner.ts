@@ -22,7 +22,7 @@ import {
   type ProviderConfig,
   type SessionConfig,
 } from "@github/copilot-sdk";
-import { immutableContractHash } from "./contract.js";
+import { immutableContractHash, matchesImmutableContractHash } from "./contract.js";
 import { EventCollector } from "./event-collector.js";
 import { deriveFoundryInferenceBase } from "./foundry-endpoint.js";
 import { asRecord } from "./json.js";
@@ -325,7 +325,7 @@ export async function resumeBenchmarkFinalization(config: BenchmarkConfig, runId
   const directory = resolve(config.artifactsDirectory ?? join(config.workspacePath, ".benchmark-artifacts"), runId);
   const saved = JSON.parse(readFileSync(join(directory, "execution.json"), "utf8")) as ExecutionCheckpoint;
   if (saved.runId !== runId || !saved.contract || !saved.requestAccounting || typeof saved.executionComplete !== "boolean"
-      || immutableContractHash(saved.contract) !== saved.contractHash
+      || !matchesImmutableContractHash(saved.contract, saved.contractHash)
       || evidenceHash(saved.contract.task) !== evidenceHash(config.contract.task)
       || evidenceHash(saved.contract.execution) !== evidenceHash(config.contract.execution)
       || evidenceHash(saved.contract.rounds) !== evidenceHash(config.rounds)
