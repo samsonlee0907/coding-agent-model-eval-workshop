@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1, "version": "text-acceptance-v1", "timeoutMs": 10000, "deadlineMs": 20000,
+  "checks": [{
+    "id": "public-result", "requirementId": "R1", "category": "artifact-content",
+    "expectedType": "utf8-text", "severity": "required",
+    "command": "node -e \"const fs=require('node:fs');try{if(!/^OK\\r?\\n?$/.test(fs.readFileSync('result.txt','utf8')))process.exit(1)}catch(e){if(e.code==='ENOENT')process.exit(1);throw e}\""
+  }]
+}

@@ -1,0 +1,24 @@
+{
+  "workspacePath": "text-input",
+  "contract": {
+    "task": {
+      "id": "exact-text-result", "version": "1", "title": "Exact UTF-8 text editing control",
+      "taskType": "text-artifact", "tags": ["custom", "exact-utf8"],
+      "prompt": "Read input.txt. This task has two declared phases. Initially create result.txt containing exactly OK followed by one LF newline. The fixed follow-up will ask you to edit that same file to remove the trailing newline, leaving exactly OK. Do only the initial phase now; do not run a command.",
+      "repository": { "commitSha": "content-addressed-inputs", "containerFingerprint": "trusted-local-example" },
+      "validationCommand": "node -e \"const fs=require('node:fs');if(fs.readFileSync('result.txt','utf8')!=='OK')process.exit(1)\""
+    },
+    "candidate": { "provider": "openai", "model": "REPLACED_BY_CAMPAIGN" },
+    "foundryProvider": { "type": "openai", "wireApi": "responses" },
+    "execution": {
+      "instructions": "Work only inside the supplied workspace with read/edit tools. Use write_file_exact for exact UTF-8 content; native line patches may add a newline. Follow the declared initial and fixed follow-up phases; do not do the follow-up early or execute commands.",
+      "tools": ["read", "edit"], "exactContentEdits": true, "permissionMode": "approve-all", "concurrency": 1,
+      "retries": 0, "sessionTimeoutMs": 120000, "streaming": true,
+      "cachePolicy": "default", "reasoningEffort": "high"
+    }
+  },
+  "rounds": [{
+    "prompt": "Perform the declared fixed follow-up: read result.txt, then edit that same file to remove its trailing newline, leaving exactly OK with no newline. Do not execute commands.",
+    "mode": "enqueue"
+  }]
+}

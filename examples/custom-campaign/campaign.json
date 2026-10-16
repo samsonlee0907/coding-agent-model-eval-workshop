@@ -1,0 +1,33 @@
+{
+  "schemaVersion": 1,
+  "id": "custom-campaign-v1",
+  "tasks": [
+    { "id": "text-result", "config": "text-task.json", "evaluator": "text-evaluator.json" },
+    { "id": "json-result", "config": "json-task.json", "evaluator": "json-evaluator.json" }
+  ],
+  "candidates": [
+    {
+      "id": "candidate-a",
+      "candidate": { "provider": "openai", "model": "REPLACE_WITH_DEPLOYMENT_A" },
+      "foundryProvider": { "type": "openai", "wireApi": "responses", "auth": { "mode": "key" } }
+    },
+    {
+      "id": "candidate-b",
+      "candidate": { "provider": "openai", "model": "REPLACE_WITH_DEPLOYMENT_B" },
+      "foundryProvider": { "type": "openai", "wireApi": "responses", "auth": { "mode": "key" } }
+    }
+  ],
+  "repeats": 1,
+  "inputBounds": { "maxFiles": 100, "maxBytes": 1048576 },
+  "requestBounds": {
+    "maxRequests": 10, "maxRequestBytes": 1048576, "maxTokens": 100000,
+    "maxOutputTokens": 5000, "deadlineMs": 300000,
+    "requestsPerMinute": 30, "tokensPerMinute": 100000
+  },
+  "bounds": {
+    "concurrency": 1, "minFreeMemoryMb": 512, "maxAttemptsPerCell": 1, "deadlineMs": 1200000,
+    "maxRequests": 40, "maxReservedTokens": 400000, "maxReservationUsd": 8,
+    "reservationUsdPerMillionTokens": 20
+  },
+  "requireCalibratedEvaluators": false
+}

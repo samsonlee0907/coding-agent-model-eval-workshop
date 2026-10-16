@@ -6,7 +6,12 @@ import type {
   BenchmarkConfig,
   FoundryProviderType,
   ReasoningEffort,
+  FoundryAuth,
 } from "./types.js";
+import { parseAuthFlags, providerSchema } from "./auth.js";
+import { loadRequestBounds, type RequestBounds } from "./request-policy.js";
+import { assertCliArguments } from "./cli-arguments.js";
+import { loadNativeTokenCountPolicy, type NativeTokenCountPolicy } from "./native-token-count.js";
 
 const ignoredArtifactEntries = new Set([".git", "node_modules", "dist", ".benchmark-artifacts", ".benchmark-runs"]);
 
@@ -18,6 +23,12 @@ export interface QuickstartOptions {
   provider: FoundryProviderType;
   deployment?: string;
   reasoningEffort?: ReasoningEffort;
+  auth?: FoundryAuth;
+  wireApi?: "completions" | "responses";
+  requestBounds?: RequestBounds;
+  prepareOnly?: boolean;
+  nativeTokenCount?: NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
 }
 
 export interface QuickstartWorkspace {
@@ -33,6 +44,9 @@ export interface QuickstartWorkspace {
  * GitHub account, remote, or repository is involved.
  */
 export function createQuickstartWorkspace(options: QuickstartOptions): QuickstartWorkspace {
+  providerSchema.parse({ type: options.provider, auth: options.auth, wireApi: options.wireApi,
+    nativeTokenCount: options.nativeTokenCount, anthropicThinking: options.anthropicThinking });
+  if (options.nativeTokenCount && !options.requestBounds) throw new TypeError("Native token counting requires --bounds.");
   if (!options.task.trim()) {
     throw new TypeError("A non-empty --task or --task-file value is required.");
   }
@@ -50,6 +64,7 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
   const baselineCommitSha = createLocalBaselineCommit(workspacePath);
   const containerFingerprint = createLocalEnvironmentFingerprint(workspacePath);
   const config: BenchmarkConfig = {
+    ...(options.requestBounds ? { requestBounds: options.requestBounds } : {}),
     contract: {
       task: {
         id: `quickstart-${digest(options.task).slice(0, 12)}`,
@@ -67,6 +82,10 @@ export function createQuickstartWorkspace(options: QuickstartOptions): Quickstar
       },
       foundryProvider: {
         type: options.provider,
+        ...(options.auth ? { auth: options.auth } : {}),
+        ...(options.wireApi ? { wireApi: options.wireApi } : {}),
+        ...(options.nativeTokenCount ? { nativeTokenCount: options.nativeTokenCount } : {}),
+        ...(options.anthropicThinking ? { anthropicThinking: options.anthropicThinking } : {}),
       },
       execution: {
         instructions: [
@@ -115,10 +134,17 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
   }
   const model = argumentValue(argv, "--model");
   const provider = parseFoundryProvider(argumentValue(argv, "--provider"));
+  const foundry = providerSchema.parse({
+    type: provider, auth: parseAuthFlags((flag) => argumentValue(argv, flag)), wireApi: argumentValue(argv, "--wire-api"),
+    nativeTokenCount: loadNativeTokenCountPolicy(argumentValue(argv, "--native-token-count")),
+    anthropicThinking: argumentValue(argv, "--anthropic-thinking"),
+  });
   if (!model) {
     throw new TypeError("--model is required.");
   }
   return {
+    requestBounds: loadRequestBounds(argumentValue(argv, "--bounds")),
+    prepareOnly: argv.includes("--prepare-only"),
     task: task ?? (taskFile ? readFileSync(resolve(taskFile), "utf8") : ""),
     sourcePath: argumentValue(argv, "--source"),
     outputDirectory: argumentValue(argv, "--output"),
@@ -126,11 +152,15 @@ export function parseQuickstartOptions(argv: readonly string[]): QuickstartOptio
     provider,
     deployment: argumentValue(argv, "--deployment"),
     reasoningEffort: parseReasoningEffort(argumentValue(argv, "--reasoning-effort")),
+    ...(foundry.auth ? { auth: foundry.auth } : {}),
+    ...(foundry.wireApi ? { wireApi: foundry.wireApi } : {}),
+    ...(foundry.nativeTokenCount ? { nativeTokenCount: foundry.nativeTokenCount } : {}),
+    ...(foundry.anthropicThinking ? { anthropicThinking: foundry.anthropicThinking } : {}),
   };
 }
 
 function assertSupportedOptions(argv: readonly string[]): void {
-  const optionsWithValues = new Set([
+  const optionsWithValues = [
     "--task",
     "--task-file",
     "--model",
@@ -139,14 +169,10 @@ function assertSupportedOptions(argv: readonly string[]): void {
     "--reasoning-effort",
     "--source",
     "--output",
-  ]);
-  for (const token of argv) {
-    if (token.startsWith("--") && !optionsWithValues.has(token)) {
-      throw new TypeError(
-        `Unsupported option ${token}. This workshop accepts only Foundry --provider openai or --provider anthropic with FOUNDRY_ENDPOINT and FOUNDRY_API_KEY.`,
-      );
-    }
-  }
+    "--auth", "--credential", "--tenant-id", "--client-id", "--subscription-id", "--wire-api", "--bounds",
+    "--native-token-count", "--anthropic-thinking",
+  ];
+  assertCliArguments(argv, { ...Object.fromEntries(optionsWithValues.map((flag) => [flag, "value" as const])), "--prepare-only": "switch" });
 }
 
 function argumentValue(argv: readonly string[], name: string): string | undefined {

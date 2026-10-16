@@ -10,6 +10,7 @@ import {
   resolveCopilotCliPath,
   resolveMcpServersForLaunch,
   resolveSdkToolAllowlist,
+  assertAdvertisedTools,
 } from "../src/runner.js";
 
 test("sends the task prompt before ordered follow-up rounds", async () => {
@@ -47,6 +48,7 @@ test("maps benchmark tool capabilities to source-qualified SDK built-ins", () =>
   assert.deepEqual(resolveSdkToolAllowlist(["read", "edit", "shell"]), [
     "builtin:view",
     "builtin:glob",
+    "builtin:create",
     "builtin:edit",
     `builtin:${expectedShell}`,
   ]);
@@ -54,9 +56,17 @@ test("maps benchmark tool capabilities to source-qualified SDK built-ins", () =>
 
 test("leaves the allowlist unchanged when no MCP servers are configured", () => {
   const expectedShell = process.platform === "win32" ? "powershell" : "bash";
-  const expected = ["builtin:view", "builtin:glob", "builtin:edit", `builtin:${expectedShell}`];
+  const expected = ["builtin:view", "builtin:glob", "builtin:create", "builtin:edit", `builtin:${expectedShell}`];
   assert.deepEqual(resolveSdkToolAllowlist(["read", "edit", "shell"], undefined), expected);
   assert.deepEqual(resolveSdkToolAllowlist(["read", "edit", "shell"], {}), expected);
+});
+
+test("selected runtime catalog resolves both creation and editing without granting shell", () => {
+  assert.deepEqual(resolveSdkToolAllowlist(["read", "edit"], undefined, ["view", "glob", "apply_patch"]),
+    ["builtin:view", "builtin:glob", "builtin:apply_patch"]);
+  assert.deepEqual(resolveSdkToolAllowlist(["edit"], undefined, ["create", "edit"]), ["builtin:create", "builtin:edit"]);
+  assert.throws(() => resolveSdkToolAllowlist(["edit"], undefined, ["edit"]), /missing create.*no inference dispatched/);
+  assert.throws(() => assertAdvertisedTools({ tools: [{ name: "view" }] }, ["builtin:view", "builtin:apply_patch"]), /missing apply_patch/);
 });
 
 test("exposes MCP tools in the allowlist only when servers are configured", () => {

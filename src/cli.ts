@@ -4,7 +4,9 @@ import { createTerminalProgressReporter } from "./progress.js";
 import { loadBenchmarkConfig, runBenchmark } from "./runner.js";
 
 const configFlag = process.argv.indexOf("--config");
-if (configFlag < 0 || !process.argv[configFlag + 1]) {
+if (process.argv.includes("--help")) {
+  console.log("Usage: npm run bench -- --config <benchmark-config.json>\nPaid inference immediately; configure requestBounds and run doctor before execution. Trusted-local unless isolation is explicitly configured.");
+} else if (configFlag < 0 || !process.argv[configFlag + 1]) {
   console.error("Usage: npm run bench -- --config <benchmark-config.json>");
   process.exitCode = 2;
 } else {

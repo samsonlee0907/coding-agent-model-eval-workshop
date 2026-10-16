@@ -10,8 +10,9 @@ import {
   createFoundryProviderIdentity,
   resolveCopilotCliPath,
   resolveFoundryProvider,
-  startOpenAiNullRefusalSanitizingProxy,
-  startTemperatureStrippingProxy,
+  startRequestSanitizingProxy,
+  stripNullMessageRefusals,
+  stripTemperature,
 } from "./runner.js";
 import type {
   ArtifactInspection,
@@ -19,6 +20,7 @@ import type {
   ComparativeInsight,
   FoundryProviderIdentity,
   JudgeFinding,
+  JsonRecord,
   LlmEvaluationResult,
   LlmJudgeConfig,
   LlmJudgeScore,
@@ -26,6 +28,9 @@ import type {
 import { loadArtifactInspection, renderSourceBundle } from "./artifact-inspection.js";
 import { loadConformanceProbe } from "./conformance.js";
 import { scrubFoundryEnvironment } from "./validation.js";
+import { assertCapacityPolicy } from "./deployment-capacity.js";
+import { RequestGuard } from "./request-policy.js";
+import { evidenceHash } from "./evidence.js";
 
 const promptVersion = "benchmark-judge-v3" as const;
 const maximumEvidenceCharacters = 3_000;
@@ -40,6 +45,7 @@ const minimumSourceBudgetPerCandidate = 18_000;
 
 export interface JudgeInvoker {
   judge(prompt: string, config: LlmJudgeConfig): Promise<string>;
+  requestAccounting?: NonNullable<BenchmarkRun["requestAccounting"]>;
 }
 
 function redactJudgeText(value: string): string {
@@ -83,6 +89,8 @@ export async function evaluateBenchmarkRuns(
     comparisonSummary: parsed.comparisonSummary,
     limitations: parsed.limitations,
     rawResponse: redactJudgeText(truncate(rawResponse, maximumJudgeResponseCharacters)),
+    ...(invoker.requestAccounting ? { requestAccounting: { ...invoker.requestAccounting } } : {}),
+    ...(config.requestBounds ? { requestBoundsHash: evidenceHash(config.requestBounds) } : {}),
   };
 }
 
@@ -176,13 +184,26 @@ export function parseJudgeResponse(
   };
 }
 
-class FoundryJudgeInvoker implements JudgeInvoker {
+export class FoundryJudgeInvoker implements JudgeInvoker {
+  requestAccounting?: NonNullable<BenchmarkRun["requestAccounting"]>;
+  providerDiagnostics: JsonRecord[] = [];
   async judge(prompt: string, config: LlmJudgeConfig): Promise<string> {
+    this.requestAccounting = undefined;
+    this.providerDiagnostics = [];
+    assertCapacityPolicy({
+      contract: { candidate: { provider: config.provider.type, model: config.model }, foundryProvider: config.provider },
+      requestBounds: config.requestBounds,
+    }, process.env.FOUNDRY_ENDPOINT);
     const provider = resolveFoundryProvider(config.provider, process.env);
     const identity = judgeIdentity(config);
-    const proxy = identity.requestAdaptation === "strip-temperature"
-      ? await startTemperatureStrippingProxy(provider.baseUrl)
-      : await startOpenAiNullRefusalSanitizingProxy(provider.baseUrl);
+    const guard = new RequestGuard(config.requestBounds, Date.now(), Date.now() + config.timeoutMs);
+    this.requestAccounting = guard.accounting;
+    const proxy = await startRequestSanitizingProxy(provider.baseUrl,
+      identity.requestAdaptation === "strip-temperature" ? stripTemperature : stripNullMessageRefusals,
+      { guard, wireApi: provider.wireApi, retries: 0, nativeTokenCount: config.provider.nativeTokenCount,
+        anthropicThinking: config.provider.anthropicThinking, reasoningEffort: config.reasoningEffort, model: config.model, capture: (type, data) => {
+        if (type === "runner.provider_bridge_error" || type === "runner.provider_rejected") this.providerDiagnostics.push({ type, ...data });
+      } });
     const cliPath = resolveCopilotCliPath(process.env);
     const baseDirectory = mkdtempSync(join(tmpdir(), "benchmark-judge-"));
     const client = new CopilotClient({
@@ -215,7 +236,8 @@ class FoundryJudgeInvoker implements JudgeInvoker {
         }
       });
       try {
-        await session.sendAndWait({ prompt, mode: "enqueue" }, config.timeoutMs);
+        await session.sendAndWait({ prompt, mode: "enqueue" }, Math.max(1, guard.deadline - Date.now()));
+        if (!guard.cleanlySettled()) throw new Error("Judge provider completion is ambiguous or incomplete; no replay and no scores published.");
       } finally {
         unsubscribe();
       }

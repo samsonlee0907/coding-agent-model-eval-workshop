@@ -1,5 +1,6 @@
 import { optionalNumber, optionalString } from "./json.js";
 import type { DerivedMetrics, Metric, ModelCall, NormalizedEvent, ToolCall } from "./types.js";
+import { providerTerminalSchema } from "./provider-stream.js";
 
 export function extractModelCalls(events: readonly NormalizedEvent[]): ModelCall[] {
   return events
@@ -64,6 +65,14 @@ export function deriveMetrics(events: readonly NormalizedEvent[], modelCalls: re
   const firstTurn = events.find((event) => event.eventType === "assistant.turn_start");
   const sdkTtft = modelCalls.find((call) => call.sdkTimeToFirstTokenMs !== null)?.sdkTimeToFirstTokenMs ?? null;
   const sdkTpot = modelCalls.find((call) => call.sdkInterTokenLatencyMs !== null)?.sdkInterTokenLatencyMs ?? null;
+  const terminals = events.filter((event) => event.eventType === "runner.provider_terminal")
+    .flatMap((event) => {
+      const parsed = providerTerminalSchema.safeParse(event.data.terminal);
+      return parsed.success && parsed.data.usage ? [parsed.data.usage] : [];
+    });
+  const tokenMetric = (field: "inputTokens" | "outputTokens" | "cacheReadTokens" | "cacheWriteTokens") => terminals.length
+    ? sumMetric(terminals.map((usage) => usage[field]), `provider terminal ${field}; known subtotal including failed responses, missing usage not estimated; SDK counters not added again`)
+    : sumMetric(modelCalls.map((call) => call[field]), `assistant.usage.${field}`);
 
   return {
     e2eMs: durationMetric(runStart, runEnd, "runner event timestamps"),
@@ -78,10 +87,10 @@ export function deriveMetrics(events: readonly NormalizedEvent[], modelCalls: re
     timePerOutputTokenMs: sdkTpot !== null
       ? available(sdkTpot, "assistant.usage.interTokenLatencyMs")
       : unavailable("SDK did not emit assistant.usage.interTokenLatencyMs."),
-    inputTokens: sumMetric(modelCalls.map((call) => call.inputTokens), "assistant.usage.inputTokens"),
-    outputTokens: sumMetric(modelCalls.map((call) => call.outputTokens), "assistant.usage.outputTokens"),
-    cacheReadTokens: sumMetric(modelCalls.map((call) => call.cacheReadTokens), "assistant.usage.cacheReadTokens"),
-    cacheWriteTokens: sumMetric(modelCalls.map((call) => call.cacheWriteTokens), "assistant.usage.cacheWriteTokens"),
+    inputTokens: tokenMetric("inputTokens"),
+    outputTokens: tokenMetric("outputTokens"),
+    cacheReadTokens: tokenMetric("cacheReadTokens"),
+    cacheWriteTokens: tokenMetric("cacheWriteTokens"),
     cost: sumMetric(modelCalls.map((call) => call.cost), "assistant.usage.cost"),
   };
 }

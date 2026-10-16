@@ -2,16 +2,20 @@
 import { join, resolve } from "node:path";
 import { loadBenchmarkRuns, writeModelSelectionReport } from "./portfolio.js";
 
-const runsDirectory = resolve(argumentValue("--runs") ?? ".benchmark-runs");
-const outputPath = resolve(argumentValue("--output") ?? join(runsDirectory, "model-selection-report.md"));
-const runs = loadBenchmarkRuns(runsDirectory);
-
-if (runs.length === 0) {
-  console.error(`No completed run.json artifacts found under ${runsDirectory}.`);
-  process.exitCode = 2;
+if (process.argv.includes("--help")) {
+  console.log("Usage: npm run portfolio -- --runs <run-directory> [--output <report.md>]\nReads retained run evidence offline, including interrupted runs; no inference.");
 } else {
-  writeModelSelectionReport(runs, outputPath);
-  console.log(JSON.stringify({ runs: runs.length, report: outputPath }, null, 2));
+  const runsDirectory = resolve(argumentValue("--runs") ?? ".benchmark-runs");
+  const outputPath = resolve(argumentValue("--output") ?? join(runsDirectory, "model-selection-report.md"));
+  const runs = loadBenchmarkRuns(runsDirectory);
+
+  if (runs.length === 0) {
+    console.error(`No retained run.json artifacts found under ${runsDirectory}.`);
+    process.exitCode = 2;
+  } else {
+    writeModelSelectionReport(runs, outputPath);
+    console.log(JSON.stringify({ runs: runs.length, report: outputPath }, null, 2));
+  }
 }
 
 function argumentValue(flag: string): string | undefined {

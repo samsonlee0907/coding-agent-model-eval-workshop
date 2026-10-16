@@ -4,9 +4,13 @@ export interface OutcomeFacts {
   validation: ValidationResult | null;
   toolCalls: readonly ToolCall[];
   runnerError: string | null;
+  executionComplete?: boolean;
 }
 
 export function classifyOutcome(facts: OutcomeFacts): Outcome {
+  if (facts.executionComplete === false) {
+    return agentOutcome("harness_failure", "The fixed task/round plan did not cleanly complete; validation cannot turn an interrupted execution into a resolution.");
+  }
   if (facts.validation?.errorMessage) {
     return agentOutcome("harness_failure", facts.validation.errorMessage);
   }

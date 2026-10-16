@@ -1,0 +1,9 @@
+{
+  "maxRequests": 10,
+  "maxRequestBytes": 1048576,
+  "maxTokens": 200000,
+  "maxOutputTokens": 2000,
+  "deadlineMs": 300000,
+  "requestsPerMinute": 10,
+  "tokensPerMinute": 200000
+}

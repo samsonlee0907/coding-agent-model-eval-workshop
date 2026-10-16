@@ -1,5 +1,8 @@
 import { resolve } from "node:path";
-import type { FoundryProviderType, ReasoningEffort } from "./types.js";
+import type { FoundryAuth, FoundryProviderType, ReasoningEffort } from "./types.js";
+import { parseAuthFlags, providerSchema } from "./auth.js";
+import { loadRequestBounds, type RequestBounds } from "./request-policy.js";
+import { assertCliArguments } from "./cli-arguments.js";
 
 export interface EvaluationCliOptions {
   runsDirectory: string;
@@ -8,15 +11,14 @@ export interface EvaluationCliOptions {
   reasoningEffort: ReasoningEffort;
   timeoutMs: number;
   outputPath?: string;
+  auth?: FoundryAuth;
+  wireApi?: "completions" | "responses";
+  requestBounds?: RequestBounds;
 }
 
 export function parseEvaluationOptions(argv: readonly string[]): EvaluationCliOptions {
-  const supported = new Set(["--runs", "--provider", "--model", "--reasoning-effort", "--timeout-ms", "--output"]);
-  for (const token of argv) {
-    if (token.startsWith("--") && !supported.has(token)) {
-      throw new TypeError(`Unsupported option ${token}. See npm run evaluate -- --help.`);
-    }
-  }
+  const supported = ["--runs", "--provider", "--model", "--reasoning-effort", "--timeout-ms", "--output", "--auth", "--credential", "--tenant-id", "--client-id", "--subscription-id", "--wire-api", "--bounds"];
+  assertCliArguments(argv, Object.fromEntries(supported.map((flag) => [flag, "value" as const])));
   const provider = requiredProvider(argumentValue(argv, "--provider"));
   const model = required(argumentValue(argv, "--model"), "--model");
   const timeoutText = argumentValue(argv, "--timeout-ms");
@@ -25,13 +27,19 @@ export function parseEvaluationOptions(argv: readonly string[]): EvaluationCliOp
     throw new TypeError("--timeout-ms must be an integer from 1000 through 900000.");
   }
   const output = argumentValue(argv, "--output");
+  const foundry = providerSchema.parse({
+    type: provider, auth: parseAuthFlags((flag) => argumentValue(argv, flag)), wireApi: argumentValue(argv, "--wire-api"),
+  });
   return {
+    requestBounds: loadRequestBounds(argumentValue(argv, "--bounds")),
     runsDirectory: resolve(argumentValue(argv, "--runs") ?? ".benchmark-runs"),
     provider,
     model,
     reasoningEffort: reasoningEffort(argumentValue(argv, "--reasoning-effort")),
     timeoutMs,
     outputPath: output ? resolve(output) : undefined,
+    auth: foundry.auth,
+    wireApi: foundry.wireApi,
   };
 }
 

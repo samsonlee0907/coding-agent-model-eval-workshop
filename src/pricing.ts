@@ -1,6 +1,8 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import type { BenchmarkRun, Metric } from "./types.js";
+import { z } from "zod";
+import { createHash } from "node:crypto";
 
 export const azureOpenAiPricingUrl = "https://azure.microsoft.com/en-us/pricing/details/azure-openai/";
 export const anthropicClaudePricingUrl = "https://claude.com/pricing#api";
@@ -20,7 +22,7 @@ export interface CandidatePricing {
 }
 export interface PricingSnapshot {
   schemaVersion: 1; refreshedAt: string; regionFilter: string | null; currency: "USD";
-  sources: Array<{ provider: Provider; pricingUrl: string; documentationUrl: string | null; extendedCachePricingUrl: string | null }>;
+  sources: Array<{ provider: Provider; pricingUrl: string; documentationUrl: string | null; extendedCachePricingUrl: string | null; contentHash?: string }>;
   candidates: CandidatePricing[];
 }
 export interface PricingFetchResponse { ok: boolean; status: number; statusText: string; text(): Promise<string>; }
@@ -51,8 +53,8 @@ export async function refreshPricingSnapshot(runs: readonly BenchmarkRun[], opti
   return {
     schemaVersion: 1, refreshedAt: (options.now ?? (() => new Date()))().toISOString(), regionFilter, currency: "USD",
     sources: [
-      ...(providers.has("openai") ? [{ provider: "openai" as const, pricingUrl: azureOpenAiPricingUrl, documentationUrl: null, extendedCachePricingUrl: null }] : []),
-      ...(providers.has("anthropic") ? [{ provider: "anthropic" as const, pricingUrl: anthropicClaudePricingUrl, documentationUrl: foundryClaudeBillingUrl, extendedCachePricingUrl: anthropicExtendedCachePricingUrl }] : []),
+      ...(providers.has("openai") ? [{ provider: "openai" as const, pricingUrl: azureOpenAiPricingUrl, documentationUrl: null, extendedCachePricingUrl: null, contentHash: createHash("sha256").update(pages[0]).digest("hex") }] : []),
+      ...(providers.has("anthropic") ? [{ provider: "anthropic" as const, pricingUrl: anthropicClaudePricingUrl, documentationUrl: foundryClaudeBillingUrl, extendedCachePricingUrl: anthropicExtendedCachePricingUrl, contentHash: createHash("sha256").update(pages[1]).digest("hex") }] : []),
     ],
     candidates: records.map((run) => candidatePricing(run, run.contract.candidate.provider === "openai" ? azure : claude, regionFilter, options.modelOverrides ?? {})),
   };
@@ -75,10 +77,21 @@ export function parsePricingSnapshot(value: string): PricingSnapshot {
 }
 
 export function estimateRunPriceUsd(run: BenchmarkRun, snapshot: PricingSnapshot | null, scenarioId?: string, anthropicAccounting?: "sdk-inclusive" | "native-uncached"): RunPriceEstimate {
+  if (run.requestAccounting?.nativeTokenCount?.requests) return unavailable(
+    "Native token-count request fees are unknown; an inference-token subtotal is not a complete whole-run price.",
+  );
   if (!snapshot) return unavailable("No saved pricing snapshot. Run prices:refresh first.");
   const candidate = snapshot.candidates.find((entry) => entry.candidate === candidateKey(run));
   const scenario = candidate?.scenarios.find((entry) => entry.id === scenarioId);
   if (!scenarioId || !scenario) return unavailable("Select an explicit saved pricing scenario; no billing default is inferred.");
+  if (run.requestAccounting?.ambiguousRequests && !run.requestAccounting.providerTerminals) {
+    return unavailable("Ambiguous dispatch lacks complete provider metering; missing historical usage cannot be reconstructed.");
+  }
+  if (run.requestAccounting?.providerTerminals
+      && run.requestAccounting.providerTerminals.filter((entry) => entry.terminal.usageStatus === "reported").length
+        + run.requestAccounting.rejectedRequests < run.requestAccounting.physicalRequests) {
+    return unavailable("Some dispatched physical requests lack complete provider token usage; known subtotals cannot price unknown spend.");
+  }
   if (scenario.unavailableReason || !scenario.input || !scenario.output) return unavailable(scenario.unavailableReason ?? "The selected scenario lacks input or output rates.");
   if (scenario.provider === "anthropic" && !anthropicAccounting) return unavailable("Claude input accounting is unverified; choose the labelled SDK-inclusive or native-uncached assumption.");
   const values = Object.fromEntries(meters.map((field) => [field, metric(run.metrics[field === "cachedInput" ? "cacheReadTokens" : field === "cacheWrite" ? "cacheWriteTokens" : `${field}Tokens` as "inputTokens" | "outputTokens"])])) as Record<Meter, number | null>;
@@ -95,7 +108,7 @@ export function estimateRunPriceUsd(run: BenchmarkRun, snapshot: PricingSnapshot
 
 export function sdkReportedCacheShare(run: BenchmarkRun): { ratio: number | null; reason: string | null } {
   const input = metric(run.metrics.inputTokens), reads = metric(run.metrics.cacheReadTokens);
-  if (input === null || reads === null || input === 0 || reads > input) return { ratio: null, reason: "Requires complete SDK input and cache-read counters with positive input and reads not exceeding input." };
+  if (input === null || reads === null || input === 0 || reads > input) return { ratio: null, reason: "Requires captured input and cache-read counters with positive input and reads not exceeding input." };
   return { ratio: reads / input, reason: null };
 }
 
@@ -141,10 +154,16 @@ function candidatePricing(run: BenchmarkRun, rows: Row[], regionFilter: string |
   const candidate = candidateKey(run), recorded = run.contract.candidate;
   const override = overrides[recorded.model] ?? (recorded.deployment ? overrides[recorded.deployment] : undefined);
   const identities = [recorded.model, recorded.deployment].filter((value): value is string => Boolean(value)).map(modelIdentity);
-  const matches = rows.filter((row) => override ? normalize(row.label) === normalize(override) : identities.some((id) => id === modelIdentity(row.label)));
+  const automaticMatches = rows.filter((row) => identities.some((id) => id === modelIdentity(row.label)));
+  const matches = override ? rows.filter((row) => normalize(row.label) === normalize(override)) : automaticMatches;
   const sourceUrl = recorded.provider === "openai" ? azureOpenAiPricingUrl : recorded.provider === "anthropic" ? anthropicClaudePricingUrl : null;
   if (!sourceUrl) return { candidate, recorded: { ...recorded, deployment: recorded.deployment ?? null }, sourceUrl, scenarios: [], unavailableReason: `No official pricing source is configured for provider "${recorded.provider}".` };
-  if (matches.length === 0) return { candidate, recorded: { ...recorded, deployment: recorded.deployment ?? null }, sourceUrl, scenarios: [], unavailableReason: "No conservative official model-label match. Provide an exact --pricing-model override; no substitute model is guessed." };
+  if (matches.length === 0) {
+    const reason = override && automaticMatches.length
+      ? `The override "${override}" is not an exact extracted official row label. Conservative automatic matches: ${automaticMatches.slice(0, 12).map((row) => `"${row.label}"`).join(", ")}. Remove the override to retain all matches, or use one exact label; no substitute model is guessed.`
+      : "No conservative official model-label match. Provide an exact --pricing-model override; no substitute model is guessed.";
+    return { candidate, recorded: { ...recorded, deployment: recorded.deployment ?? null }, sourceUrl, scenarios: [], unavailableReason: reason };
+  }
   const scenarios = matches.flatMap((row) => {
     const provider = recorded.provider as Provider;
     const regions = provider === "anthropic" ? [null] : [...new Set(meters.flatMap((field) => Object.keys(row.rates[field])))].filter((region) => !regionFilter || region === regionFilter);
@@ -182,5 +201,35 @@ function divBlock(html: string, start: number): string {
 }
 function isCode(error: unknown, code: string): error is { code: string } { return typeof error === "object" && error !== null && "code" in error && error.code === code; }
 function assertSnapshot(value: unknown): asserts value is PricingSnapshot {
-  if (!value || typeof value !== "object" || (value as Partial<PricingSnapshot>).schemaVersion !== 1 || !Array.isArray((value as Partial<PricingSnapshot>).candidates)) throw new TypeError("Invalid pricing snapshot.");
+  const provider = z.enum(["openai", "anthropic"]);
+  const text = z.string().min(1), region = z.string().nullable(), ttl = z.enum(["5m", "1h"]).nullable();
+  const price = z.object({ kind: z.enum(["input", "cached-input", "cache-write", "output"]), retailPrice: z.number().finite().nonnegative(), region, cacheTtl: ttl }).strict();
+  const snapshot = z.object({
+    schemaVersion: z.literal(1), refreshedAt: z.string().datetime({ offset: true }), regionFilter: region, currency: z.literal("USD"),
+    sources: z.array(z.object({
+      provider, pricingUrl: z.enum([azureOpenAiPricingUrl, anthropicClaudePricingUrl]),
+      documentationUrl: z.literal(foundryClaudeBillingUrl).nullable(),
+      extendedCachePricingUrl: z.literal(anthropicExtendedCachePricingUrl).nullable(),
+      contentHash: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+    }).strict()),
+    candidates: z.array(z.object({
+      candidate: text, recorded: z.object({ provider: text, model: text, deployment: z.string().nullable() }).strict(),
+      sourceUrl: z.enum([azureOpenAiPricingUrl, anthropicClaudePricingUrl]).nullable(),
+      unavailableReason: z.string().nullable(),
+      scenarios: z.array(z.object({
+        id: text, provider, officialModel: text, region, cacheTtl: ttl,
+        input: price.nullable(), cachedInput: price.nullable(), cacheWrite: price.nullable(), output: price.nullable(), unavailableReason: z.string().nullable(),
+      }).strict()),
+    }).strict()),
+  }).strict().parse(value);
+  if (new Set(snapshot.candidates.map((c) => c.candidate)).size !== snapshot.candidates.length) throw new TypeError("Duplicate pricing candidates.");
+  for (const candidate of snapshot.candidates) {
+    if (new Set(candidate.scenarios.map((s) => s.id)).size !== candidate.scenarios.length) throw new TypeError("Duplicate pricing scenarios.");
+    for (const scenario of candidate.scenarios) {
+      if (scenario.provider !== candidate.recorded.provider) throw new TypeError("Pricing provider binding mismatch.");
+      for (const [field, kind] of [["input", "input"], ["cachedInput", "cached-input"], ["cacheWrite", "cache-write"], ["output", "output"]] as const) {
+        if (scenario[field] && scenario[field]!.kind !== kind) throw new TypeError("Pricing token-meter kind mismatch.");
+      }
+    }
+  }
 }

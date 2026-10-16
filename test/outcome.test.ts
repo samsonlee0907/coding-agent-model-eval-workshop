@@ -31,3 +31,7 @@ test("agent and infrastructure outcomes remain explicit", () => {
   }).class, "harness_failure");
   assert.equal(classifyOutcome({ validation: null, toolCalls: [], runnerError: null }).class, "empty_patch");
 });
+
+test("successful validation cannot certify an interrupted fixed-round execution", () => {
+  assert.equal(classifyOutcome({ validation: validation(0), toolCalls: [], runnerError: "Later review round interrupted", executionComplete: false }).class, "harness_failure");
+});

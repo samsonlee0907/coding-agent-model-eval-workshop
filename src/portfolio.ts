@@ -2,6 +2,7 @@ import { readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, dirname, join, resolve } from "node:path";
 import { comparableBaselineSignature } from "./contract.js";
 import type { BenchmarkRun, Metric } from "./types.js";
+import { assertBenchmarkRun, cleanlyCompletedRun } from "./evidence.js";
 
 const minimumComparableRepeats = 3;
 
@@ -9,7 +10,8 @@ export function loadBenchmarkRuns(directory: string, options: { relocateArtifact
   return walk(directory)
     .filter((path) => basename(path) === "run.json")
     .map((path) => {
-      const run = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, "")) as BenchmarkRun;
+      const run: unknown = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
+      assertBenchmarkRun(run);
       if (!options.relocateArtifacts) return run;
       const artifactDirectory = resolve(dirname(path));
       const local = (recorded: string) => join(artifactDirectory, basename(recorded.replaceAll("\\", "/")));
@@ -30,7 +32,7 @@ export function writeModelSelectionReport(runs: readonly BenchmarkRun[], outputP
 
 export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): string {
   if (runs.length === 0) {
-    throw new RangeError("A model selection report requires at least one completed run.");
+    throw new RangeError("A model selection report requires at least one retained run.");
   }
   const candidates = [...groupByCandidate(runs).values()];
   const baselineSignatures = runs.map((run) => comparableBaselineSignature(run.contract));
@@ -39,39 +41,43 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
   const baselineEvidence = baselineSignatures.some((signature) => signature === null)
     ? "Unknown: one or more runs did not record a version-2 round plan."
     : `${comparableBaselines.size} baseline/task/environment variants are present.`;
-  const allCandidatesHaveResolvedRun = candidates.every((candidate) => candidate.runs.some((run) => run.outcome.class === "resolved"));
+  const allCandidatesHaveResolvedRun = candidates.every((candidate) => candidate.runs.some(cleanlyResolvedRun));
   const enoughComparableRepeats = hasStrictBaseline && candidates.every(
-    (candidate) => candidate.runs.filter((run) => run.outcome.class === "resolved").length >= minimumComparableRepeats,
+    (candidate) => candidate.runs.filter(cleanlyResolvedRun).length >= minimumComparableRepeats,
   );
   const costAvailableForEveryCandidate = candidates.every(hasCostEvidenceForResolvedRuns);
-  const productionDecisionReady = allCandidatesHaveResolvedRun && enoughComparableRepeats && costAvailableForEveryCandidate;
+  const candidateValidationReady = allCandidatesHaveResolvedRun && enoughComparableRepeats && costAvailableForEveryCandidate;
 
   return [
     "# Model-selection evidence report",
     "",
-    `**Completed runs:** ${runs.length}  `,
+    `**Retained runs:** ${runs.length}  `,
+    `**Completed runs:** ${runs.filter(cleanlyCompletedRun).length}  `,
+    `**Interrupted runs:** ${runs.filter((run) => !cleanlyCompletedRun(run)).length}  `,
     `**Candidates:** ${candidates.length}  `,
-    `**Decision status:** ${productionDecisionReady ? "Candidate selection evidence is sufficient" : "No-go: collect more evidence before selecting a production route"}`,
+    "**Evidence scope:** Candidate validation only. Campaign-required acceptance grades and planned/missing cells are not assessed by this legacy portfolio.",
+    `**Decision status:** ${candidateValidationReady ? "Candidate-validation evidence is sufficient; independent acceptance is not assessed" : "No-go: collect more evidence before selecting a production route"}`,
     "",
     "## Executive decision view",
     "",
     "| Gate | Status | Evidence |",
     "|---|---|---|",
-    `| Deterministic correctness | ${allCandidatesHaveResolvedRun ? "Pass, provisionally" : "Fail"} | Every candidate has at least one resolved run only when the gate passes. |`,
+    `| Candidate validation | ${allCandidatesHaveResolvedRun ? "Pass, provisionally" : "Fail"} | Every candidate has at least one validation-resolved run only when the gate passes. |`,
+    "| Required acceptance grading | Not assessed | Use campaign status/report for declared evaluator grades and missing cells; candidate validation is not independent acceptance. |",
     `| Strictly comparable baseline | ${hasStrictBaseline ? "Pass" : "Fail"} | ${baselineEvidence} |`,
     `| Repeatability | ${enoughComparableRepeats ? "Pass" : "Fail"} | Require at least ${minimumComparableRepeats} resolved repetitions per candidate from one pinned baseline. |`,
     `| Monetary cost evidence | ${costAvailableForEveryCandidate ? "Present" : "Missing"} | Every resolved sample for every candidate must report a non-zero provider cost before cost-per-resolved-task is valid. |`,
     "| Code-quality breadth | Missing | Deterministic build/test is captured; coverage, lint, security, accessibility, and human-review evidence are not. |",
     "",
-    "## Candidate reliability and outcome history",
+    "## Candidate-validation reliability and outcome history",
     "",
-    "| Candidate | Runs | Resolved | Unresolved | Harness | Rate limit | Timeout | Tool/container | Empty patch |",
+    "| Candidate | Runs | Validation resolved | Validation unresolved | Runtime harness | Rate limit | Timeout | Tool/container | Empty patch |",
     "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
     ...candidates.map(renderOutcomeRow),
     "",
-    "Failures remain included here. A candidate with one successful run but recurring harness or evaluator failures is not production-ready.",
+    "Resolved means the recorded candidate validation passed after clean execution, not that required acceptance grading completed. Zero runtime harness failures does not certify grading. Missing grades are pending/ungraded, not invented model, provider or harness failures.",
     "",
-    "## Observed efficiency on resolved runs",
+    "## Observed efficiency on validation-resolved runs",
     "",
     "| Candidate | Resolved samples | Median E2E | Median input + output tokens | Median turns | Median tool calls | Median TTFT | Median validation time |",
     "|---|---:|---:|---:|---:|---:|---:|---:|",
@@ -85,7 +91,7 @@ export function renderModelSelectionReport(runs: readonly BenchmarkRun[]): strin
     "|---|---:|---|---|",
     ...candidates.map(renderQualityRow),
     "",
-    "The current evidence proves only that the recorded deterministic validators passed. It does not establish maintainability, security, accessibility, coverage, or subjective code quality.",
+    "The current evidence proves only that the recorded deterministic validators passed. It does not establish independent required acceptance, maintainability, security, accessibility, coverage, or subjective code quality.",
     "",
     "## Operational and integration risks",
     "",
@@ -125,12 +131,15 @@ function groupByCandidate(runs: readonly BenchmarkRun[]): Map<string, CandidateS
 }
 
 function renderOutcomeRow(candidate: CandidateSummary): string {
-  const count = (outcome: BenchmarkRun["outcome"]["class"]) => candidate.runs.filter((run) => run.outcome.class === outcome).length;
+  const count = (outcome: BenchmarkRun["outcome"]["class"]) => candidate.runs.filter((run) => {
+    const interruptedContent = !cleanlyCompletedRun(run) && ["resolved", "unresolved"].includes(run.outcome.class);
+    return (interruptedContent ? "harness_failure" : run.outcome.class) === outcome;
+  }).length;
   return `| ${candidate.label} | ${candidate.runs.length} | ${count("resolved")} | ${count("unresolved")} | ${count("harness_failure")} | ${count("rate_limit")} | ${count("timeout")} | ${count("tool_container_failure")} | ${count("empty_patch")} |`;
 }
 
 function hasCostEvidenceForResolvedRuns(candidate: CandidateSummary): boolean {
-  const resolved = candidate.runs.filter((run) => run.outcome.class === "resolved");
+  const resolved = candidate.runs.filter(cleanlyResolvedRun);
   return resolved.length > 0 && resolved.every((run) => {
     const cost = metricValue(run.metrics.cost);
     return cost !== null && cost > 0;
@@ -138,7 +147,7 @@ function hasCostEvidenceForResolvedRuns(candidate: CandidateSummary): boolean {
 }
 
 function renderEfficiencyRow(candidate: CandidateSummary): string {
-  const resolved = candidate.runs.filter((run) => run.outcome.class === "resolved");
+  const resolved = candidate.runs.filter(cleanlyResolvedRun);
   const values = <T>(selector: (run: BenchmarkRun) => T | null): T[] => resolved.flatMap((run) => {
     const value = selector(run);
     return value === null ? [] : [value];
@@ -153,16 +162,20 @@ function renderEfficiencyRow(candidate: CandidateSummary): string {
 }
 
 function renderQualityRow(candidate: CandidateSummary): string {
-  const resolved = candidate.runs.filter((run) => run.outcome.class === "resolved");
+  const resolved = candidate.runs.filter(cleanlyResolvedRun);
   const commands = [...new Set(resolved.flatMap((run) => run.validation ? [run.validation.command] : []))];
   return `| ${candidate.label} | ${resolved.length}/${candidate.runs.length} | ${commands.length === 0 ? "Unavailable" : commands.map((command) => `\`${escapeCell(command)}\``).join("<br>")} | ${resolved.length > 0 ? "Recorded deterministic validation passed." : "No resolved deterministic validation."} |`;
 }
 
 function renderFailureEvidence(candidates: readonly CandidateSummary[]): string[] {
   const entries = candidates.flatMap((candidate) => candidate.runs
-    .filter((run) => run.outcome.class !== "resolved")
-    .map((run) => `- **${candidate.label} — ${run.outcome.class}:** ${escapeCell(redactUrls(run.runnerError ?? run.outcome.detail))}`));
-  return entries.length === 0 ? ["No non-resolved outcomes were recorded."] : entries;
+    .filter((run) => !cleanlyResolvedRun(run))
+    .map((run) => `- **${candidate.label} — ${cleanlyCompletedRun(run) ? run.outcome.class : "interrupted"}:** ${escapeCell(redactUrls(run.runnerError ?? run.outcome.detail))}`));
+  return entries.length === 0 ? ["No non-resolved candidate-validation outcomes were recorded. Acceptance grading was not assessed."] : entries;
+}
+
+function cleanlyResolvedRun(run: BenchmarkRun): boolean {
+  return cleanlyCompletedRun(run) && run.outcome.class === "resolved";
 }
 
 function countTurns(run: BenchmarkRun): number | null {

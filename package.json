@@ -8,8 +8,10 @@
     "url": "https://github.com/samsonlee0907/coding-agent-model-eval-workshop.git"
   },
   "scripts": {
+    "pretest": "npm run build",
     "test": "node --import tsx --test test/**/*.test.ts",
     "build": "tsc -p tsconfig.json",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "bench": "node dist/cli.js",
     "prebench": "npm run build",
@@ -22,17 +24,27 @@
     "report:html": "node dist/html-report-cli.js",
     "prereport:html": "npm run build",
     "prices:refresh": "node dist/pricing-cli.js",
-    "preprices:refresh": "npm run build"
+    "preprices:refresh": "npm run build",
+    "campaign": "node dist/campaign-cli.js",
+    "precampaign": "npm run build",
+    "doctor": "node dist/doctor-cli.js",
+    "predoctor": "npm run build"
   },
   "keywords": [],
   "author": "",
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@github/copilot-sdk": "^1.0.10-preview.0"
+    "@github/copilot-sdk": "1.0.10-preview.0",
+    "@azure/identity": "^4.13.0",
+    "fflate": "^0.8.2",
+    "sanitize-html": "^2.17.0",
+    "zod": "^4.3.6"
   },
   "devDependencies": {
     "@types/node": "^26.2.0",
+    "@types/sanitize-html": "^2.16.0",
+    "playwright-core": "^1.58.2",
     "tsx": "^4.23.12",
     "typescript": "^7.0.2"
   },
@@ -46,10 +58,16 @@
     "benchmark-workshop-portfolio": "dist/portfolio-cli.js",
     "benchmark-workshop-evaluate": "dist/evaluator-cli.js",
     "benchmark-workshop-report-html": "dist/html-report-cli.js",
-    "benchmark-workshop-prices-refresh": "dist/pricing-cli.js"
+    "benchmark-workshop-prices-refresh": "dist/pricing-cli.js",
+    "benchmark-workshop-campaign": "dist/campaign-cli.js",
+    "benchmark-workshop-doctor": "dist/doctor-cli.js"
   },
   "files": [
     "dist",
-    "README.md"
+    "README.md",
+    "docs",
+    "examples",
+    "benchmark.example.json",
+    "scenarios"
   ]
 }

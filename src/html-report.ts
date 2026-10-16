@@ -14,6 +14,10 @@ import type {
   LlmJudgeScore,
   Metric,
 } from "./types.js";
+import { evidenceFromRuns, recordedAgentTurns } from "./evidence.js";
+import { renderEvidenceReport } from "./report-ui.js";
+import { buildReportPricingView, type AnthropicPricingAccounting } from "./report-pricing.js";
+import { atomicWrite } from "./durable.js";
 
 /**
  * Loads the most recent `llm-evaluation-*.json` artifact from a runs directory,
@@ -37,8 +41,9 @@ export function writeHtmlComparisonReport(
   outputPath: string,
   evaluation: LlmEvaluationResult | null = null,
   pricing: PricingSnapshot | null = null,
+  anthropicAccounting?: AnthropicPricingAccounting,
 ): void {
-  writeFileSync(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing), "utf8");
+  atomicWrite(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing, anthropicAccounting));
 }
 
 /**
@@ -51,6 +56,15 @@ export function renderHtmlComparisonReport(
   runs: readonly BenchmarkRun[],
   evaluation: LlmEvaluationResult | null = null,
   pricing: PricingSnapshot | null = null,
+  anthropicAccounting?: AnthropicPricingAccounting,
+): string {
+  const details = renderLegacyComparisonDetails(runs, evaluation, pricing);
+  const evidence = evidenceFromRuns(runs);
+  return renderEvidenceReport(evidence, [], details, buildReportPricingView(evidence, pricing, anthropicAccounting));
+}
+
+export function renderLegacyComparisonDetails(
+  runs: readonly BenchmarkRun[], evaluation: LlmEvaluationResult | null = null, pricing: PricingSnapshot | null = null,
 ): string {
   if (runs.length === 0) {
     throw new RangeError("An HTML comparison report requires at least one completed run.");
@@ -68,9 +82,10 @@ export function renderHtmlComparisonReport(
   const maxTokens = maxAvailable(runs, (run) => totalTokens(run));
 
   const generatedAt = new Date().toISOString();
-  const strict = comparison.strictlyComparable;
+  const cleanExecutions = runs.every((run) => run.executionStatus !== "interrupted" && run.runnerError === null);
+  const strict = comparison.strictlyComparable && cleanExecutions;
 
-  return [
+  const legacy = [
     "<!doctype html>",
     "<html lang=\"en\">",
     "<head>",
@@ -88,7 +103,7 @@ export function renderHtmlComparisonReport(
     pill(`${runs.length} run${runs.length === 1 ? "" : "s"}`, "neutral"),
     pill(`${countCandidates(runs)} candidate${countCandidates(runs) === 1 ? "" : "s"}`, "neutral"),
     pill(
-      strict ? "Strictly comparable" : "Not strictly comparable — contract drift",
+      strict ? "Strictly comparable" : cleanExecutions ? "Not strictly comparable — contract drift" : "Interrupted execution — no strict ranking",
       strict ? "good" : "warn",
     ),
     pill(evaluation ? "LLM judge attached" : "No LLM judge", evaluation ? "info" : "muted"),
@@ -154,6 +169,7 @@ export function renderHtmlComparisonReport(
     "</html>",
     "",
   ].join("\n");
+  return legacy.slice(legacy.indexOf("<main>") + 6, legacy.indexOf("</main>"));
 }
 
 function runRow(
@@ -357,8 +373,8 @@ function efficiencyProfileSection(runs: readonly BenchmarkRun[]): string {
       cells: runs.map((run) => formatCount(run.metrics.cacheReadTokens)),
     },
     {
-      label: "SDK-reported cache share",
-      note: "cacheReadTokens / inputTokens. This is an SDK-counter ratio, not provider-wire normalization or billing.",
+      label: "Captured cache share",
+      note: "cacheReadTokens / inputTokens from captured provider-terminal or legacy SDK counters, not billing.",
       cells: runs.map((run) => {
         const share = sdkReportedCacheShare(run);
         return share.ratio === null
@@ -434,7 +450,7 @@ function publicationEvidenceSection(
     candidate, attempts, wall: completeMean(attempts, (run) => metricNumber(run.metrics.e2eMs)),
     output: completeMean(attempts, (run) => metricNumber(run.metrics.outputTokens)),
     calls: completeMean(attempts, (run) => run.modelCalls.length),
-    turns: completeMean(attempts, agentTurns),
+    turns: completeMean(attempts, recordedAgentTurns),
     cache: completeCacheShare(attempts), minimum: minimum(attempts),
   }));
   const rank = (
@@ -475,7 +491,7 @@ function publicationEvidenceSection(
     rank("Mean wall time per attempt", values.map((row) => ({ candidate: row.candidate, value: row.wall, note: "Complete captured wall-time evidence required." }))),
     rank("Mean output tokens per attempt", values.map((row) => ({ candidate: row.candidate, value: row.output, note: "Output includes reported reasoning; it is not added twice." }))),
     rank("Mean agent turns and model-usage records", values.map((row) => ({ candidate: row.candidate, value: row.turns, note: `Agent turns; model-usage records: ${row.calls === null ? "Unavailable" : row.calls.toFixed(2)}. These are not user rounds or verified HTTP requests.` }))),
-    rank("SDK-reported cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / SDK inputTokens; not billing or native normalization." })), true),
+    rank("Captured cache share", values.map((row) => ({ candidate: row.candidate, value: row.cache, note: "cacheReadTokens / captured inputTokens; not billing or native normalization." })), true),
     strictlyComparable
       ? ""
       : "<p class=\"note warn-text\">Minimum published list-price values remain descriptive, but their ranking is withheld because the run contracts are not strictly comparable.</p>",
@@ -500,11 +516,6 @@ function completeCacheShare(runs: readonly BenchmarkRun[]): number | null {
   if (values.some((value) => value.input === null || value.reads === null)) return null;
   const input = values.reduce((sum, value) => sum + value.input!, 0), reads = values.reduce((sum, value) => sum + value.reads!, 0);
   return input > 0 && reads <= input ? reads / input : null;
-}
-function agentTurns(run: BenchmarkRun): number | null {
-  if (!existsSync(run.artifacts.normalizedEvents)) return null;
-  return readFileSync(run.artifacts.normalizedEvents, "utf8").split(/\r?\n/).filter(Boolean)
-    .map((line) => JSON.parse(line) as { eventType?: string }).filter((event) => event.eventType === "assistant.turn_start").length;
 }
 function replayEvents(run: BenchmarkRun): Array<{ type: string; text: string }> {
   if (!existsSync(run.artifacts.normalizedEvents)) return [];

@@ -10,6 +10,12 @@ export interface RepositoryContract {
 
 export interface TaskContract {
   id: string;
+  version?: string;
+  title?: string;
+  taskType?: string;
+  tags?: string[];
+  inputsHash?: string;
+  graderInputsHash?: string;
   prompt: string;
   repository: RepositoryContract;
   validationCommand: string;
@@ -145,6 +151,8 @@ export type McpServerSpec = McpStdioServerSpec | McpHttpServerSpec;
 export interface ExecutionPolicy {
   instructions: string;
   tools: ToolCapability[];
+  /** Explicitly add workspace-scoped exact UTF-8 writes without granting shell. */
+  exactContentEdits?: boolean;
   permissionMode: "approve-all" | "manual";
   concurrency: number;
   retries: number;
@@ -166,18 +174,43 @@ export interface RuntimeIdentity {
   sdkVersion: string;
   cliVersion: string;
   nodeVersion: string;
+  cliSha256?: string;
 }
 
 export type FoundryProviderType = "openai" | "anthropic";
 
 /**
  * Foundry-only provider selection. The runner always reads the canonical
- * resource root and credential from FOUNDRY_ENDPOINT and FOUNDRY_API_KEY.
+ * resource root from FOUNDRY_ENDPOINT; key mode reads FOUNDRY_API_KEY,
+ * while Entra mode uses the explicitly selected Azure Identity credential.
  */
 export interface FoundryProviderConfig {
   type: FoundryProviderType;
+  wireApi?: "completions" | "responses";
+  auth?: FoundryAuth;
+  nativeTokenCount?: import("./native-token-count.js").NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
+  capacity?: {
+    source: "administrator-declared" | "azure-management-observation";
+    observedAt: string;
+    endpoint: string;
+    deployment: string;
+    wireApi: "responses" | "completions" | "messages";
+    requestsPerMinute: number;
+    tokensPerMinute: number;
+  };
 }
 
+export type FoundryAuth =
+  | { mode: "key" }
+  | {
+      mode: "entra";
+      credential: "azure-cli" | "managed-identity" | "workload-identity";
+      tenantId?: string;
+      subscriptionId?: string;
+      clientId?: string;
+      timeoutMs?: number;
+    };
 /**
  * Safe Foundry provider identity persisted in a run contract. The endpoint is
  * fingerprinted so traces never disclose its raw URL or credential.
@@ -186,6 +219,11 @@ export interface FoundryProviderIdentity {
   type: FoundryProviderType;
   endpointFingerprint: string;
   requestAdaptation: "openai-null-refusal-sanitizer" | "strip-temperature";
+  wireApi?: "completions" | "responses";
+  auth?: FoundryAuth;
+  nativeTokenCount?: import("./native-token-count.js").NativeTokenCountPolicy;
+  anthropicThinking?: "adaptive";
+  capacity?: Omit<NonNullable<FoundryProviderConfig["capacity"]>, "endpoint"> & { endpointFingerprint: string };
 }
 
 export interface BenchmarkRound {
@@ -203,6 +241,11 @@ export interface RunContract {
   foundryProvider?: FoundryProviderIdentity;
   /** Version 2 persists the follow-up work requests used for this attempt. */
   rounds?: BenchmarkRound[];
+  executionProfile?: {
+    mode: "trusted-local" | "container";
+    image?: string;
+    requestBoundsHash?: string;
+  };
 }
 
 export interface ComparisonContract {
@@ -224,6 +267,24 @@ export interface BenchmarkConfig {
   rounds: BenchmarkRound[];
   workspacePath: string;
   artifactsDirectory?: string;
+  isolation?: {
+    mode: "container";
+    image: string;
+    memoryMb: number;
+    cpus: number;
+    maxFiles: number;
+    maxBytes: number;
+    commandTimeoutMs: number;
+  };
+  requestBounds?: {
+    maxRequests: number;
+    maxRequestBytes: number;
+    maxTokens: number;
+    maxOutputTokens: number;
+    deadlineMs: number;
+    requestsPerMinute: number;
+    tokensPerMinute: number;
+  };
 }
 
 export interface RawEventRecord {
@@ -285,6 +346,7 @@ export interface ValidationResult {
   errorMessage: string | null;
   stdout: string;
   stderr: string;
+  failures?: Array<{ phase: "spawn" | "process" | "stdin" | "stdout" | "stderr" | "cleanup"; code: string | null }>;
 }
 
 export type MetricStatus = "available" | "unavailable";
@@ -368,6 +430,26 @@ export interface BenchmarkRun {
   metrics: DerivedMetrics;
   outcome: Outcome;
   runnerError: string | null;
+  executionStatus?: "completed" | "interrupted";
+  workspaceHash?: string;
+  requestAccounting?: {
+    physicalRequests: number;
+    reservedTokens: number;
+    ambiguousRequests: number;
+    rejectedRequests: number;
+    providerTerminals?: Array<{ request: number; terminal: import("./provider-stream.js").ProviderTerminalEvidence }>;
+    nativeTokenCount?: import("./native-token-count.js").NativeTokenCountAccounting;
+    retryWaitMs?: number;
+  };
+  recordedPricing?: {
+    snapshotHash: string;
+    refreshedAt: string;
+    currency: "USD";
+    scenarioId: string;
+    estimatedUsd: number | null;
+    accountingAssumption: string | null;
+    unavailableReason: string | null;
+  };
 }
 
 export interface LlmJudgeConfig {
@@ -375,6 +457,7 @@ export interface LlmJudgeConfig {
   model: string;
   reasoningEffort: ReasoningEffort;
   timeoutMs: number;
+  requestBounds?: import("./request-policy.js").RequestBounds;
 }
 
 export type InspectedFileRole = "source" | "test" | "config" | "doc" | "other";
@@ -518,20 +601,31 @@ export interface LlmEvaluationResult {
   comparisonSummary: string;
   limitations: string[];
   rawResponse: string;
+  requestAccounting?: NonNullable<BenchmarkRun["requestAccounting"]>;
+  requestBoundsHash?: string;
 }
 
 export interface RunDiagnostics {
   schemaVersion: 1;
   runtime: RuntimeIdentity;
+  reportedBackendVersion?: string;
   selectedModel: string | null;
   configuredToolFilters: string[];
   configurationMessages: string[];
   providerFailure: {
+    bridge?: JsonRecord;
     httpStatus: number | null;
     signature:
+      | "native_token_count_failure"
       | "anthropic_temperature_deprecated"
       | "provider_resource_not_found"
       | "azure_key_auth_disabled"
+      | "permanent_quota"
+      | "provider_rate_limit"
+      | "provider_output_limit"
+      | "provider_content_filter"
+      | "provider_terminal_failure"
+      | "provider_stream_incomplete"
       | "other"
       | null;
     message: string | null;

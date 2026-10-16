@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "roots": { "reviewed": "REPLACE_WITH_REVIEWED_ARTIFACT_DIRECTORY" },
+  "entries": [{
+    "id": "approved-result", "title": "Reviewed final artifact", "task": "text-result",
+    "attempt": "REPLACE_WITH_SELECTED_RUN_ID", "role": "output", "root": "reviewed",
+    "path": "result.txt", "sha256": "REPLACE_WITH_FILE_SHA256", "kind": "text",
+    "allowOriginalDownload": false
+  }]
+}

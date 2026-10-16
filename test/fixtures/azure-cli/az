@@ -1,0 +1,2 @@
+#!/bin/sh
+exec "$BENCHMARK_FAKE_AZ_NODE" "$(dirname "$0")/fake-az.cjs" "$@"

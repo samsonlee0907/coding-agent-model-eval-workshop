@@ -16,19 +16,35 @@ export function immutableContractHash(contract: RunContract): string {
   return hashCanonical(contract);
 }
 
+export function matchesImmutableContractHash(contract: RunContract, recordedHash: string): boolean {
+  if (immutableContractHash(contract) === recordedHash) return true;
+  const legacy = legacyDirectQuickstartEntraHash(contract);
+  return legacy !== null && legacy === recordedHash;
+}
+
 export function compareRunContracts(left: RunContract, right: RunContract): ContractComparison {
   const drift = [
     ...diff("contractVersion", left.contractVersion, right.contractVersion),
     ...diff("task", left.task, right.task),
     ...diff("execution", left.execution, right.execution),
+    ...diff("executionProfile", left.executionProfile ?? null, right.executionProfile ?? null),
     ...roundsDrift(left, right),
     ...diff("runtime.sdkVersion", left.runtime.sdkVersion, right.runtime.sdkVersion),
     ...diff("runtime.cliVersion", left.runtime.cliVersion, right.runtime.cliVersion),
+    ...diff("runtime.nodeVersion", left.runtime.nodeVersion, right.runtime.nodeVersion),
+    ...diff("runtime.cliSha256", left.runtime.cliSha256, right.runtime.cliSha256),
+    ...diff("foundryProvider.wireApi", left.foundryProvider?.wireApi ?? "completions", right.foundryProvider?.wireApi ?? "completions"),
     ...diff(
       "foundryProvider.requestAdaptation",
       left.foundryProvider?.requestAdaptation ?? "none",
       right.foundryProvider?.requestAdaptation ?? "none",
     ),
+    ...diff("foundryProvider.type", left.foundryProvider?.type ?? null, right.foundryProvider?.type ?? null),
+    ...diff("foundryProvider.endpointFingerprint", left.foundryProvider?.endpointFingerprint ?? null, right.foundryProvider?.endpointFingerprint ?? null),
+    ...diff("foundryProvider.auth", left.foundryProvider?.auth ?? { mode: "key" }, right.foundryProvider?.auth ?? { mode: "key" }),
+    ...diff("foundryProvider.capacity", capacityComparison(left), capacityComparison(right)),
+    ...diff("foundryProvider.nativeTokenCount", left.foundryProvider?.nativeTokenCount ?? null, right.foundryProvider?.nativeTokenCount ?? null),
+    ...diff("foundryProvider.anthropicThinking", left.foundryProvider?.anthropicThinking ?? null, right.foundryProvider?.anthropicThinking ?? null),
   ];
   return { strictlyComparable: drift.length === 0, drift };
 }
@@ -68,15 +84,33 @@ export function comparableBaselineSignature(contract: RunContract): string | nul
     contractVersion: contract.contractVersion,
     task: contract.task,
     execution: contract.execution,
+    executionProfile: contract.executionProfile ?? null,
     rounds: contract.rounds,
     runtime: {
       sdkVersion: contract.runtime.sdkVersion,
       cliVersion: contract.runtime.cliVersion,
+      nodeVersion: contract.runtime.nodeVersion,
+      ...(contract.runtime.cliSha256 ? { cliSha256: contract.runtime.cliSha256 } : {}),
     },
     foundryProvider: {
+      type: contract.foundryProvider?.type ?? null,
+      endpointFingerprint: contract.foundryProvider?.endpointFingerprint ?? null,
+      auth: contract.foundryProvider?.auth ?? { mode: "key" },
       requestAdaptation: contract.foundryProvider?.requestAdaptation ?? "none",
+      wireApi: contract.foundryProvider?.wireApi ?? "completions",
+      ...(contract.foundryProvider?.capacity ? { capacity: capacityComparison(contract) } : {}),
+      ...(contract.foundryProvider?.nativeTokenCount ? { nativeTokenCount: contract.foundryProvider.nativeTokenCount } : {}),
+      ...(contract.foundryProvider?.anthropicThinking ? { anthropicThinking: contract.foundryProvider.anthropicThinking } : {}),
     },
   });
+}
+
+function capacityComparison(contract: RunContract) {
+  const capacity = contract.foundryProvider?.capacity;
+  return capacity ? {
+    endpointFingerprint: capacity.endpointFingerprint, wireApi: capacity.wireApi,
+    requestsPerMinute: capacity.requestsPerMinute, tokensPerMinute: capacity.tokensPerMinute,
+  } : null;
 }
 
 export function createComparisonContract(
@@ -132,9 +166,42 @@ function stableStringify(value: unknown): string {
     return `[${value.map(stableStringify).join(",")}]`;
   }
   if (isPlainObject(value)) {
-    return `{${Object.keys(value)
+    return `{${Object.keys(value).filter((key) => value[key] !== undefined)
       .sort()
       .map((key) => `${JSON.stringify(key)}:${stableStringify(value[key])}`)
+      .join(",")}}`;
+  }
+  return JSON.stringify(value);
+}
+
+function legacyDirectQuickstartEntraHash(contract: RunContract): string | null {
+  // Direct quickstart previously hashed absent CLI selector fields as undefined before JSON omitted them.
+  const auth = contract.foundryProvider?.auth;
+  if (contract.contractVersion !== 2
+      || !/^quickstart-[a-f0-9]{12}$/.test(contract.task.id)
+      || contract.task.validationCommand !== "auto"
+      || contract.candidate.deployment !== "local-byok"
+      || contract.executionProfile?.mode !== "trusted-local"
+      || auth?.mode !== "entra") {
+    return null;
+  }
+  const optionalFields = ["tenantId", "clientId", "subscriptionId"] as const;
+  const missing = optionalFields.filter((field) => !Object.hasOwn(auth, field));
+  if (!missing.length) return null;
+  const legacyAuth: Record<string, unknown> = { ...auth };
+  for (const field of missing) legacyAuth[field] = undefined;
+  const legacyContract: RunContract = {
+    ...contract,
+    foundryProvider: { ...contract.foundryProvider!, auth: legacyAuth as typeof auth },
+  };
+  return createHash("sha256").update(legacyStableStringify(legacyContract)).digest("hex");
+}
+
+function legacyStableStringify(value: unknown): string {
+  if (Array.isArray(value)) return `[${value.map(legacyStableStringify).join(",")}]`;
+  if (isPlainObject(value)) {
+    return `{${Object.keys(value).sort()
+      .map((key) => `${JSON.stringify(key)}:${legacyStableStringify(value[key])}`)
       .join(",")}}`;
   }
   return JSON.stringify(value);
