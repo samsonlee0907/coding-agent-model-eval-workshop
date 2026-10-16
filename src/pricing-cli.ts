@@ -6,7 +6,10 @@ import { refreshPricingSnapshot, writePricingSnapshot } from "./pricing.js";
 async function main(): Promise<void> {
   const args = process.argv.slice(2);
   if (args.includes("--help")) {
-    console.log("Usage: npm run prices:refresh -- --runs <runs> [--region <pricing-page-region>] [--pricing-model recorded=Official Label]");
+    console.log(
+      "Usage: npm run prices:refresh -- --runs <runs> [--region <pricing-page-region>] [--pricing-model recorded=Exact Official Row Label]\n" +
+      "Omit --pricing-model to retain every conservative identity match. An override is exact and suppresses automatic matching for that recorded model/deployment.",
+    );
     return;
   }
   const runsFlag = args.indexOf("--runs");

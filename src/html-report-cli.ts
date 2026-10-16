@@ -8,21 +8,22 @@ import { loadPricingSnapshot, parsePricingSnapshot } from "./pricing.js";
 import { evidenceFromRuns, parseReportEvidence } from "./evidence.js";
 import { writeReportBundle } from "./publication.js";
 import { renderEvidenceReport } from "./report-ui.js";
+import { buildReportPricingView, type AnthropicPricingAccounting } from "./report-pricing.js";
 import { atomicWrite } from "./durable.js";
 import { assertCliArguments } from "./cli-arguments.js";
 
 if (process.argv.includes("--help")) {
-  console.log("Usage: npm run report:html -- [--runs <run-directory> | --evidence <evidence.json>] [--output <report.html> | --bundle <new-folder>] [--zip] [--publication <manifest.json>] [--evaluation <llm-evaluation.json>] [--pricing <pricing-snapshot.json>]");
+  console.log("Usage: npm run report:html -- [--runs <run-directory> | --evidence <evidence.json>] [--output <report.html> | --bundle <new-folder>] [--zip] [--publication <manifest.json>] [--evaluation <llm-evaluation.json>] [--pricing <pricing-snapshot.json>] [--anthropic-accounting sdk-inclusive|native-uncached]");
 } else {
   try {
     assertCliArguments(process.argv.slice(2), {
       "--runs": "value", "--evidence": "value", "--output": "value", "--bundle": "value", "--zip": "switch",
-      "--publication": "value", "--evaluation": "value", "--pricing": "value",
+      "--publication": "value", "--evaluation": "value", "--pricing": "value", "--anthropic-accounting": "value",
     });
     const runsDirectory = resolve(argumentValue("--runs") ?? ".benchmark-runs");
     const singleOutput = argumentValue("--output");
     const evidencePath = argumentValue("--evidence");
-    if (evidencePath && (argumentValue("--runs") || argumentValue("--evaluation") || argumentValue("--pricing"))) throw new TypeError("--evidence is already normalized; legacy runs/evaluation/pricing options cannot be combined with it.");
+    if (evidencePath && (argumentValue("--runs") || argumentValue("--evaluation"))) throw new TypeError("--evidence is already normalized; legacy runs/evaluation options cannot be combined with it.");
     const outputPath = resolve(singleOutput ?? argumentValue("--bundle") ?? resolve(runsDirectory, "benchmark-report"));
     if (singleOutput && argumentValue("--bundle")) throw new TypeError("Choose single --output or portable --bundle, not both.");
     if (singleOutput && (process.argv.includes("--zip") || argumentValue("--publication"))) throw new TypeError("ZIP and approved previews require the portable --bundle path.");
@@ -36,17 +37,23 @@ if (process.argv.includes("--help")) {
       : evidencePath ? null : loadLatestEvaluation(runsDirectory);
     const pricingPath = argumentValue("--pricing");
     const pricing = pricingPath ? parsePricingSnapshot(readFileSync(resolve(pricingPath), "utf8")) : evidencePath ? null : loadPricingSnapshot(runsDirectory);
+    const anthropicAccountingValue = argumentValue("--anthropic-accounting");
+    if (anthropicAccountingValue && anthropicAccountingValue !== "sdk-inclusive" && anthropicAccountingValue !== "native-uncached") {
+      throw new TypeError("--anthropic-accounting must be sdk-inclusive or native-uncached.");
+    }
+    const anthropicAccounting = anthropicAccountingValue as AnthropicPricingAccounting | undefined;
     const evidence = evidencePath ? parseReportEvidence(JSON.parse(readFileSync(resolve(evidencePath), "utf8"))) : evidenceFromRuns(runs);
     const publication = argumentValue("--publication");
     let report: string;
     if (singleOutput) {
-      if (evidencePath) atomicWrite(outputPath, renderEvidenceReport(evidence));
-      else writeHtmlComparisonReport(runs, outputPath, evaluation, pricing);
+      if (evidencePath) atomicWrite(outputPath, renderEvidenceReport(evidence, [], "", buildReportPricingView(evidence, pricing, anthropicAccounting)));
+      else writeHtmlComparisonReport(runs, outputPath, evaluation, pricing, anthropicAccounting);
       report = outputPath;
     } else {
       report = writeReportBundle(evidence, outputPath, {
         zip: process.argv.includes("--zip"), publication: publication ? JSON.parse(readFileSync(resolve(publication), "utf8")) : undefined,
         details: runs.length ? renderLegacyComparisonDetails(runs, evaluation, pricing) : undefined,
+        pricing, anthropicAccounting,
       });
     }
     console.log(JSON.stringify({

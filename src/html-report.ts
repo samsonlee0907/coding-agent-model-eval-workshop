@@ -16,6 +16,7 @@ import type {
 } from "./types.js";
 import { evidenceFromRuns, recordedAgentTurns } from "./evidence.js";
 import { renderEvidenceReport } from "./report-ui.js";
+import { buildReportPricingView, type AnthropicPricingAccounting } from "./report-pricing.js";
 import { atomicWrite } from "./durable.js";
 
 /**
@@ -40,8 +41,9 @@ export function writeHtmlComparisonReport(
   outputPath: string,
   evaluation: LlmEvaluationResult | null = null,
   pricing: PricingSnapshot | null = null,
+  anthropicAccounting?: AnthropicPricingAccounting,
 ): void {
-  atomicWrite(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing));
+  atomicWrite(outputPath, renderHtmlComparisonReport(runs, evaluation, pricing, anthropicAccounting));
 }
 
 /**
@@ -54,9 +56,11 @@ export function renderHtmlComparisonReport(
   runs: readonly BenchmarkRun[],
   evaluation: LlmEvaluationResult | null = null,
   pricing: PricingSnapshot | null = null,
+  anthropicAccounting?: AnthropicPricingAccounting,
 ): string {
   const details = renderLegacyComparisonDetails(runs, evaluation, pricing);
-  return renderEvidenceReport(evidenceFromRuns(runs), [], details);
+  const evidence = evidenceFromRuns(runs);
+  return renderEvidenceReport(evidence, [], details, buildReportPricingView(evidence, pricing, anthropicAccounting));
 }
 
 export function renderLegacyComparisonDetails(

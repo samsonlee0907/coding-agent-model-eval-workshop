@@ -508,7 +508,14 @@ HTML downloads also contain `attempt-usage.csv` / `attempt-usage.json` for all
 retained attempts, with explicit selection and cohort/contract/comparison
 bindings. `--runs`, `--evidence`, campaign reports, and explicit single-file
 reports use the same adapters/renderer; no model rerun or external request is
-needed. Recorded USD estimates and SDK cost multipliers stay distinct.
+needed. The shared report follows the same overview, methodology, findings,
+results, efficiency/cost, pricing, task-type guidance, task/replay, usage, and
+approved-artifact structure for a small custom task or a larger campaign.
+Its default findings are deterministic evidence summaries; report generation
+does not invoke an LLM or accept generated prose that could change grades,
+selection, numeric facts, or prices. Optional judge artifacts remain separate,
+explicitly attached evidence rather than an automatic report-writing step.
+Recorded USD estimates and SDK cost multipliers stay distinct.
 
 The legacy `portfolio --runs` summarizes retained candidate-validation
 outcomes only; `resolved` means that validator passed after clean execution.
@@ -524,9 +531,16 @@ Optional campaign `pricing` pins a validated official snapshot and an explicit
 scenario ID for every candidate. Recorded estimates retain snapshot hash,
 retrieval time, scenario and accounting assumption. Later `prices:refresh`
 produces a separate saved **what-if** snapshot; it never rewrites a run's
-recorded price. Legacy report pricing details can show the explicitly supplied
-what-if snapshot. There is no live-price feed, invoice estimation claim or
-interactive automatic repricing of normalized campaign evidence.
+recorded price. The main report pricing section always remains visible:
+without a snapshot it says UNKNOWN and gives the explicit refresh/attach action;
+with one, it shows saved source/content provenance, unit rates, selected clean
+execution estimates, and all-attempt/recovery estimates separately. Anthropic
+what-if totals require an explicit `sdk-inclusive` or `native-uncached`
+accounting choice and remain unavailable without it. Portable publication
+exports `pricing.json`, `pricing-estimates.csv`, `pricing-options.json`, and,
+when attached or campaign-pinned, the exact integrity-bound
+`pricing-snapshot.json`. There is no live-price feed, invoice estimation claim
+or interactive automatic repricing of normalized campaign evidence.
 
 By default, a report contains safe allowlisted metadata, not raw messages,
 tool arguments/results, validation output, prompts, patches or workspaces.

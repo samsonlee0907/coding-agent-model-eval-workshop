@@ -43,6 +43,28 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     page.on("pageerror", (error) => errors.push(error.message));
     page.on("request", (request) => { if (/^https?:/.test(request.url())) remote.push(request.url()); });
     await page.goto(pathToFileURL(index).href);
+    for (const id of ["overview", "methodology", "findings", "matrix", "efficiency", "pricing", "insights", "inspector", "usage", "artifacts"]) {
+      assert.equal(await page.locator(`#${id}`).count(), 1);
+    }
+    assert.match(await page.locator("#overview").textContent() ?? "", /Task cohorts/);
+    assert.equal(await page.locator("#overview svg").count(), 1);
+    assert.ok(await page.locator("#findings svg").count() >= 2);
+    assert.ok(await page.locator("#efficiency svg").count() >= 4);
+    assert.equal(await page.locator("#pricing svg").count(), 1);
+    assert.equal(await page.locator("canvas").count(), 0);
+    assert.deepEqual(await page.evaluate(() => ({
+      paper: getComputedStyle(document.body).backgroundColor,
+      ink: getComputedStyle(document.body).color,
+      nav: getComputedStyle(document.querySelector("aside")!).backgroundColor,
+      radius: getComputedStyle(document.querySelector("article")!).borderRadius,
+    })), {
+      paper: "rgb(244, 246, 250)",
+      ink: "rgb(21, 42, 67)",
+      nav: "rgb(17, 34, 56)",
+      radius: "14px",
+    });
+    assert.match(await page.locator("#pricing").textContent() ?? "", /Pricing UNKNOWN/);
+    assert.equal(await page.locator('script[src],link[rel="stylesheet"],img[src^="http"],iframe[src^="http"]').count(), 0);
     assert.equal(await page.locator("#matrix [data-cell]").count(), 280);
     assert.equal(await page.locator("#usage-body tr").count(), 280);
     assert.equal(await page.locator(".usage-card").count(), 12);
@@ -62,6 +84,10 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     await page.locator("#usage-csv").click();
     const usagePath = await (await usageDownload).path(); assert.ok(usagePath);
     assert.equal(readFileSync(usagePath, "utf8"), readFileSync(join(root, "report", "attempt-usage.csv"), "utf8"));
+    const pricingDownload = page.waitForEvent("download");
+    await page.locator("#pricing-json").click();
+    const pricingPath = await (await pricingDownload).path(); assert.ok(pricingPath);
+    assert.equal(readFileSync(pricingPath, "utf8"), readFileSync(join(root, "report", "pricing.json"), "utf8"));
     assert.equal(await page.locator("iframe").getAttribute("sandbox"), "");
     assert.equal(await page.frameLocator("iframe").locator("h2").textContent(), "Approved inert output");
     assert.equal(await page.frameLocator("iframe").locator("script,form,img").count(), 0);
@@ -78,8 +104,37 @@ test("file:// report works offline at desktop/mobile, filters/exports, and inert
     assert.equal(page.url(), reportUrl);
     assert.equal(await popup.evaluate(() => window.opener === null), true);
     await popup.close();
-    await page.setViewportSize({ width: 390, height: 844 });
+    await page.setViewportSize({ width: 393, height: 852 });
     assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth));
+    const mobileLayout = await page.evaluate(() => {
+      const main = document.querySelector("main")!.getBoundingClientRect();
+      const pricing = document.querySelector("#pricing")!.getBoundingClientRect();
+      const heading = document.querySelector("#pricing h2")!.getBoundingClientRect();
+      return {
+        viewport: window.innerWidth,
+        main: { left: main.left, right: main.right, width: main.width },
+        pricing: { left: pricing.left, right: pricing.right, width: pricing.width },
+        heading: { left: heading.left, right: heading.right, width: heading.width },
+        mainMarginLeft: getComputedStyle(document.querySelector("main")!).marginLeft,
+      };
+    });
+    assert.equal(mobileLayout.viewport, 393);
+    assert.equal(mobileLayout.mainMarginLeft, "0px");
+    assert.ok(mobileLayout.main.left <= 0.5);
+    assert.ok(mobileLayout.main.right >= mobileLayout.viewport - 0.5);
+    assert.ok(mobileLayout.main.width >= mobileLayout.viewport - 1);
+    assert.ok(mobileLayout.pricing.left >= 16);
+    assert.ok(mobileLayout.pricing.right <= mobileLayout.viewport - 16);
+    assert.ok(mobileLayout.pricing.width >= mobileLayout.viewport - 48);
+    assert.ok(mobileLayout.heading.left >= mobileLayout.pricing.left);
+    assert.ok(mobileLayout.heading.right <= mobileLayout.pricing.right + 0.5);
+    const chartScroll = await page.locator("#pricing .chart-scroll").evaluate((element) => ({
+      overflowX: getComputedStyle(element).overflowX,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    assert.equal(chartScroll.overflowX, "auto");
+    assert.ok(chartScroll.scrollWidth > chartScroll.clientWidth);
     await page.locator("#cell-selector").focus(); await page.keyboard.press("ArrowDown"); await page.keyboard.press("Enter");
     assert.ok((await page.locator("#cell-detail").textContent())?.includes("Latest clean execution"));
     assert.deepEqual(errors, []); assert.deepEqual(remote, []);

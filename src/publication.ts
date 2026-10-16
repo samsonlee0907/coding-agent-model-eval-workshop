@@ -7,6 +7,8 @@ import { z } from "zod";
 import { atomicWrite } from "./durable.js";
 import { parseReportEvidence, selectReportCells, sha256Schema, taskTypeAnalysis, type ReportEvidence, type EvidenceAttempt } from "./evidence.js";
 import { renderEvidenceReport } from "./report-ui.js";
+import { buildReportPricingView, pricingEstimateRows, type AnthropicPricingAccounting } from "./report-pricing.js";
+import { parsePricingSnapshot, type PricingSnapshot } from "./pricing.js";
 
 export const publicationManifestSchema = z.object({
   schemaVersion: z.literal(1),
@@ -168,7 +170,13 @@ export function selectedResultRows(evidence: ReportEvidence) {
   }));
 }
 
-export function writeReportBundle(input: ReportEvidence, output: string, options: { publication?: unknown; zip?: boolean; details?: string } = {}): string {
+export function writeReportBundle(input: ReportEvidence, output: string, options: {
+  publication?: unknown;
+  zip?: boolean;
+  details?: string;
+  pricing?: PricingSnapshot | null;
+  anthropicAccounting?: AnthropicPricingAccounting;
+} = {}): string {
   const evidence = parseReportEvidence(input);
   const target = resolve(output);
   if (existsSync(target) || (options.zip && existsSync(`${target}.zip`))) throw new Error("Report output exists; choose a new versioned destination. Existing reports are never overwritten.");
@@ -181,8 +189,10 @@ export function writeReportBundle(input: ReportEvidence, output: string, options
     const selected = selectedResultRows(evidence);
     const analysis = taskTypeAnalysis(evidence);
     const usage = attemptUsageRows(evidence);
+    const pricing = buildReportPricingView(evidence, options.pricing ?? null, options.anthropicAccounting);
+    const pricingRows = pricingEstimateRows(pricing);
     const files = new Map<string, Uint8Array>([
-      ["index.html", strToU8(renderEvidenceReport(evidence, approved.previews, options.details))],
+      ["index.html", strToU8(renderEvidenceReport(evidence, approved.previews, options.details, pricing))],
       ["evidence.json", strToU8(`${JSON.stringify(evidence, null, 2)}\n`)],
       ["selected-results.json", strToU8(`${JSON.stringify(selected, null, 2)}\n`)],
       ["selected-results.csv", strToU8(toCsv(selected, Object.keys(selected[0] ?? { task: "", candidate: "", status: "" })))],
@@ -190,9 +200,13 @@ export function writeReportBundle(input: ReportEvidence, output: string, options
       ["attempt-usage.csv", strToU8(toCsv(usage, Object.keys(usage[0] ?? { task: "", candidate: "", runId: "" })))],
       ["task-types.json", strToU8(`${JSON.stringify(analysis, null, 2)}\n`)],
       ["task-types.csv", strToU8(toCsv(analysis, Object.keys(analysis[0] ?? { taskType: "", samples: "" })))],
+      ["pricing.json", strToU8(`${JSON.stringify(pricing, null, 2)}\n`)],
+      ["pricing-estimates.csv", strToU8(toCsv(pricingRows, Object.keys(pricingRows[0] ?? { candidate: "", scenarioId: "", selectedUsd: "" })))],
+      ["pricing-options.json", strToU8(`${JSON.stringify({ anthropicAccounting: options.anthropicAccounting ?? null }, null, 2)}\n`)],
       ["previews.json", strToU8(`${JSON.stringify(approved.previews, null, 2)}\n`)],
       ...approved.originals,
     ]);
+    if (options.pricing) files.set("pricing-snapshot.json", strToU8(`${JSON.stringify(options.pricing, null, 2)}\n`));
     const integrity = [...files].map(([path, bytes]) => ({ path, bytes: bytes.length, sha256: createHash("sha256").update(bytes).digest("hex") }));
     files.set("integrity.json", strToU8(JSON.stringify({ schemaVersion: 1, cells: selected.length, files: integrity }, null, 2)));
     if ([...files.values()].reduce((sum, bytes) => sum + bytes.length, 0) > 64 * 1024 * 1024) throw new RangeError("Portable report exceeds the 64 MiB publication byte bound.");
@@ -237,6 +251,19 @@ export function verifyReportBundle(directory: string): void {
   if (hasUsageExport
       && JSON.stringify(JSON.parse(readFileSync(join(directory, "attempt-usage.json"), "utf8"))) !== JSON.stringify(attemptUsageRows(evidence))) {
     throw new Error("Publication attempt usage mismatch.");
+  }
+  if (existsSync(join(directory, "pricing.json"))) {
+    const snapshot = existsSync(join(directory, "pricing-snapshot.json"))
+      ? parsePricingSnapshot(readFileSync(join(directory, "pricing-snapshot.json"), "utf8"))
+      : null;
+    const pricingOptions = existsSync(join(directory, "pricing-options.json"))
+      ? z.object({ anthropicAccounting: z.enum(["sdk-inclusive", "native-uncached"]).nullable() }).strict()
+        .parse(JSON.parse(readFileSync(join(directory, "pricing-options.json"), "utf8")))
+      : { anthropicAccounting: null };
+    const pricing = JSON.parse(readFileSync(join(directory, "pricing.json"), "utf8"));
+    if (JSON.stringify(pricing) !== JSON.stringify(buildReportPricingView(evidence, snapshot, pricingOptions.anthropicAccounting ?? undefined))) {
+      throw new Error("Publication pricing evidence mismatch.");
+    }
   }
   const previews: ApprovedPreview[] = JSON.parse(readFileSync(join(directory, "previews.json"), "utf8"));
   for (const preview of previews) if (preview.download && !integrity.files.some((f) => f.path === preview.download)) throw new Error("Missing approved download.");

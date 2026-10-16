@@ -1,5 +1,6 @@
 import { parseReportEvidence, selectReportCells, taskTypeAnalysis, type ReportEvidence } from "./evidence.js";
 import { selectedResultRows, attemptUsageRows, toCsv, type ApprovedPreview } from "./publication.js";
+import { buildReportPricingView, pricingEstimateRows, type ReportPricingView } from "./report-pricing.js";
 
 export function escapeReportHtml(value: unknown): string {
   return String(value).replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
@@ -8,9 +9,15 @@ function embedded(value: unknown): string {
   return JSON.stringify(value).replaceAll("<", "\\u003c").replaceAll(">", "\\u003e").replaceAll("&", "\\u0026").replaceAll("\u2028", "\\u2028").replaceAll("\u2029", "\\u2029");
 }
 
-export function renderEvidenceReport(input: ReportEvidence, previews: readonly ApprovedPreview[] = [], details = ""): string {
+export function renderEvidenceReport(
+  input: ReportEvidence,
+  previews: readonly ApprovedPreview[] = [],
+  details = "",
+  pricing?: ReportPricingView,
+): string {
   const evidence = parseReportEvidence(input);
   if (Buffer.byteLength(JSON.stringify(evidence)) > 16 * 1024 * 1024) throw new RangeError("Report evidence exceeds the 16 MiB rendering bound; publish smaller independently identified subsets.");
+  if (pricing && Buffer.byteLength(JSON.stringify(pricing)) > 4 * 1024 * 1024) throw new RangeError("Report pricing view exceeds the 4 MiB rendering bound; attach a smaller reviewed scenario subset.");
   const cells = selectReportCells(evidence), rows = selectedResultRows(evidence), analysis = taskTypeAnalysis(evidence), usage = attemptUsageRows(evidence);
   const h = escapeReportHtml;
   const format = (value: number | null | undefined) => value == null ? "Unknown" : value.toLocaleString("en-US", { maximumFractionDigits: 2 });
@@ -33,29 +40,239 @@ export function renderEvidenceReport(input: ReportEvidence, previews: readonly A
       return `<button class="cell ${cell.status}" data-cell="${h(cell.id)}" aria-label="${h(`${task.title}, ${candidate.model}, repeat ${repeat + 1}: ${cell.status}`)}">${cell.status.toUpperCase()}${evidence.repeats > 1 ? ` #${repeat + 1}` : ""}</button>`;
     }).join("")}</td>`).join("")}</tr>`).join("");
   const maximum = Math.max(1, ...analysis.map((a) => a.samples));
+  const price = pricing ?? buildReportPricingView(evidence);
+  const pricingRows = pricingEstimateRows(price);
+  const pricingCsv = toCsv(pricingRows, Object.keys(pricingRows[0] ?? { candidate: "", scenarioId: "", selectedUsd: "" }));
+  const candidateActivity = evidence.candidates.map((candidate) => {
+    const selectedIds = new Set(cells.filter((cell) => cell.candidate === candidate.id && cell.selected).map((cell) => cell.selected!.id));
+    const selectedUsage = usage.filter((row) => selectedIds.has(row.runId));
+    const total = (key: "inputTokens" | "outputTokens" | "totalTokens" | "wallMs" | "physicalInferenceRequests" | "toolCalls" | "cacheReadTokens") =>
+      selectedUsage.length && selectedUsage.every((row) => row[key] !== null)
+        ? selectedUsage.reduce((sum, row) => sum + Number(row[key]), 0)
+        : null;
+    return {
+      ...candidate,
+      selected: selectedUsage.length,
+      inputTokens: total("inputTokens"),
+      outputTokens: total("outputTokens"),
+      totalTokens: total("totalTokens"),
+      wallMs: total("wallMs"),
+      physicalRequests: total("physicalInferenceRequests"),
+      toolCalls: total("toolCalls"),
+      cacheReadTokens: total("cacheReadTokens"),
+    };
+  });
+  const modelCoverage = evidence.candidates.map((candidate) => {
+    const modelCells = cells.filter((cell) => cell.candidate === candidate.id);
+    return {
+      ...candidate,
+      total: modelCells.length,
+      selected: modelCells.filter((cell) => cell.selected).length,
+      pass: modelCells.filter((cell) => cell.status === "pass").length,
+      fail: modelCells.filter((cell) => cell.status === "fail").length,
+      ungraded: modelCells.filter((cell) => cell.status === "ungraded").length,
+      unavailable: modelCells.filter((cell) => ["missing", "interrupted", "error"].includes(cell.status)).length,
+    };
+  });
+  const findings = [
+    {
+      title: "Coverage retained", value: `${complete}/${cells.length}`,
+      body: "Cleanly completed declared cells. Missing, interrupted, and error cells remain visible and never borrow another cohort's output.",
+    },
+    {
+      title: "Acceptance evidence", value: `${count("pass")} PASS / ${count("fail")} FAIL`,
+      body: `${count("ungraded")} cells are UNGRADED. Candidate validation and independent acceptance remain separate.`,
+    },
+    {
+      title: "Operational history", value: `${evidence.attempts.length} attempts`,
+      body: `${Math.max(0, evidence.attempts.length - complete)} retained attempts are outside the selected clean-execution set, including recovery and interrupted work.`,
+    },
+    {
+      title: "Pricing readiness", value: price.status === "available" ? "AVAILABLE" : price.status === "partial" ? "PARTIAL" : "UNKNOWN",
+      body: price.status === "available"
+        ? `${price.coverage.matchedCandidates}/${price.coverage.candidates} candidate identities have saved usable rates. Recorded spend remains separate from what-if estimates.`
+        : price.unavailableReason ?? "Missing cost is unknown, never zero or free.",
+    },
+  ];
+  const coverageGraphic = renderCoverageGraphic(cells.length, complete, count("ungraded"), count("missing") + count("interrupted") + count("error"));
+  const findingVisuals = renderFindingVisuals(cells.length, complete, count("pass"), count("fail"), count("ungraded"), count("missing") + count("interrupted") + count("error"), evidence.attempts.length);
+  const efficiencyVisuals = [
+    renderStackedMetricChart("Captured input and output tokens", candidateActivity.map((candidate) => ({
+      label: candidate.model, primary: candidate.inputTokens, secondary: candidate.outputTokens,
+    })), "Input", "Output"),
+    renderMetricChart("Recorded wall time", candidateActivity.map((candidate) => ({ label: candidate.model, value: candidate.wallMs })), (value) => `${(value / 1000).toFixed(1)} s`, "wall"),
+    renderGroupedMetricChart("Physical inference and tool-call records", candidateActivity.map((candidate) => ({
+      label: candidate.model, primary: candidate.physicalRequests, secondary: candidate.toolCalls,
+    })), "Inference HTTP", "Tool calls"),
+    renderMetricChart("Captured cache-read tokens", candidateActivity.map((candidate) => ({ label: candidate.model, value: candidate.cacheReadTokens })), format, "cache"),
+  ].join("");
+  const pricingHtml = renderPricingSection(price);
   return `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta name="referrer" content="no-referrer"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; frame-src 'self' blob:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'">
-<title>Coding Agent Model Benchmark</title><style>${reportStyles}</style></head><body>
-<a class="skip" href="#methodology">Skip to methodology</a>
-<aside><strong class="brand">B / Benchmark</strong><nav><a href="#methodology">Methodology</a><a href="#matrix">Result matrix</a><a href="#usage">Tokens &amp; activity</a><a href="#insights">Task-type insights</a><a href="#inspector">Evidence &amp; replay</a><a href="#operations">Attempt history</a></nav><p>Portable offline evidence.<br>No live pricing or provider calls.</p></aside>
-<main><header><small>${h(evidence.campaignId)} / ${h(evidence.createdAt)}</small><h1>Coding Agent<br>Model Benchmark</h1><p class="lead">Task-owned acceptance, honest missingness, and reproducible model comparisons.</p></header>
-<section id="methodology"><h2>Methodology comes first</h2><p>Declared tasks and candidate cohorts define coverage. Default selection is the <strong>latest cleanly completed execution, not the latest PASS</strong>. Content failures remain selected; recovery and interruptions remain in the operational denominator.</p><p>Candidate-owned validation is not independent acceptance. Required checks, advisory signals and evaluator errors are separate. Clean completed cells count execution completion, not completed grading or comparison readiness. Missing required grades are UNGRADED, not evidence of failure. Final artifact previews are snapshots, not reconstructed event-time versions.</p><details><summary>Lineage, scope and limitations</summary><ul>${evidence.caveats.map((c) => `<li>${h(c)}</li>`).join("")}</ul><p>Wall time includes orchestration and tools, not just thinking. SDK model-usage records are not verified HTTP requests. Missing spend is unknown, not free. Stored estimates are not invoices; repricing requires an explicit saved what-if snapshot. Task types are user-declared, never inferred from model brand.</p></details>
-<div class="metrics"><div><b>${complete}/${cells.length}</b><span>Clean completed cells</span></div><div><b>${count("pass")} / ${count("fail")}</b><span>Acceptance PASS / FAIL</span></div><div><b>${count("missing") + count("interrupted") + count("error")}</b><span>Missing / interrupted / error</span></div><div><b>${count("ungraded")}</b><span>Ungraded, not PASS</span></div></div></section>
+<title>Coding Agent Model Benchmark</title><style>${reportStyles}${alignmentStyles}</style></head><body>
+<a class="skip" href="#overview">Skip to report content</a>
+<aside><strong class="brand"><span class="brand-mark">B</span><span>Coding Agent<br>Model Benchmark</span></strong><nav><a href="#overview">Overview</a><a href="#methodology">Methodology</a><a href="#findings">Key findings</a><a href="#matrix">Results</a><a href="#efficiency">Efficiency &amp; cost</a><a href="#pricing">Pricing</a><a href="#insights">Task-type guidance</a><a href="#inspector">Tasks &amp; replay</a><a href="#usage">Tokens &amp; reasoning</a><a href="#artifacts">Artifacts</a></nav><p><span class="status-dot"></span>Portable offline evidence.<br>No live pricing, model, or provider calls.</p></aside>
+<main><header id="overview" class="overview"><div class="report-meta"><span>${h(evidence.campaignId)}</span><span>Generated ${h(evidence.createdAt)}</span></div><div class="hero-layout"><div><small>Versioned report evidence / deterministic offline rendering</small><h1>Coding Agent Model Benchmark</h1><p class="lead">Task-owned acceptance, honest missingness, reproducible model comparisons, and explicit cost provenance.</p><a class="hero-link" href="#matrix">Explore the results</a></div><div class="hero-evidence">${coverageGraphic}</div></div><p class="scope-note">This report selects the latest cleanly completed execution per declared task/model cohort, including content FAILs. It never substitutes a different cohort, retries until PASS, or treats missing cost as zero.</p><dl class="metric-strip"><div><dt>Task cohorts</dt><dd>${evidence.tasks.length}</dd></div><div><dt>Candidates</dt><dd>${evidence.candidates.length}</dd></div><div><dt>Retained attempts</dt><dd>${evidence.attempts.length}</dd></div><div><dt>Approved previews</dt><dd>${previews.filter((preview) => preview.status === "available").length}</dd></div></dl><div class="model-coverage-grid">${modelCoverage.map((candidate) => `<article><small>${h(candidate.provider)} / ${h(candidate.deployment ?? "deployment not recorded")}</small><h3>${h(candidate.model)}</h3><div class="model-coverage-count"><strong>${candidate.selected}/${candidate.total}</strong><span>selected clean cells</span></div><div class="coverage-strip" role="img" aria-label="${candidate.pass} PASS, ${candidate.fail} FAIL, ${candidate.ungraded} UNGRADED, ${candidate.unavailable} unavailable"><i class="pass-segment" style="width:${candidate.total ? candidate.pass / candidate.total * 100 : 0}%"></i><i class="fail-segment" style="width:${candidate.total ? candidate.fail / candidate.total * 100 : 0}%"></i><i class="ungraded-segment" style="width:${candidate.total ? candidate.ungraded / candidate.total * 100 : 0}%"></i><i class="missing-segment" style="width:${candidate.total ? candidate.unavailable / candidate.total * 100 : 0}%"></i></div><p>${candidate.pass} PASS / ${candidate.fail} FAIL / ${candidate.ungraded} UNGRADED / ${candidate.unavailable} unavailable</p></article>`).join("")}</div></header>
+<section id="methodology"><div class="section-heading"><div><small>What we test &amp; how we test it</small><h2>Methodology comes first.</h2><p>Declared tasks, immutable contracts, candidate cohorts, task-owned validators, and independent acceptance evidence define what a result means.</p></div></div><div class="methodology-grid"><article><h3>What are we testing?</h3><p>Arbitrary user-defined tasks and candidate identities as recorded by provider, model, deployment, task version, prompt, rounds, runtime, and evaluator policy.</p></article><article><h3>How do we select results?</h3><p>The default is the <strong>latest cleanly completed execution, not the latest PASS</strong>. Content failures remain selected; recovery and interruptions remain in the operational denominator. Clean completed cells count execution completion, not completed grading.</p></article><article><h3>What counts as evidence?</h3><p>Candidate-owned validation is not independent acceptance. Required checks, advisory signals, evaluator errors, usage counters, and saved pricing scenarios stay separate.</p></article><article><h3>What remains unknown?</h3><p>Missing grades are UNGRADED, missing spend is UNKNOWN, and unavailable telemetry is never reconstructed or zero-filled. Final previews are approved publication snapshots.</p></article></div><details><summary>Lineage, scope and limitations</summary><ul>${evidence.caveats.map((c) => `<li>${h(c)}</li>`).join("")}</ul><p>Wall time includes orchestration and tools, not just thinking. SDK model-usage records are not verified HTTP requests. Stored estimates are not invoices; repricing requires an explicit saved what-if snapshot. Task types are user-declared, never inferred from model brand.</p></details></section>
+<section id="findings"><div class="section-heading"><div><small>Evidence-derived observations</small><h2>High-level findings without invented winners.</h2><p>These cards and graphics summarize retained evidence only. Sparse, incomparable, or ungraded data does not become a quality recommendation.</p></div></div><div class="finding-grid">${findings.map((finding) => `<article><small>${h(finding.title)}</small><strong>${h(finding.value)}</strong><p>${h(finding.body)}</p></article>`).join("")}</div><div class="finding-chart-grid">${findingVisuals}</div></section>
 <section id="matrix"><h2>Task-by-model result matrix</h2><p>Open any cell for its exact selected attempt. Wide tables scroll inside this panel.</p><div class="toolbar"><label>Find task<input id="filter" type="search" placeholder="Task title"></label><label>Task type<select id="type"><option value="">All task types</option>${[...new Set(evidence.tasks.map((t) => t.taskType ?? "unclassified"))].map((t) => `<option>${h(t)}</option>`).join("")}</select></label><button id="csv">Export selected CSV</button><button id="json">Export selected JSON</button></div><p id="visible" aria-live="polite"></p><div class="scroll" tabindex="0" aria-label="Scrollable result matrix"><table><caption>${evidence.tasks.length} task cohorts x ${evidence.candidates.length} candidates x ${evidence.repeats} repeats</caption><thead><tr><th scope="col">Task cohort</th>${evidence.candidates.map((c) => `<th scope="col">${h(c.model)}<small>${h(c.provider)} / ${h(c.deployment ?? "not recorded")}</small></th>`).join("")}</tr></thead><tbody id="matrix-body">${matrix}</tbody></table></div><p class="legend">PASS = independent required acceptance; FAIL = required content failure; UNGRADED = no complete required evidence. Validation is shown separately.</p></section>
+<section id="efficiency"><div class="section-heading"><div><small>Model efficiency, without a podium</small><h2>Count the work. State the assumptions.</h2><p>Selected clean executions are summarized by recorded candidate identity. Different task coverage, runtime policy, acceptance completeness, or missing telemetry prevents a fair ranking.</p></div></div><div class="efficiency-grid">${candidateActivity.map((candidate) => `<article><small>${h(candidate.provider)} / ${h(candidate.deployment ?? "deployment not recorded")}</small><h3>${h(candidate.model)}</h3><dl><div><dt>Selected executions</dt><dd>${candidate.selected}</dd></div><div><dt>Captured total tokens</dt><dd>${format(candidate.totalTokens)}</dd></div><div><dt>Physical inference HTTP</dt><dd>${format(candidate.physicalRequests)}</dd></div><div><dt>Recorded wall time</dt><dd>${candidate.wallMs === null ? "Unknown" : wall(candidate.wallMs)}</dd></div></dl><p>Token totals are evidence, not equal units of work. They include reported reasoning in output and do not add cache counters again.</p></article>`).join("")}</div><div class="graphic-card-grid">${efficiencyVisuals}</div></section>
+${pricingHtml}
 <section id="usage"><h2>Recorded tokens &amp; agent activity</h2><p>Observed usage remains visible for UNGRADED, validation-failed and interrupted runs. This is descriptive evidence, not a ranking across different policies or missing cells. Cards show the selected clean execution, or the latest recorded attempt when no clean completion exists; the table retains every attempt.</p><p class="legend">Input + output is the captured token subtotal, not proof of complete metering. Reasoning is already included in output; cache counters are shown separately, never added again. Agent turns count archived assistant.turn_start events, not user rounds or SDK requests. SDK usage records, physical inference HTTP requests, tool calls and native token-count HTTP requests are different counters. Unknown means not recorded, never zero-filled.</p><div class="charts usage-cards">${usageCards || "<p>No recorded attempts; no usage inferred for missing cells.</p>"}</div>${featured.length > 12 ? `<p class="legend">First 12 of ${featured.length} recorded cell summaries shown; all ${usage.length} attempts remain in the table and exports.</p>` : ""}<div class="toolbar"><button id="usage-csv">Export all-attempt usage CSV</button><button id="usage-json">Export all-attempt usage JSON</button></div><div class="scroll" tabindex="0" aria-label="Scrollable recorded run usage"><table class="usage-table"><caption>${usage.length} recorded attempts / ${complete} selected clean executions / ${cells.length} declared cells</caption><thead><tr><th scope="col">Model / run / cohort</th><th scope="col">Execution / validation / acceptance</th><th scope="col">Captured tokens</th><th scope="col">Agent activity</th><th scope="col">Wall time / cache</th><th scope="col">Native token count only</th><th scope="col">Recorded cost evidence</th></tr></thead><tbody id="usage-body">${usageTable}</tbody></table></div></section>
 <section id="insights"><h2>Evidence-derived task-type insights</h2><p>Only the matched task intersection with graded clean executions and the same recorded comparison signature (runtime, protocol, auth, resource and policy) for every declared candidate is analyzed. No ranking across unequal coverage. Sparse evidence cannot certify reliability or production routing.</p><div class="charts">${analysis.map((a) => `<article><h3>${h(a.taskType)} / ${h(evidence.candidates.find((c) => c.id === a.candidate)?.model)}</h3><p>${a.passed}/${a.samples} accepted samples; ${a.matchedTasks}/${a.declaredTasks} matched tasks</p><div class="track" role="img" aria-label="${a.passed} accepted of ${a.samples} samples"><i style="width:${a.samples / maximum * 100}%"><b style="width:${a.samples ? a.passed / a.samples * 100 : 0}%"></b></i></div><p>Mean measured wall time: ${a.meanWallMs === null ? "Unavailable" : `${Math.round(a.meanWallMs)} ms`}; recorded USD: ${a.meanRecordedUsd === null ? "Unavailable" : a.meanRecordedUsd.toFixed(4)}.</p><small>${h(a.guidance)}</small></article>`).join("")}</div><button id="analysis">Export task-type CSV</button></section>
-<section id="inspector"><h2>Run evidence &amp; approved previews</h2><p>Metadata-only publication by default. Content appears only through a reviewed, hash-bound publication manifest. Candidate HTML is sanitized and scriptless; approved active originals are a separate sharing decision.</p><label>Cell<select id="cell-selector">${cells.map((c) => `<option value="${h(c.id)}">${h(task(c.task).title)} / cohort ${h(task(c.task).cohortHash.slice(0, 8))} / ${h(model(c.candidate))} / #${c.repeat + 1}</option>`).join("")}</select></label><div id="cell-detail" aria-live="polite"></div><div id="previews"></div></section>
+<section id="inspector"><h2>The tasks behind the result.</h2><p>Select a declared task/model cell to inspect its exact selected attempt, immutable bindings, task-owned validation, independent acceptance, and sanitized archived replay. Missing cells remain empty.</p><label>Cell<select id="cell-selector">${cells.map((c) => `<option value="${h(c.id)}">${h(task(c.task).title)} / cohort ${h(task(c.task).cohortHash.slice(0, 8))} / ${h(model(c.candidate))} / #${c.repeat + 1}</option>`).join("")}</select></label><div id="cell-detail" aria-live="polite"></div></section>
+<section id="artifacts"><div class="section-heading"><div><small>Reference artifacts</small><h2>See what went in. See what came out.</h2><p>Metadata-only publication is the default. Content appears only through a reviewed, hash-bound publication manifest. Candidate HTML is sanitized and scriptless; approved active originals are a separate sharing decision.</p></div></div><div id="previews"></div></section>
 <section id="operations"><h2>Attempt and recovery accounting</h2><p>${evidence.attempts.length} total attempts for ${cells.length} declared cells. Selection never erases historical failures, protective reservations or unresolved dispatched spend. Captured provider terminal counters include failed responses; reasoning tokens are already part of output tokens. Ambiguous execution does not imply missing metering. Missing terminal usage remains unknown, and older records cannot be reconstructed.</p>${evidence.attempts.some(a => a.accounting.nativeTokenCount) ? "<p>Native token-count requests and retries are recorded separately from physical inference requests. All-attempt count totals include interruptions; selected totals require a clean selected execution. Missing count records remain unknown. Count fees are unknown: known inference usage cannot price a complete whole run.</p>" : ""}<details><summary>All immutable attempt metadata</summary><pre>${h(JSON.stringify(evidence.attempts.map((a) => ({ ...a, replay: undefined })), null, 2))}</pre></details></section>
-${details ? `<details class="legacy"><summary>Legacy single-run evidence, pricing and supplementary judge details</summary>${details}</details>` : ""}
+${details ? `<details class="legacy"><summary>Supplementary run, artifact, and judge details</summary>${details}</details>` : ""}
 <footer>Generated from versioned evidence. No candidate code is executed by this report. ${h(evidence.createdAt)}</footer></main>
-<script id="report-data" type="application/json">${embedded({ evidence, cells: cells.map(cell => ({ ...cell, selected: cell.selected?.id ?? null, attempts: cell.attempts.map(attempt => attempt.id) })), rows, analysis, usage, previews, selectedCsv: toCsv(rows, Object.keys(rows[0] ?? {})), usageCsv: toCsv(usage, Object.keys(usage[0] ?? { task: "", candidate: "", runId: "" })), analysisCsv: toCsv(analysis, Object.keys(analysis[0] ?? {})) })}</script>
+<script id="report-data" type="application/json">${embedded({ evidence, cells: cells.map(cell => ({ ...cell, selected: cell.selected?.id ?? null, attempts: cell.attempts.map(attempt => attempt.id) })), rows, analysis, usage, pricing: price, pricingRows, previews, selectedCsv: toCsv(rows, Object.keys(rows[0] ?? {})), usageCsv: toCsv(usage, Object.keys(usage[0] ?? { task: "", candidate: "", runId: "" })), analysisCsv: toCsv(analysis, Object.keys(analysis[0] ?? {})), pricingCsv })}</script>
 <script>${reportScript}</script></body></html>`;
+}
+
+function renderCoverageGraphic(total: number, selected: number, ungraded: number, unavailable: number): string {
+  const circumference = 2 * Math.PI * 40;
+  const selectedLength = total ? selected / total * circumference : 0;
+  return `<article class="coverage-graphic"><svg viewBox="0 0 220 150" role="img" aria-label="${selected} of ${total} declared cells have a selected clean execution; ${ungraded} are ungraded; ${unavailable} are unavailable">
+    <circle class="coverage-ring-bg" cx="75" cy="74" r="40"></circle>
+    <circle class="coverage-ring-value" cx="75" cy="74" r="40" pathLength="${circumference}" stroke-dasharray="${selectedLength} ${circumference - selectedLength}"></circle>
+    <text class="coverage-number" x="75" y="70" text-anchor="middle">${selected}</text><text class="coverage-total" x="75" y="89" text-anchor="middle">of ${total}</text>
+    <text class="coverage-label" x="136" y="47">Selected clean</text><text class="coverage-value" x="136" y="66">${selected}</text>
+    <text class="coverage-label" x="136" y="91">UNGRADED</text><text class="coverage-value" x="136" y="110">${ungraded}</text>
+    <text class="coverage-label" x="136" y="133">Unavailable</text><text class="coverage-value" x="136" y="148">${unavailable}</text>
+  </svg><p>Coverage is execution evidence. UNGRADED can overlap selected clean execution and is never converted to PASS or FAIL.</p></article>`;
+}
+
+function renderFindingVisuals(
+  total: number,
+  selected: number,
+  pass: number,
+  fail: number,
+  ungraded: number,
+  unavailable: number,
+  attempts: number,
+): string {
+  const width = (value: number, denominator: number) => denominator ? value / denominator * 520 : 0;
+  const selectedWidth = width(selected, total);
+  const statuses = [
+    ["PASS", pass, "#2e8b68"], ["FAIL", fail, "#c0505a"], ["UNGRADED", ungraded, "#7a8da4"], ["Unavailable", unavailable, "#d1a24b"],
+  ] as const;
+  let offset = 0;
+  const segments = statuses.map(([label, value, color]) => {
+    const segmentWidth = width(value, total);
+    const result = `<rect x="${100 + offset}" y="45" width="${segmentWidth}" height="24" fill="${color}"><title>${label}: ${value}</title></rect>`;
+    offset += segmentWidth;
+    return result;
+  }).join("");
+  return `<article class="graphic-card"><h3>Result-state coverage</h3><p>Every declared cell is represented; categories are not zero-filled or borrowed.</p><svg class="finding-chart" viewBox="0 0 680 125" role="img" aria-label="${pass} PASS, ${fail} FAIL, ${ungraded} UNGRADED, ${unavailable} unavailable of ${total} declared cells"><text x="0" y="62">Cells</text><rect x="100" y="45" width="520" height="24" class="chart-bg"></rect>${segments}${statuses.map(([label, value, color], index) => `<circle cx="${105 + index * 135}" cy="99" r="5" fill="${color}"></circle><text x="${116 + index * 135}" y="103">${label} ${value}</text>`).join("")}</svg></article>
+  <article class="graphic-card"><h3>Selection and recovery denominator</h3><p>Selected clean cells and retained attempts are different denominators.</p><svg class="finding-chart" viewBox="0 0 680 125" role="img" aria-label="${selected} selected clean cells of ${total}; ${attempts} retained attempts"><text x="0" y="42">Selected cells</text><rect x="120" y="27" width="480" height="18" class="chart-bg"></rect><rect x="120" y="27" width="${selectedWidth / 520 * 480}" height="18" class="chart-primary"></rect><text x="615" y="42">${selected}/${total}</text><text x="0" y="88">Attempts</text><rect x="120" y="73" width="480" height="18" class="chart-bg"></rect><rect x="120" y="73" width="${attempts ? 480 : 0}" height="18" class="chart-secondary"></rect><text x="615" y="88">${attempts}</text></svg></article>`;
+}
+
+function renderMetricChart(
+  title: string,
+  rows: Array<{ label: string; value: number | null }>,
+  format: (value: number) => string,
+  style: string,
+): string {
+  const h = escapeReportHtml;
+  const max = Math.max(1, ...rows.map((row) => row.value ?? 0));
+  const height = Math.max(90, rows.length * 46 + 28);
+  const body = rows.map((row, index) => {
+    const y = 28 + index * 46;
+    const width = row.value === null ? 0 : row.value / max * 390;
+    const value = row.value === null ? "Unknown" : format(row.value);
+    return `<g role="img" aria-label="${h(`${row.label}: ${value}`)}"><title>${h(row.label)}: ${h(value)}</title><text x="0" y="${y}">${h(shortLabel(row.label, 44))}</text><rect x="300" y="${y - 14}" width="390" height="18" class="chart-bg"></rect>${row.value === null ? `<rect x="300" y="${y - 14}" width="390" height="18" class="chart-unknown"></rect>` : `<rect x="300" y="${y - 14}" width="${width}" height="18" class="chart-primary ${style}"></rect>`}<text x="705" y="${y}">${h(value)}</text></g>`;
+  }).join("");
+  return `<article class="graphic-card"><h3>${h(title)}</h3><div class="chart-scroll"><svg class="metric-chart" viewBox="0 0 830 ${height}" role="img" aria-label="${h(title)}">${body || `<text x="0" y="35">No recorded values.</text>`}</svg></div></article>`;
+}
+
+function renderStackedMetricChart(
+  title: string,
+  rows: Array<{ label: string; primary: number | null; secondary: number | null }>,
+  primaryLabel: string,
+  secondaryLabel: string,
+): string {
+  const h = escapeReportHtml;
+  const max = Math.max(1, ...rows.map((row) => row.primary === null || row.secondary === null ? 0 : row.primary + row.secondary));
+  const height = Math.max(105, rows.length * 46 + 45);
+  const body = rows.map((row, index) => {
+    const y = 28 + index * 46;
+    const known = row.primary !== null && row.secondary !== null;
+    const first = known ? row.primary! / max * 390 : 0;
+    const second = known ? row.secondary! / max * 390 : 0;
+    return `<g><title>${h(row.label)}: ${known ? `${primaryLabel} ${row.primary}; ${secondaryLabel} ${row.secondary}` : "Unknown"}</title><text x="0" y="${y}">${h(shortLabel(row.label))}</text><rect x="190" y="${y - 14}" width="390" height="18" class="chart-bg"></rect>${known ? `<rect x="190" y="${y - 14}" width="${first}" height="18" class="chart-primary"></rect><rect x="${190 + first}" y="${y - 14}" width="${second}" height="18" class="chart-secondary"></rect>` : `<rect x="190" y="${y - 14}" width="390" height="18" class="chart-unknown"></rect>`}<text x="595" y="${y}">${known ? (row.primary! + row.secondary!).toLocaleString("en-US") : "Unknown"}</text></g>`;
+  }).join("");
+  return `<article class="graphic-card"><h3>${h(title)}</h3><div class="chart-legend"><span><i class="primary-dot"></i>${h(primaryLabel)}</span><span><i class="secondary-dot"></i>${h(secondaryLabel)}</span></div><svg class="metric-chart" viewBox="0 0 720 ${height}" role="img" aria-label="${h(title)}">${body || `<text x="0" y="35">No recorded values.</text>`}</svg></article>`;
+}
+
+function renderGroupedMetricChart(
+  title: string,
+  rows: Array<{ label: string; primary: number | null; secondary: number | null }>,
+  primaryLabel: string,
+  secondaryLabel: string,
+): string {
+  const h = escapeReportHtml;
+  const max = Math.max(1, ...rows.flatMap((row) => [row.primary ?? 0, row.secondary ?? 0]));
+  const height = Math.max(105, rows.length * 54 + 45);
+  const body = rows.map((row, index) => {
+    const y = 28 + index * 54;
+    const first = row.primary === null ? 0 : row.primary / max * 390;
+    const second = row.secondary === null ? 0 : row.secondary / max * 390;
+    return `<g><title>${h(row.label)}: ${primaryLabel} ${row.primary ?? "Unknown"}; ${secondaryLabel} ${row.secondary ?? "Unknown"}</title><text x="0" y="${y + 6}">${h(shortLabel(row.label))}</text><rect x="190" y="${y - 14}" width="390" height="12" class="chart-bg"></rect>${row.primary === null ? `<rect x="190" y="${y - 14}" width="390" height="12" class="chart-unknown"></rect>` : `<rect x="190" y="${y - 14}" width="${first}" height="12" class="chart-primary"></rect>`}<rect x="190" y="${y + 2}" width="390" height="12" class="chart-bg"></rect>${row.secondary === null ? `<rect x="190" y="${y + 2}" width="390" height="12" class="chart-unknown"></rect>` : `<rect x="190" y="${y + 2}" width="${second}" height="12" class="chart-secondary"></rect>`}<text x="595" y="${y - 3}">${row.primary ?? "Unknown"}</text><text x="595" y="${y + 14}">${row.secondary ?? "Unknown"}</text></g>`;
+  }).join("");
+  return `<article class="graphic-card"><h3>${h(title)}</h3><div class="chart-legend"><span><i class="primary-dot"></i>${h(primaryLabel)}</span><span><i class="secondary-dot"></i>${h(secondaryLabel)}</span></div><svg class="metric-chart" viewBox="0 0 720 ${height}" role="img" aria-label="${h(title)}">${body || `<text x="0" y="35">No recorded values.</text>`}</svg></article>`;
+}
+
+function shortLabel(value: string, maximum = 24): string {
+  return value.length > maximum ? `${value.slice(0, maximum - 3)}...` : value;
+}
+
+function officialSourceLink(value: string): string {
+  try {
+    const url = new URL(value);
+    if (url.protocol !== "https:") return escapeReportHtml(value);
+    const safe = escapeReportHtml(url.href);
+    return `<a href="${safe}" target="_blank" rel="noopener noreferrer">${escapeReportHtml(value)}</a>`;
+  } catch {
+    return escapeReportHtml(value);
+  }
+}
+
+function renderPricingSection(pricing: ReportPricingView): string {
+  const h = escapeReportHtml;
+  const money = (value: number | null) => value === null ? "UNKNOWN" : `$${value.toFixed(6)}`;
+  const meter = (value: number | null) => value === null ? "Unavailable" : `$${value.toFixed(6)} / 1M`;
+  const status = pricing.status === "available"
+    ? `<div class="pricing-status available"><strong>Pricing scenarios available</strong><p>A saved snapshot is attached and ${pricing.coverage.matchedCandidates}/${pricing.coverage.candidates} recorded candidate identities have usable input/output rates. What-if estimates are not invoices and are never refreshed while rendering or opening this report.</p></div>`
+    : pricing.status === "partial"
+      ? `<div class="pricing-status partial"><strong>Pricing partially available</strong><p>${h(pricing.unavailableReason ?? "Only part of the candidate set has usable saved rates.")}</p><p class="mono">${h(pricing.action)}</p></div>`
+      : `<div class="pricing-status unavailable"><strong>Pricing UNKNOWN</strong><p>${h(pricing.unavailableReason ?? "No saved pricing snapshot is attached.")}</p><p class="mono">${h(pricing.action)}</p></div>`;
+  const provenance = pricing.snapshot
+    ? `<dl class="pricing-provenance"><div><dt>Refreshed</dt><dd>${h(pricing.snapshot.refreshedAt)}</dd></div><div><dt>Usable candidate coverage</dt><dd>${pricing.coverage.matchedCandidates}/${pricing.coverage.candidates} / ${pricing.coverage.usableScenarios} scenarios</dd></div><div><dt>Currency / region filter</dt><dd>${h(pricing.snapshot.currency)} / ${h(pricing.snapshot.regionFilter ?? "All captured official alternatives")}</dd></div><div><dt>Exported snapshot file SHA-256</dt><dd class="mono">${h(pricing.snapshot.sha256)}</dd><small>${h(pricing.snapshot.hashBasis)}</small></div><div><dt>Canonical object SHA-256</dt><dd class="mono">${h(pricing.snapshot.canonicalObjectSha256)}</dd></div></dl><div class="source-list">${pricing.snapshot.sources.map((source) => `<article><small>${h(source.provider)} official source</small><h3>${officialSourceLink(source.pricingUrl)}</h3><p>Snapshot refreshed ${h(pricing.snapshot!.refreshedAt)} / source content SHA-256 <span class="mono">${h(source.contentHash ?? "not retained")}</span></p>${source.documentationUrl ? `<p>Billing documentation: ${officialSourceLink(source.documentationUrl)}</p>` : ""}${source.extendedCachePricingUrl ? `<p>Extended cache pricing: ${officialSourceLink(source.extendedCachePricingUrl)}</p>` : ""}</article>`).join("")}</div>`
+    : "";
+  const recorded = `<div class="table-wrap"><table><caption>Recorded run evidence; USD estimates and SDK cost multipliers are separate fields.</caption><thead><tr><th>Candidate</th><th>Selected / all attempts</th><th>Recorded price binding</th><th>Recorded selected USD</th><th>Recorded all-attempt USD</th><th>SDK multiplier selected / all</th></tr></thead><tbody>${pricing.recorded.map((row) => `<tr><th scope="row">${h(row.model)}<small>${h(row.provider)} / ${h(row.deployment ?? "deployment not recorded")}</small></th><td>${row.selectedAttempts} / ${row.allAttempts}</td><td>${row.recordedScenarioIds.length ? row.recordedScenarioIds.map(h).join("<br>") : "Not recorded"}<small>${row.recordedSnapshotHashes.length ? `Snapshot ${row.recordedSnapshotHashes.map(h).join(", ")}` : "No recorded snapshot hash."}${row.recordedAccountingAssumptions.length ? ` / accounting ${row.recordedAccountingAssumptions.map((value) => h(value ?? "not recorded")).join(", ")}` : ""}</small></td><td>${money(row.selectedUsd)}<small>${h(row.selectedUsdUnavailableReason ?? "Recorded estimate retained from selected attempts.")}</small></td><td>${money(row.allAttemptsUsd)}<small>${h(row.allAttemptsUsdUnavailableReason ?? "Recorded estimates summed across every retained attempt.")}</small></td><td>${row.selectedCostMultiplier === null ? "UNKNOWN" : row.selectedCostMultiplier.toFixed(6)} / ${row.allAttemptsCostMultiplier === null ? "UNKNOWN" : row.allAttemptsCostMultiplier.toFixed(6)}<small>Not USD. ${h(row.allAttemptsCostMultiplierUnavailableReason ?? row.selectedCostMultiplierUnavailableReason ?? "")}</small></td></tr>`).join("")}</tbody></table></div>`;
+  const rates = pricing.rates.length
+    ? `<h3>Unit prices and sources per model</h3><div class="table-wrap"><table><caption>Saved official list-price alternatives. No scenario is silently selected as actual billing.</caption><thead><tr><th>Candidate / official model</th><th>Region / cache scenario</th><th>Input</th><th>Cached read</th><th>Cache write</th><th>Output</th></tr></thead><tbody>${pricing.rates.map((row) => `<tr><th scope="row">${h(row.candidate)}<small>${h(row.provider)} / ${h(row.officialModel)}</small></th><td>${h(row.region ?? "global public API")}<small>${h(row.cacheTtl ?? "not applicable")}${row.unavailableReason ? ` / ${h(row.unavailableReason)}` : ""}</small></td><td>${meter(row.inputUsdPerMillion)}</td><td>${meter(row.cachedInputUsdPerMillion)}</td><td>${meter(row.cacheWriteUsdPerMillion)}</td><td>${meter(row.outputUsdPerMillion)}</td></tr>`).join("")}</tbody></table></div>`
+    : `<div class="empty-state"><strong>No matched usable unit-rate table is available.</strong><p>${pricing.snapshot ? "A snapshot is attached, but none of its extracted official rows match the recorded candidate identities with complete input/output rates." : "No saved pricing snapshot was attached."} The report does not fetch or infer rates while rendering.</p></div>`;
+  const estimates = `<h3>Model totals and cost denominators</h3><div class="table-wrap"><table><caption>Explicit saved-snapshot what-if estimates. Selected and all-attempt/recovery totals are shown separately.</caption><thead><tr><th>Candidate / scenario</th><th>Accounting assumption</th><th>Selected clean executions</th><th>All retained attempts</th></tr></thead><tbody>${pricing.estimates.map((row) => `<tr><th scope="row">${h(row.model)}<small>${h(row.scenarioId ?? "No matched saved scenario")}${row.officialModel ? ` / ${h(row.officialModel)}` : ""}</small></th><td>${h(row.accountingAssumption ?? "No explicit complete accounting assumption.")}</td><td>${money(row.selectedUsd)}<small>${row.selectedAttempts} attempts. ${h(row.selectedUnavailableReason ?? "Saved-snapshot what-if estimate; not billing.")}</small></td><td>${money(row.allAttemptsUsd)}<small>${row.allAttempts} attempts. ${h(row.allAttemptsUnavailableReason ?? "Includes retained recovery/interrupted attempts with complete metering.")}</small></td></tr>`).join("")}</tbody></table></div>`;
+  const costGraphic = renderMetricChart("Selected clean-execution what-if cost by explicit scenario", pricing.estimates.map((row) => ({
+    label: row.scenarioId === null
+      ? `${row.model} / no matched saved scenario`
+      : [row.cacheTtl ? `${row.cacheTtl} cache` : null, row.region ?? "global public API", row.officialModel ?? row.model].filter(Boolean).join(" / "),
+    value: row.selectedUsd,
+  })), (value) => `$${value.toFixed(6)}`, "cost");
+  return `<section id="pricing"><div class="section-heading"><div><small>Recorded spend versus saved-snapshot what-if estimates</small><h2>Pricing is evidence, not decoration.</h2><p>Unknown price data stays prominent. Recorded estimates, SDK multipliers, official unit rates, accounting assumptions, selected runs, and recovery attempts are never collapsed into one unlabeled number.</p></div></div>${status}${provenance}<h3>Recorded cost evidence</h3>${recorded}${rates}<div class="graphic-card-grid pricing-chart-grid">${costGraphic}</div>${estimates}<div class="toolbar pricing-exports"><button id="pricing-csv">Export pricing CSV</button><button id="pricing-json">Export pricing JSON</button></div></section>`;
 }
 
 const reportStyles = `
 .usage-cards{margin:24px 0;grid-template-columns:repeat(auto-fit,minmax(min(310px,100%),1fr))}.usage-card{box-shadow:0 6px 20px #172e3308}.usage-card h3{font-size:1.3rem;margin-bottom:8px}.run-meta{overflow-wrap:anywhere;color:var(--muted)}.states{display:flex;flex-wrap:wrap;gap:6px}.state{display:inline-block;border-radius:4px;padding:3px 7px;font-size:.68rem;font-weight:650}.token-total b{display:block;font-size:2rem;line-height:1.3;color:var(--teal);font-variant-numeric:tabular-nums}.token-total span{color:var(--muted);font-size:.75rem}.token-track{display:flex;background:#edf0e8;height:14px;border-radius:4px;overflow:hidden}.token-input{background:#287e70}.token-output{background:#cda15a}.token-key{font-variant-numeric:tabular-nums}.usage-metrics{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;margin:20px 0}.usage-metrics div{padding:10px;background:#f0f3eb;border-radius:5px;overflow-wrap:anywhere}.usage-metrics dt{font-size:.73rem;color:var(--muted)}.usage-metrics dd{margin:2px 0 0;font-weight:650;font-size:1.1rem;font-variant-numeric:tabular-nums}.usage-table{min-width:1100px}.usage-table td{vertical-align:top}.usage-table th{min-width:210px;max-width:320px;overflow-wrap:anywhere}.usage-table .states{flex-direction:column;align-items:start}.usage-numbers{white-space:nowrap;font-variant-numeric:tabular-nums}.usage-numbers small{white-space:normal;max-width:220px}.run-link{text-align:left;font-weight:650;margin-bottom:8px}.evidence-panel{margin:20px 0}.evidence-panel .usage-metrics{grid-template-columns:repeat(auto-fit,minmax(min(180px,100%),1fr))}.evidence-lineage{overflow-wrap:anywhere}.usage-table button{max-width:250px}#usage .toolbar{margin:24px 0 15px}
 :root{--paper:#f6f4ee;--surface:#fffefa;--ink:#172e33;--muted:#536468;--line:#d8ded7;--nav:#142d33;--teal:#09695c}*{box-sizing:border-box}body{margin:0;background:var(--paper);color:var(--ink);font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}h1,h2,h3{line-height:1.18;letter-spacing:-.025em}h1{font-size:clamp(2.5rem,5vw,4.5rem);margin:28px 0}h2{font-size:1.9rem}h3{font-size:1.1rem}a{color:var(--teal)}aside{position:fixed;inset:0 auto 0 0;width:210px;background:var(--nav);color:#edf5ef;padding:35px 22px;display:flex;flex-direction:column}aside nav{display:grid;gap:16px;margin-top:50px}aside a{color:#d2e4df;text-decoration:none;border-bottom:1px solid #345258;padding:8px 0}aside p{margin-top:auto;font-size:.8rem;color:#c7d9d3}main{margin-left:210px;padding:40px clamp(20px,4vw,64px);max-width:1800px;min-width:0}header{padding:20px 0 38px}.lead{font-size:1.1rem;color:var(--muted);max-width:58ch}section{padding:30px 0 42px;border-top:1px solid var(--line);scroll-margin-top:15px}p{max-width:95ch}.metrics{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:16px;margin-top:30px}.metrics b{display:block;font-size:2rem;color:var(--teal)}.metrics span,small{display:block;color:var(--muted);font-size:.78rem;overflow-wrap:anywhere}button,input,select{font:inherit;border:1px solid #b7c9bc;border-radius:5px;background:var(--surface);color:var(--ink);padding:10px;min-height:44px;max-width:100%;min-width:0}button,summary{cursor:pointer}button:hover{border-color:var(--teal)}:focus-visible{outline:3px solid #2875b7;outline-offset:3px}.toolbar{display:flex;align-items:end;gap:15px;flex-wrap:wrap}label{display:grid;gap:5px;font-size:.82rem;color:var(--muted)}.scroll{overflow-x:auto;max-width:100%;border:1px solid var(--line);border-radius:8px;background:var(--surface)}table{border-collapse:collapse;width:100%;font-size:.82rem}th,td{padding:14px;border-bottom:1px solid var(--line);text-align:left}thead th{background:#e9eee5;min-width:150px}tbody th{min-width:190px}caption{text-align:left;padding:14px;color:var(--muted)}.cell{width:100%;min-width:105px;font-weight:650;font-size:.76rem;margin:3px 0}.pass{background:#e3f1e9;color:#155b40}.fail{background:#f9e9e7;color:#a02e37}.missing,.ungraded{background:#ecefeb;color:#526458}.interrupted,.error{background:#f7ecd4;color:#735014}.legend{font-size:.78rem;color:var(--muted)}.charts{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr));gap:20px}article{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:20px;min-width:0}article p{font-size:.84rem}.track{background:#e2e9de;height:15px;border-radius:3px}.track i{display:block;background:#aebcb4;height:100%}.track b{display:block;height:100%;background:#2c806b}pre{white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;padding:15px;background:#eef1e9;max-height:500px;overflow:auto;font:12px/1.65 ui-monospace,Consolas,monospace}summary{font-weight:600;padding:12px 0}details{margin:15px 0}iframe{width:100%;height:380px;border:1px solid var(--line);background:white}img{max-width:100%;height:auto}footer{font-size:.78rem;color:var(--muted);padding:30px 0}.skip{position:fixed;transform:translateY(-200%);background:white;padding:12px;z-index:30}.skip:focus{transform:none}.legacy{border-top:1px solid var(--line)}.legacy .table-wrap{max-width:100%;overflow:auto}.legacy .badge{padding:3px 6px}.legacy .good{color:#155b40}.legacy .bad{color:#a02e37}.legacy .warn{color:#735014}[hidden]{display:none!important}@media(max-width:900px){aside{position:static;width:auto;padding:18px}aside nav{display:flex;flex-wrap:wrap;margin:10px 0;gap:12px}aside p{display:none}main{margin:0;padding:22px}.metrics{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:450px){main{padding:16px}h1{font-size:2.5rem}.toolbar>*{width:100%}.charts{grid-template-columns:minmax(0,1fr)}}
+`;
+const alignmentStyles = `
+:root{--paper:#f4f6fa;--surface:#fff;--ink:#152a43;--muted:#53657a;--line:#d8e1ec;--nav:#112238;--teal:#315ce2;--blue:#315ce2;--blue-light:#eef1ff;--radius:14px}
+html,body{max-width:100%;overflow-x:hidden}body{background:var(--paper)}aside{width:226px;background:var(--nav);padding:32px 23px}.brand{display:flex;align-items:center;gap:12px;line-height:1.25}.brand-mark{display:grid;place-items:center;width:44px;height:44px;flex:0 0 auto;border-radius:10px;background:#e6ebff;color:#213f9a;font-size:1.45rem;font-weight:800}aside nav{margin-top:42px;gap:4px}aside a{border-bottom-color:#34445a;color:#e2e8f2;padding:9px 0}aside p{color:#c6d0dd}.status-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:#8ea7ff;margin-right:6px}main{margin-left:226px;max-width:1820px}main,section,article,.methodology-grid>*,.finding-grid>*,.efficiency-grid>*,.source-list>*{min-width:0}.mono{overflow-wrap:anywhere;word-break:break-word}article,.coverage-graphic,.scope-note,.graphic-card,.pricing-status,.pricing-provenance div,.empty-state,.table-wrap,.scroll{border-radius:var(--radius)}header.overview{padding:32px 0 54px;border:0}.report-meta{display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:16px;margin-bottom:44px;color:var(--muted);font-size:.77rem}.hero-layout{display:grid;grid-template-columns:minmax(0,1.5fr) minmax(280px,.8fr);gap:44px;align-items:center}.hero-layout h1{max-width:15ch}.hero-link{display:inline-flex;margin-top:8px;padding:11px 16px;border-radius:10px;background:var(--blue);color:white;text-decoration:none;font-weight:700}.hero-evidence{min-width:0}.coverage-graphic{padding:18px;background:linear-gradient(145deg,#fff,var(--blue-light));border-color:#cbd4f4}.coverage-graphic svg{display:block;width:100%;height:auto;max-height:260px}.coverage-ring-bg,.coverage-ring-value{fill:none;stroke-width:12}.coverage-ring-bg{stroke:#dfe5f2}.coverage-ring-value{stroke:var(--blue);stroke-linecap:round;transform:rotate(-90deg);transform-origin:75px 74px}.coverage-number{font-size:29px;font-weight:750;fill:var(--ink)}.coverage-total{font-size:11px;fill:#6a7d92}.coverage-label{font-size:10px;fill:#6a7d92}.coverage-value{font-size:17px;font-weight:700;fill:var(--ink)}.scope-note{max-width:none;margin-top:30px;padding:15px 18px;border:1px solid #ccd5f2;background:var(--blue-light);color:#344f83}.metric-strip{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));margin:22px 0 0}.metric-strip div{padding:14px 16px 14px 0}.metric-strip dt{font-size:.75rem;color:var(--muted)}.metric-strip dd{margin:3px 0 0;font-size:1.5rem;font-weight:700;font-variant-numeric:tabular-nums}.model-coverage-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(250px,100%),1fr));gap:14px;margin-top:20px}.model-coverage-grid article{padding:16px}.model-coverage-count{display:flex;align-items:baseline;gap:8px;margin:10px 0}.model-coverage-count strong{font-size:1.45rem;color:var(--blue)}.model-coverage-count span{font-size:.72rem;color:var(--muted)}.coverage-strip{display:flex;height:11px;border-radius:4px;overflow:hidden;background:#e4eaf1}.coverage-strip i{height:100%}.pass-segment{background:#2e8b68}.fail-segment{background:#c0505a}.ungraded-segment{background:#7a8da4}.missing-segment{background:#d1a24b}.section-heading{display:flex;justify-content:space-between;align-items:flex-end;gap:24px;margin-bottom:24px}.section-heading p{margin-top:10px;color:var(--muted)}.methodology-grid,.finding-grid,.efficiency-grid,.source-list{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px;margin:24px 0}.methodology-grid article,.finding-grid article,.efficiency-grid article,.source-list article{border-color:#d3dfec;box-shadow:0 8px 28px #173a6409}.finding-grid strong{display:block;margin:10px 0 7px;color:var(--blue);font-size:1.75rem;letter-spacing:-.035em}.finding-chart-grid,.graphic-card-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(390px,100%),1fr));gap:18px;margin-top:22px}.graphic-card{padding:20px;overflow:hidden}.graphic-card>p{color:var(--muted)}.chart-scroll{max-width:100%;overflow-x:auto}.chart-scroll .metric-chart{min-width:830px}.finding-chart,.metric-chart{display:block;width:100%;height:auto;margin-top:14px;overflow:visible}.finding-chart text,.metric-chart text{font:12px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;fill:#40566f}.chart-bg{fill:#e5ebf2}.chart-primary{fill:var(--blue)}.chart-secondary{fill:#d1953d}.chart-primary.wall{fill:#5276d5}.chart-primary.cache{fill:#71829e}.chart-primary.cost{fill:#2e8b68}.chart-unknown{fill:#f8fbff;stroke:#9eafc1;stroke-dasharray:5 4}.chart-legend{display:flex;gap:18px;flex-wrap:wrap;margin-top:10px;font-size:.73rem;color:var(--muted)}.chart-legend span{display:flex;align-items:center;gap:6px}.chart-legend i{width:9px;height:9px;border-radius:2px}.primary-dot{background:var(--blue)}.secondary-dot{background:#d1953d}.efficiency-grid{grid-template-columns:repeat(auto-fit,minmax(min(260px,100%),1fr))}.efficiency-grid dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.efficiency-grid dl div{padding:9px;background:#f0f3fb;border-radius:8px}.efficiency-grid dt,.pricing-provenance dt{font-size:.7rem;color:var(--muted)}.efficiency-grid dd,.pricing-provenance dd{margin:2px 0 0;font-weight:700;font-variant-numeric:tabular-nums;overflow-wrap:anywhere}#pricing h3{margin:28px 0 12px}.pricing-status{padding:18px 20px;margin:20px 0;min-width:0}.pricing-status strong{font-size:1.15rem}.pricing-status.available{background:#e8f3ed;border:1px solid #bdd8c8;color:#214f38}.pricing-status.partial,.pricing-status.unavailable{background:#fff3da;border:1px solid #e4c980;color:#684c16}.pricing-status .mono{font-size:.77rem;overflow-wrap:anywhere}.pricing-provenance{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(210px,100%),1fr));gap:12px;margin:18px 0}.pricing-provenance div{padding:12px;background:#f0f3fb;min-width:0}.source-list{grid-template-columns:repeat(auto-fit,minmax(min(280px,100%),1fr))}.source-list h3{font-size:.86rem!important;overflow-wrap:anywhere;margin:8px 0!important}.source-list p{font-size:.76rem}.source-list a{overflow-wrap:anywhere;word-break:break-word}.empty-state{padding:20px;border:1px dashed #aebfd2;background:#f8fbff;color:var(--muted)}.table-wrap{overflow-x:auto;max-width:100%;border:1px solid var(--line);background:var(--surface)}.table-wrap table{min-width:820px}.pricing-chart-grid{grid-template-columns:minmax(0,1fr)}.pricing-exports{margin-top:20px}.hero-link:focus-visible{outline:3px solid #91a8ff;outline-offset:4px}section{scroll-margin-top:18px}
+@media(max-width:900px){aside{width:auto}main{margin-left:0;width:auto;max-width:none;padding:22px}.hero-layout{grid-template-columns:1fr}.verdict{border-left:0;border-top:1px solid var(--line);padding:24px 0}.methodology-grid,.finding-grid,.source-list{grid-template-columns:1fr}.pricing-provenance{grid-template-columns:repeat(2,minmax(0,1fr))}.metric-strip{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:520px){.report-meta{display:grid}.metric-strip,.pricing-provenance{grid-template-columns:1fr}.finding-grid strong{font-size:1.45rem}}
 `;
 const reportScript = `
 (()=>{"use strict";const d=JSON.parse(document.getElementById("report-data").textContent);
@@ -64,6 +281,7 @@ const byId=id=>document.getElementById(id);const el=(tag,text)=>{const n=documen
 function download(name,text,type){const url=URL.createObjectURL(new Blob([text],{type}));const a=el("a");a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}
 byId("csv").onclick=()=>download("selected-results.csv",d.selectedCsv,"text/csv");byId("json").onclick=()=>download("selected-results.json",JSON.stringify(d.rows,null,2)+"\\n","application/json");byId("analysis").onclick=()=>download("task-types.csv",d.analysisCsv,"text/csv");
 byId("usage-csv").onclick=()=>download("attempt-usage.csv",d.usageCsv,"text/csv");byId("usage-json").onclick=()=>download("attempt-usage.json",JSON.stringify(d.usage,null,2)+"\\n","application/json");
+byId("pricing-csv").onclick=()=>download("pricing-estimates.csv",d.pricingCsv,"text/csv");byId("pricing-json").onclick=()=>download("pricing-estimates.json",JSON.stringify(d.pricing,null,2)+"\\n","application/json");
 function filter(){let visible=0;for(const row of byId("matrix-body").children){row.hidden=!row.dataset.title.includes(byId("filter").value.toLowerCase())||(byId("type").value&&row.dataset.taskType!==byId("type").value);if(!row.hidden)visible++;}byId("visible").textContent=visible+" task cohorts visible";}
 byId("filter").oninput=filter;byId("type").onchange=filter;filter();
 const number=value=>value==null?"Unknown":value.toLocaleString("en-US",{maximumFractionDigits:2});

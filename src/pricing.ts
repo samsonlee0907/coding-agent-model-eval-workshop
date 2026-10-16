@@ -154,10 +154,16 @@ function candidatePricing(run: BenchmarkRun, rows: Row[], regionFilter: string |
   const candidate = candidateKey(run), recorded = run.contract.candidate;
   const override = overrides[recorded.model] ?? (recorded.deployment ? overrides[recorded.deployment] : undefined);
   const identities = [recorded.model, recorded.deployment].filter((value): value is string => Boolean(value)).map(modelIdentity);
-  const matches = rows.filter((row) => override ? normalize(row.label) === normalize(override) : identities.some((id) => id === modelIdentity(row.label)));
+  const automaticMatches = rows.filter((row) => identities.some((id) => id === modelIdentity(row.label)));
+  const matches = override ? rows.filter((row) => normalize(row.label) === normalize(override)) : automaticMatches;
   const sourceUrl = recorded.provider === "openai" ? azureOpenAiPricingUrl : recorded.provider === "anthropic" ? anthropicClaudePricingUrl : null;
   if (!sourceUrl) return { candidate, recorded: { ...recorded, deployment: recorded.deployment ?? null }, sourceUrl, scenarios: [], unavailableReason: `No official pricing source is configured for provider "${recorded.provider}".` };
-  if (matches.length === 0) return { candidate, recorded: { ...recorded, deployment: recorded.deployment ?? null }, sourceUrl, scenarios: [], unavailableReason: "No conservative official model-label match. Provide an exact --pricing-model override; no substitute model is guessed." };
+  if (matches.length === 0) {
+    const reason = override && automaticMatches.length
+      ? `The override "${override}" is not an exact extracted official row label. Conservative automatic matches: ${automaticMatches.slice(0, 12).map((row) => `"${row.label}"`).join(", ")}. Remove the override to retain all matches, or use one exact label; no substitute model is guessed.`
+      : "No conservative official model-label match. Provide an exact --pricing-model override; no substitute model is guessed.";
+    return { candidate, recorded: { ...recorded, deployment: recorded.deployment ?? null }, sourceUrl, scenarios: [], unavailableReason: reason };
+  }
   const scenarios = matches.flatMap((row) => {
     const provider = recorded.provider as Provider;
     const regions = provider === "anthropic" ? [null] : [...new Set(meters.flatMap((field) => Object.keys(row.rates[field])))].filter((region) => !regionFilter || region === regionFilter);

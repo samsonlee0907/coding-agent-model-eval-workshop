@@ -416,7 +416,12 @@ export function campaignEvidence(directory: string): ReportEvidence {
 }
 
 export function reportCampaign(directory: string, output: string, options: Parameters<typeof writeReportBundle>[2] = {}): string {
-  return writeReportBundle(campaignEvidence(directory), output, options);
+  const prepared = loadPreparedCampaign(resolve(directory));
+  return writeReportBundle(campaignEvidence(directory), output, {
+    ...options,
+    pricing: options.pricing ?? prepared.pricing ?? null,
+    anthropicAccounting: options.anthropicAccounting ?? prepared.spec.pricing?.anthropicAccounting,
+  });
 }
 export async function cleanupCampaignWorker(directory: string, recordPath: string, recoverLock = false): Promise<void> {
   loadPreparedCampaign(directory);

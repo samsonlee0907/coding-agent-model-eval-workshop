@@ -602,15 +602,26 @@ official published pricing sources: Azure OpenAI's pricing page and, for the
 Anthropic path, Claude API pricing with Foundry billing/cache documentation.
 It writes `pricing-snapshot.json` with time, sources and available scenarios;
 unresolved aliases/regions/meters remain unavailable. Review aliases explicitly
-with supported `--pricing-model recorded=Official Label` and `--region`.
+with supported `--pricing-model recorded=Exact Official Row Label` and
+`--region`. Usually omit `--pricing-model` first so every conservative recorded
+identity match is retained. An override is strict, suppresses automatic matching
+for that recorded model/deployment, and must include qualifiers such as context
+or region when they are part of the extracted official row label.
 Preserve an existing snapshot before another refresh (this file can be
 replaced). A later snapshot is a **what-if**, not a rewrite of recorded
 campaign prices, a negotiated invoice or real-time offline HTML.
 Campaign pricing must be declared/pinned before preparation; see
 [pricing semantics](CAMPAIGNS_AND_PUBLICATION.md#evidence-pricing-and-publication).
 For saved-run reports, use the [README's explicit `--pricing` attachment](../README.md#5-generate-decision-artifacts).
-It enriches HTML with what-if scenarios, not recorded normalized/exported
-campaign prices. Optional model review has [a separate fixed rubric and sensitive
+It enriches the first-class offline pricing section with saved unit rates,
+source URLs/content hashes, selected-run and all-attempt what-if totals, and
+the exact snapshot hash. It does not replace recorded normalized/exported
+campaign prices. If an attached snapshot includes Anthropic scenarios, select
+`--anthropic-accounting sdk-inclusive` or `native-uncached` only after reviewing
+whether the recorded SDK input includes cache meters; without that explicit
+choice, Claude totals remain UNKNOWN while the saved rates and reason remain
+visible. `--evidence` accepts the same explicit `--pricing` and accounting flags.
+Optional model review has [a separate fixed rubric and sensitive
 artifact](TASK_AUTHORING_GUIDE.md#quality-evidence-and-scorecards); it is not
 an additional required-grade importer.
 
@@ -623,7 +634,8 @@ destinations; existing portable folders/ZIPs are refused rather than replaced:
 # From an existing campaign, preserving declared missing/required evidence:
 npm run campaign -- status --directory '.\.benchmark-runs\my-cohort\state'
 npm run campaign -- report --directory '.\.benchmark-runs\my-cohort\state' --output '.\.benchmark-runs\my-cohort\report-v2' --zip
-# From normalized evidence, not a regrade:
+# From normalized evidence, not a regrade. Optional --pricing attaches a saved
+# snapshot; it never refreshes prices during report generation:
 npm run report:html -- --evidence '.\reviewed\evidence.json' --bundle '.\reports\review-v1' --zip
 # Explicit compatible single HTML; choose a new filename yourself:
 npm run report:html -- --evidence '.\reviewed\evidence.json' --output '.\reports\review-v1.html'
@@ -632,9 +644,12 @@ npm run report:html -- --runs '.\.benchmark-runs\saved-artifacts' --bundle '.\re
 npm run portfolio -- --runs '.\.benchmark-runs\saved-artifacts' --output '.\reports\candidate-validation.md'
 ```
 
-The folder contains `index.html`, `evidence.json`, selected-results and
-task-types JSON/CSV, `previews.json` and `integrity.json`, plus explicitly
-approved artifacts if any. ZIP uses relative paths for portability.
+The folder contains `index.html`, `evidence.json`, selected-results,
+all-attempt usage, task-types, pricing status/estimates JSON/CSV,
+`pricing-options.json`, `previews.json` and `integrity.json`, plus explicitly
+approved artifacts if any. When supplied, the exact `pricing-snapshot.json`
+is included and integrity-bound. Older version-1 bundles without the optional
+pricing exports remain verifiable. ZIP uses relative paths for portability.
 Generation stages/verifies before publication. Single HTML is portable
 metadata evidence, but approved previews/originals and ZIP require the folder
 path; `--output` cannot be combined with `--zip`/`--publication`.

@@ -353,6 +353,8 @@ Invoke-Item -LiteralPath "$root\report-v1\index.html"
 # Optional official-price what-if snapshot; not inference or an invoice.
 npm run prices:refresh -- --runs $runs
 npm run report:html -- --runs $runs --pricing "$root\pricing-snapshot.json" --bundle "$root\report-priced-v1" --zip
+# If the snapshot includes Claude, add one reviewed accounting assumption:
+# --anthropic-accounting sdk-inclusive   OR   --anthropic-accounting native-uncached
 ```
 
 </details>
@@ -370,6 +372,8 @@ if [ "$(uname -s)" = 'Darwin' ]; then open "$root/report-v1/index.html"; else xd
 # Optional official-price what-if snapshot; not inference or an invoice.
 npm run prices:refresh -- --runs "$runs"
 npm run report:html -- --runs "$runs" --pricing "$root/pricing-snapshot.json" --bundle "$root/report-priced-v1" --zip
+# If the snapshot includes Claude, add one reviewed accounting assumption:
+# --anthropic-accounting sdk-inclusive   OR   --anthropic-accounting native-uncached
 ```
 
 </details>
@@ -377,7 +381,11 @@ npm run report:html -- --runs "$runs" --pricing "$root/pricing-snapshot.json" --
 The shared root is searched recursively, so the GPT and Claude `run.json`
 artifacts are both included. The portable folder/ZIP includes offline HTML,
 normalized evidence, selected and all-attempt usage JSON/CSV, task-type data,
-preview metadata, and integrity hashes. A single HTML file uses
+first-class pricing status/estimates JSON/CSV, the exact attached pricing
+snapshot when present, preview metadata, and integrity hashes. The offline
+HTML always has a visible pricing section: without a saved snapshot it shows
+**UNKNOWN**, the reason, and the explicit refresh/attach action rather than
+hiding pricing or displaying zero. A single HTML file uses
 `--output <new-file.html>` instead of `--bundle`; it cannot combine with
 `--zip` or approved previews.
 
